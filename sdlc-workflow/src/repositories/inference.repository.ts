@@ -2,7 +2,7 @@ import { inject, injectable } from 'inversify';
 import { WORKFLOW_TOKENS } from '../tokens';
 import { WorkflowError } from '../types';
 import { extractJson, JsonSchema, validateJson } from '../utils/json-schema';
-import type { IAnthropicRepository } from './anthropic.repository';
+import type { IModelRepository } from './model.repository';
 
 export interface IInferenceRepository {
   /**
@@ -24,8 +24,8 @@ const jsonInstructions = (schema: JsonSchema): string =>
 @injectable()
 export class InferenceRepository implements IInferenceRepository {
   constructor(
-    @inject(WORKFLOW_TOKENS.AnthropicRepository)
-    private readonly _anthropic: IAnthropicRepository
+    @inject(WORKFLOW_TOKENS.ModelRepository)
+    private readonly _model: IModelRepository
   ) {}
 
   async generateJson<T>(prompt: string, schema: JsonSchema): Promise<T> {
@@ -33,7 +33,7 @@ export class InferenceRepository implements IInferenceRepository {
     let currentPrompt = prompt + jsonInstructions(schema);
 
     for (let attempt = 0; attempt < 2; attempt++) {
-      const raw = await this._anthropic.complete(currentPrompt);
+      const raw = await this._model.complete(currentPrompt);
 
       let parsed: unknown;
       try {

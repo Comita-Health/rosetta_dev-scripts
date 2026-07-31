@@ -1,5 +1,5 @@
 export const WORKFLOW_TOKENS = {
-  AnthropicRepository: Symbol.for('AnthropicRepository'),
+  ModelRepository: Symbol.for('ModelRepository'),
   InferenceRepository: Symbol.for('InferenceRepository'),
   PrdRepository: Symbol.for('PrdRepository'),
   SpecFileRepository: Symbol.for('SpecFileRepository'),

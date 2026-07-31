@@ -6,10 +6,9 @@ import chalk from 'chalk';
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
 import { WorkflowHandler, IWorkflowHandler } from './handlers/workflow.handler';
-import {
-  AnthropicRepository,
-  IAnthropicRepository
-} from './repositories/anthropic.repository';
+import { AnthropicRepository } from './repositories/anthropic.repository';
+import { CursorCliRepository } from './repositories/cursor-cli.repository';
+import { IModelRepository } from './repositories/model.repository';
 import {
   InferenceRepository,
   IInferenceRepository
@@ -29,11 +28,17 @@ import {
 } from './services/spec-synthesis.service';
 import { WORKFLOW_TOKENS } from './tokens';
 import { WorkflowError } from './types';
+import { resolveInferenceBackend } from './utils/backend-select';
 
 const container = new Container();
-container
-  .bind<IAnthropicRepository>(WORKFLOW_TOKENS.AnthropicRepository)
-  .to(AnthropicRepository);
+const modelBinding = container.bind<IModelRepository>(
+  WORKFLOW_TOKENS.ModelRepository
+);
+if (resolveInferenceBackend(process.env) === 'anthropic') {
+  modelBinding.to(AnthropicRepository);
+} else {
+  modelBinding.to(CursorCliRepository);
+}
 container
   .bind<IInferenceRepository>(WORKFLOW_TOKENS.InferenceRepository)
   .to(InferenceRepository);

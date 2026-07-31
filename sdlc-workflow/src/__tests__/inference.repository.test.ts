@@ -1,6 +1,6 @@
 import 'reflect-metadata';
 import { Container } from 'inversify';
-import { IAnthropicRepository } from '../repositories/anthropic.repository';
+import { IModelRepository } from '../repositories/model.repository';
 import {
   InferenceRepository,
   IInferenceRepository
@@ -23,7 +23,7 @@ describe('InferenceRepository', () => {
     complete = jest.fn();
     container = new Container();
     container
-      .bind<IAnthropicRepository>(WORKFLOW_TOKENS.AnthropicRepository)
+      .bind<IModelRepository>(WORKFLOW_TOKENS.ModelRepository)
       .toConstantValue({ complete });
     container
       .bind<IInferenceRepository>(WORKFLOW_TOKENS.InferenceRepository)

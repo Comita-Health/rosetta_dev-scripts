@@ -28,10 +28,20 @@ implementation begins only against an Approved spec.
 
 ## Environment
 
-| Variable            | Required | Purpose                                          |
-| ------------------- | -------- | ------------------------------------------------ |
-| `ANTHROPIC_API_KEY` | yes      | Model calls (ADR-0003 / PRD-0011 §5)             |
-| `ANTHROPIC_MODEL`   | no       | Override the default model (`claude-sonnet-4-5`) |
+Inference runs over one of two transports, selected automatically:
+`ANTHROPIC_API_KEY` present → Anthropic API (PRD-0011 §5 default); otherwise
+the operator's logged-in Cursor Agent CLI session (`cursor-agent -p`, the
+same operator-auth pattern as `gh`).
+
+| Variable                 | Required | Purpose                                                        |
+| ------------------------ | -------- | -------------------------------------------------------------- |
+| `ANTHROPIC_API_KEY`      | no\*     | Anthropic API model calls (ADR-0003 / PRD-0011 §5)             |
+| `ANTHROPIC_MODEL`        | no       | Override the API backend's default model (`claude-sonnet-4-5`) |
+| `SDLC_INFERENCE_BACKEND` | no       | Force a backend: `anthropic` or `cursor-cli`                   |
+| `CURSOR_AGENT_BIN`       | no       | Cursor Agent CLI binary (default: `cursor-agent`)              |
+| `CURSOR_MODEL`           | no       | Model passed to the Cursor Agent CLI                           |
+
+\* Without it, a logged-in `cursor-agent` session is required instead.
 
 ## Architecture
 
@@ -41,7 +51,8 @@ Handler / Service / Repository with InversifyJS (workspace rule):
 - `services/decompose.service.ts` — PRD → `ProductStory[]` (right-sizing prompt).
 - `services/spec-synthesis.service.ts` — stories → tasks + envelope → validated
   ADR-0008 Markdown.
-- `repositories/` — PRD parsing (`prd`), model transport (`anthropic`),
+- `repositories/` — PRD parsing (`prd`), model transports (`anthropic`,
+  `cursor-cli` behind the shared `IModelRepository` contract in `model`),
   schema-constrained inference with one retry (`inference`), spec file writes
   (`spec-file`).
 - `utils/` — pure functions: PRD parser, JSON-schema validator, spec renderer,

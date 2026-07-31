@@ -1,9 +1,6 @@
 import { injectable } from 'inversify';
 import { WorkflowError } from '../types';
-
-export interface IAnthropicRepository {
-  complete(prompt: string): Promise<string>;
-}
+import type { IModelRepository } from './model.repository';
 
 const API_URL = 'https://api.anthropic.com/v1/messages';
 const DEFAULT_MODEL = 'claude-sonnet-4-5';
@@ -14,7 +11,7 @@ interface MessagesResponse {
 }
 
 @injectable()
-export class AnthropicRepository implements IAnthropicRepository {
+export class AnthropicRepository implements IModelRepository {
   async complete(prompt: string): Promise<string> {
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {

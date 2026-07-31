@@ -72,7 +72,8 @@ export type WorkflowErrorCode =
   | 'INFERENCE_INVALID'
   | 'SPEC_INVALID'
   | 'SPEC_EXISTS'
-  | 'MISSING_API_KEY';
+  | 'MISSING_API_KEY'
+  | 'INVALID_BACKEND';
 
 export class WorkflowError extends Error {
   constructor(
