@@ -4,6 +4,9 @@ Rosetta workspace tooling and scaffolding. The `team-setup` CLI bootstraps and m
 multi-repo workspace and lays down standardized **Claude Code + Cursor Agent/CLI** configuration for
 the whole team.
 
+Before architectural or product decisions, read the project constitution in
+`rosetta_docs/foundations/` (founding context, principles, glossary, settled decisions).
+
 ## Build & Test
 
 ```bash

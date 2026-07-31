@@ -1,14 +1,20 @@
 # Rosetta — Root Workspace
 
-Rosetta is an AI-native engineering knowledge platform. Its mission is to transform everyday
-engineering activity into durable, structured organizational knowledge — a shared memory layer for
-people, projects, and AI.
+Rosetta is infrastructure for collective intelligence — a shared memory layer for people,
+projects, and AI. Engineering is its first domain (not its boundary): transforming everyday
+engineering activity into durable, structured organizational knowledge.
 
 > Chronicle is the memory. Wayfinder is the guide.
 
 This root contains all Rosetta repos. Agent tooling is dual-compatible: **Claude Code** and
 **Cursor Agent / CLI**. See `AGENTS.md` for the Cursor-oriented map; this file is the shared brief
 both tools load.
+
+## Foundations — Read First
+
+`rosetta_docs/foundations/` is the project's constitution — founding context, manifesto,
+principles, glossary, and settled decisions. Read it before making architectural or product
+decisions. When implementation and philosophy conflict, philosophy wins.
 
 ## Package Manager
 
