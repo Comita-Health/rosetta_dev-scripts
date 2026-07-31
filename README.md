@@ -260,3 +260,7 @@ When making changes to the tool, update this README in the same commit:
 
 The directory structure in this file must mirror the `flatRepos` in
 `team-setup/src/config/shared.json`.
+
+## License
+
+[Apache-2.0](LICENSE) — Copyright 2026 Rosetta Foundation.
