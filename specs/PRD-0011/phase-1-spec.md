@@ -156,7 +156,7 @@ do not call services.
       path with `status: Draft` and prints gate instructions.
 - [ ] test: a validation failure from synthesis exits non-zero and writes
       nothing.
-- [ ] agent: run the CLI against a real PRD fixture end-to-end (live
+- [x] agent: run the CLI against a real PRD fixture end-to-end (live
       inference); confirm the generated spec passes the T-05 validator, lands
       at the correct path as Draft, and the terminal output makes the next
       human action unambiguous. Attach the generated spec as evidence.
