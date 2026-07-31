@@ -2,7 +2,7 @@
 id: SPEC-PRD-0011-P1
 prd: PRD-0011
 phase: 1
-status: Approved # Draft | Approved | Done | Superseded
+status: Draft # Draft | Approved | Done | Superseded
 date: 2026-07-31
 owner: Russ Watson
 envelope:
@@ -75,17 +75,27 @@ Pure parsing helpers live in `src/utils/`.
 - **Complexity:** M
 - **Depends on:** [T-01]
 
-`IInferenceRepository` wraps the model call (Claude API via
-`ANTHROPIC_API_KEY`, per PRD-0011 §5) behind a schema-constrained interface:
-callers pass a prompt and a JSON schema, get validated JSON back. One retry on
-schema-invalid output, then a typed error. No business logic — prompt content
-belongs to services.
+`IInferenceRepository` wraps the model call behind a schema-constrained
+interface: callers pass a prompt and a JSON schema, get validated JSON back.
+One retry on schema-invalid output, then a typed error. No business logic —
+prompt content belongs to services.
+
+The raw completion transport (`IModelRepository`) is selected by environment:
+the Anthropic API via `ANTHROPIC_API_KEY` (default when the key is present,
+per PRD-0011 §5) or the operator's authenticated Cursor Agent CLI session
+(`cursor-agent -p`) when it is not. `SDLC_INFERENCE_BACKEND=anthropic|cursor-cli`
+overrides the inference. Both transports serve Claude-class models — PRD-0011
+§5's model choice is unchanged; only the credential path differs.
 
 ### Acceptance criteria
 
 - [ ] test: (mocked transport) schema-valid model output is returned parsed.
 - [ ] test: (mocked transport) schema-invalid output triggers exactly one
       retry, then surfaces a typed error carrying the validation failure.
+- [ ] test: backend selection resolves `anthropic` when `ANTHROPIC_API_KEY`
+      is set, `cursor-cli` when it is not, honours the explicit
+      `SDLC_INFERENCE_BACKEND` override, and rejects unknown values with a
+      typed error.
 
 ## Task T-04: Decompose service
 
