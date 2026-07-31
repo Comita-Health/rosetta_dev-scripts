@@ -273,6 +273,15 @@ forking the engine:
 }
 ```
 
+## Implementation Specs
+
+`specs/` holds implementation specs (one folder per PRD, one file per rollout
+phase) for capabilities whose implementation lands in this repo — format and
+lifecycle per
+[ADR-0008](https://github.com/Rosetta-Foundation/rosetta_docs/blob/main/architecture/ADR-0008-implementation-spec-format.md).
+A spec's `status: Draft → Approved` flip is the human gate before
+implementation begins.
+
 ## Keeping This README Current
 
 When making changes to the tool, update this README in the same commit:
