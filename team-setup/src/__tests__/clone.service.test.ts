@@ -2,7 +2,8 @@ import {
   cloneRepo,
   cloneRepos,
   cloneSharedRepos,
-  cloneFlatRepos
+  cloneFlatRepos,
+  resolveRepoOrg
 } from '../services/clone.service';
 
 jest.mock('child_process', () => ({ execSync: jest.fn() }));
@@ -17,6 +18,18 @@ const mockExistsSync = existsSync as jest.Mock;
 const repo = { name: 'my-repo', ghRepo: 'my-repo' };
 
 beforeEach(() => jest.clearAllMocks());
+
+describe('resolveRepoOrg', () => {
+  it('returns the default org when the repo has no override', () => {
+    expect(resolveRepoOrg(repo, 'MyOrg')).toBe('MyOrg');
+  });
+
+  it('returns the per-repo org when set', () => {
+    expect(
+      resolveRepoOrg({ ...repo, org: 'Rosetta-Foundation' }, 'MyOrg')
+    ).toBe('Rosetta-Foundation');
+  });
+});
 
 describe('cloneRepo', () => {
   it('skips when .git already exists', () => {
@@ -33,6 +46,21 @@ describe('cloneRepo', () => {
     expect(result).toBe(true);
     expect(mockExecSync).toHaveBeenCalledWith(
       'gh repo clone MyOrg/my-repo "/base/my-repo"',
+      expect.any(Object)
+    );
+  });
+
+  it('uses the per-repo org override when present', () => {
+    mockExistsSync.mockReturnValue(false);
+    mockExecSync.mockReturnValue('');
+    const result = cloneRepo(
+      { ...repo, org: 'Other-Org' },
+      '/base/my-repo',
+      'MyOrg'
+    );
+    expect(result).toBe(true);
+    expect(mockExecSync).toHaveBeenCalledWith(
+      'gh repo clone Other-Org/my-repo "/base/my-repo"',
       expect.any(Object)
     );
   });

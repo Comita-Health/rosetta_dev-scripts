@@ -4,10 +4,17 @@ import path from 'path';
 import chalk from 'chalk';
 import { RepoConfig } from '../types';
 
+export const resolveRepoOrg = (
+  repo: RepoConfig,
+  defaultOrg: string
+): string => {
+  return repo.org ?? defaultOrg;
+};
+
 export const cloneRepo = (
   repo: RepoConfig,
   targetDir: string,
-  org: string
+  defaultOrg: string
 ): boolean => {
   const gitDir = path.join(targetDir, '.git');
 
@@ -16,8 +23,10 @@ export const cloneRepo = (
     return true;
   }
 
+  const org = resolveRepoOrg(repo, defaultOrg);
+
   try {
-    console.log(chalk.blue(`  ↓ Cloning ${repo.ghRepo}...`));
+    console.log(chalk.blue(`  ↓ Cloning ${org}/${repo.ghRepo}...`));
     execSync(`gh repo clone ${org}/${repo.ghRepo} "${targetDir}"`, {
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe']

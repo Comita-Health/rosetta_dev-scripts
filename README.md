@@ -246,6 +246,33 @@ weeks-long absence backfills automatically on your first session back.
 3. Run `bun run dev -- setup --skip-install` to clone it
 4. Commit and push so teammates get it on their next pull
 
+### Mixing orgs (per-repo `org` override)
+
+`shared.json` has a workspace-level `org`, but each entry in `flatRepos` /
+`sharedRepos` (and track `repos`) may set an optional `"org"` field. The cloner
+resolves `repo.org ?? shared.org`, so a forked adopter workspace can clone
+Rosetta-Foundation engine repos and its own app repos side by side without
+forking the engine:
+
+```json
+{
+  "org": "Acme-Corp",
+  "flatRepos": [
+    {
+      "name": "rosetta_chronicle",
+      "ghRepo": "rosetta_chronicle",
+      "org": "Rosetta-Foundation",
+      "label": "Chronicle — Memory Engine"
+    },
+    {
+      "name": "acme_app",
+      "ghRepo": "acme_app",
+      "label": "Acme App"
+    }
+  ]
+}
+```
+
 ## Keeping This README Current
 
 When making changes to the tool, update this README in the same commit:
