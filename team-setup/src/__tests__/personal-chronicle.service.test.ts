@@ -2,6 +2,7 @@ import {
   resolveGitHubUser,
   derivePersonalRepoName,
   installChronicleHook,
+  installCursorChronicleHooks,
   buildChronicleEngine,
   seedPersonalRepoFiles,
   provisionPersonalChronicle
@@ -207,6 +208,72 @@ describe('installChronicleHook', () => {
       throw new Error('permission denied');
     });
     expect(() => installChronicleHook(REPO, HOOK, PROJECTS)).not.toThrow();
+  });
+});
+
+describe('installCursorChronicleHooks', () => {
+  const SESSION_START = '/base/rosetta_chronicle/hooks/cursor-session-start.sh';
+  const STOP = '/base/rosetta_chronicle/hooks/cursor-stop-append.sh';
+
+  const writtenHooks = (): {
+    version: number;
+    hooks: Record<string, Array<{ command: string }>>;
+  } => {
+    const call = mockWriteFileSync.mock.calls.find((c: string[]) =>
+      String(c[0]).endsWith('hooks.json')
+    );
+    expect(call).toBeDefined();
+    return JSON.parse(call![1] as string);
+  };
+
+  it('rewrites hooks from scratch when the existing file is malformed', () => {
+    mockExistsSync.mockReturnValue(true);
+    mockReadFileSync.mockReturnValue('not valid json {{{');
+
+    expect(() =>
+      installCursorChronicleHooks(SESSION_START, STOP)
+    ).not.toThrow();
+
+    const written = writtenHooks();
+    expect(written.version).toBe(1);
+    expect(written.hooks.sessionStart[0].command).toBe(SESSION_START);
+    expect(written.hooks.stop[0].command).toBe(STOP);
+  });
+
+  it('preserves unrelated hooks and does not duplicate ours on re-run', () => {
+    mockExistsSync.mockReturnValue(true);
+    mockReadFileSync.mockReturnValue(
+      JSON.stringify({
+        version: 1,
+        hooks: {
+          preToolUse: [{ command: '/other/telemetry.js' }],
+          sessionStart: [{ command: SESSION_START }],
+          stop: [{ command: '/other/stop.sh' }]
+        }
+      })
+    );
+
+    installCursorChronicleHooks(SESSION_START, STOP);
+
+    const written = writtenHooks();
+    expect(written.hooks.preToolUse[0].command).toBe('/other/telemetry.js');
+    // Ours replaced, not duplicated.
+    expect(
+      written.hooks.sessionStart.filter(h => h.command === SESSION_START)
+    ).toHaveLength(1);
+    // Unrelated stop hook preserved alongside ours.
+    expect(written.hooks.stop.map(h => h.command)).toEqual(
+      expect.arrayContaining(['/other/stop.sh', STOP])
+    );
+  });
+
+  it('defaults the version to 1 when the existing file has none', () => {
+    mockExistsSync.mockReturnValue(true);
+    mockReadFileSync.mockReturnValue(JSON.stringify({ hooks: {} }));
+
+    installCursorChronicleHooks(SESSION_START, STOP);
+
+    expect(writtenHooks().version).toBe(1);
   });
 });
 

@@ -87,4 +87,44 @@ describe('createSymlinks', () => {
     createSymlinks('/base', [projectWithLinks]);
     expect(mockSymlinkSync).not.toHaveBeenCalled();
   });
+
+  it('honors an object symlink entry with a custom target', () => {
+    const projectWithObjectLink = {
+      ...project,
+      symlinks: [
+        { name: 'docs', target: '../elsewhere/docs', scope: 'project' as const }
+      ]
+    };
+    mockLstatSync.mockReturnValue(undefined);
+    mockExistsSync.mockReturnValue(false);
+    createSymlinks('/base', [projectWithObjectLink]);
+    expect(mockSymlinkSync).toHaveBeenCalledWith(
+      '../elsewhere/docs',
+      path.join('/base', 'proj', 'docs')
+    );
+  });
+
+  it('creates repo-scoped symlinks inside each existing repo', () => {
+    const projectWithRepoLink = {
+      ...project,
+      repos: [
+        { name: 'repo-a', ghRepo: 'repo-a' },
+        { name: 'repo-b', ghRepo: 'repo-b' }
+      ],
+      symlinks: [
+        { name: 'assets', target: '../shared/assets', scope: 'repo' as const }
+      ]
+    };
+    // repo-a exists, repo-b does not; link paths do not exist yet.
+    mockExistsSync.mockImplementation(
+      (p: string) => p.endsWith('repo-a') && !p.endsWith('assets')
+    );
+    mockLstatSync.mockReturnValue(undefined);
+    createSymlinks('/base', [projectWithRepoLink]);
+    expect(mockSymlinkSync).toHaveBeenCalledTimes(1);
+    expect(mockSymlinkSync).toHaveBeenCalledWith(
+      '../shared/assets',
+      path.join('/base', 'proj', 'repo-a', 'assets')
+    );
+  });
 });
