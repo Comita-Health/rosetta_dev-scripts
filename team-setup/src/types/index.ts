@@ -2,6 +2,13 @@ export interface RepoConfig {
   name: string;
   ghRepo: string;
   label?: string;
+  /**
+   * Optional GitHub org/owner override. When set, the cloner uses this org
+   * instead of `SharedConfig.org`. Enables a workspace to mix repos from
+   * multiple orgs (e.g. an adopter's app repos alongside Rosetta-Foundation
+   * engine repos) without forking the engine.
+   */
+  org?: string;
 }
 
 export interface SymlinkConfig {
