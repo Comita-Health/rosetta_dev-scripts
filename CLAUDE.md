@@ -4,6 +4,9 @@ Rosetta workspace tooling and scaffolding. The `team-setup` CLI bootstraps and m
 multi-repo workspace and lays down standardized **Claude Code + Cursor Agent/CLI** configuration for
 the whole team.
 
+Before architectural or product decisions, read the project constitution in
+`rosetta_docs/foundations/` (founding context, principles, glossary, settled decisions).
+
 ## Build & Test
 
 ```bash
@@ -71,6 +74,23 @@ git checkout -b f/TICKET-123-short-description
 ```
 
 Branch prefixes: `f/` for features, `b/` for bugs.
+
+**Stacked branches — chain when overlapping.** Before branching, check whether the new work
+modifies a file that one of your **open PRs** already modifies (canonical case: the ADR/PRD
+records tables in `rosetta_docs`). If it does, branch from that PR's branch instead of `main`
+and open the PR against it:
+
+```bash
+git checkout f/parent-branch
+git checkout -b f/child-branch
+# ...work, commit, push...
+gh pr create --fill --base f/parent-branch
+```
+
+Merge stacks bottom-up (parent first). When the parent merges, GitHub automatically retargets
+the child PR onto `main` — no conflict, no rebase. Stacked PRs require merge commits (never
+squash-merge a stack). Unrelated work keeps branching from `main` so PRs stay independently
+mergeable — do not chain by default.
 
 **Default: do not commit on `main`.** All product work lands via a topic branch + PR.
 

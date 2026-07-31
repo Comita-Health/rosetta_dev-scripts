@@ -1,14 +1,20 @@
 # Rosetta — Root Workspace
 
-Rosetta is an AI-native engineering knowledge platform. Its mission is to transform everyday
-engineering activity into durable, structured organizational knowledge — a shared memory layer for
-people, projects, and AI.
+Rosetta is infrastructure for collective intelligence — a shared memory layer for people,
+projects, and AI. Engineering is its first domain (not its boundary): transforming everyday
+engineering activity into durable, structured organizational knowledge.
 
 > Chronicle is the memory. Wayfinder is the guide.
 
 This root contains all Rosetta repos. Agent tooling is dual-compatible: **Claude Code** and
 **Cursor Agent / CLI**. See `AGENTS.md` for the Cursor-oriented map; this file is the shared brief
 both tools load.
+
+## Foundations — Read First
+
+`rosetta_docs/foundations/` is the project's constitution — founding context, manifesto,
+principles, glossary, and settled decisions. Read it before making architectural or product
+decisions. When implementation and philosophy conflict, philosophy wins.
 
 ## Package Manager
 
@@ -71,6 +77,23 @@ git checkout -b f/TICKET-123-short-description
 ```
 
 Branch prefixes: `f/` for features, `b/` for bugs.
+
+**Stacked branches — chain when overlapping.** Before branching, check whether the new work
+modifies a file that one of your **open PRs** already modifies (canonical case: the ADR/PRD
+records tables in `rosetta_docs`). If it does, branch from that PR's branch instead of `main`
+and open the PR against it:
+
+```bash
+git checkout f/parent-branch
+git checkout -b f/child-branch
+# ...work, commit, push...
+gh pr create --fill --base f/parent-branch
+```
+
+Merge stacks bottom-up (parent first). When the parent merges, GitHub automatically retargets
+the child PR onto `main` — no conflict, no rebase. Stacked PRs require merge commits (never
+squash-merge a stack). Unrelated work keeps branching from `main` so PRs stay independently
+mergeable — do not chain by default.
 
 **Default: do not commit on `main`.** All product work lands via a topic branch + PR.
 
