@@ -10,7 +10,7 @@ Steps:
    - Add each repo to the `flatRepos` array: `{ "name": "<repo-name>", "ghRepo": "<repo-name>", "label": "<Human Readable Name>" }`.
    - Derive the label by stripping the `rosetta_` prefix and converting to title case (e.g. `rosetta_atlas` → `Atlas`). Add a short tagline after an em dash if useful.
    - If the repo lives in a different GitHub org than `shared.org`, set `"org": "<owning-org>"` on that entry. The cloner uses `repo.org ?? shared.org`, so engine repos from another org and app repos from yours can sit side by side.
-3. Run `yarn workspace team-setup dev -- update-config` to regenerate `all.code-workspace` and lay down config.
-4. Run `yarn workspace team-setup dev -- setup --skip-install` to clone the new repos (existing clones are skipped).
+3. From `rosetta_dev-scripts/team-setup/`, run `bun run dev -- update-config` to regenerate `all.code-workspace` and lay down config.
+4. From `rosetta_dev-scripts/team-setup/`, run `bun run dev -- setup --skip-install` to clone the new repos (existing clones are skipped).
 5. Update the directory structure diagram in `README.md` and in `team-setup/templates/root/CLAUDE.md` to include the new entries.
 6. Remind the user to commit and open a PR so teammates get the changes on their next pull.
