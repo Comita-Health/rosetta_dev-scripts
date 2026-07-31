@@ -10,7 +10,8 @@
   },
   "workspaces": {
     "packages": [
-      "team-setup"
+      "team-setup",
+      "sdlc-workflow"
     ]
   }
 }

@@ -7,6 +7,13 @@ either (or both) AI coding agents with the same architecture rules and git conve
 Rosetta is an AI-native engineering knowledge platform — a shared memory layer for people, projects,
 and AI. Chronicle is the memory; Wayfinder is the guide.
 
+This repo hosts two workspace packages:
+
+- [`team-setup/`](./team-setup) — the bootstrap + maintenance CLI described below.
+- [`sdlc-workflow/`](./sdlc-workflow) — PRD-0011 full-loop SDLC automation, phase 1:
+  decompose a PRD into a Draft implementation spec and stop at the human gate. See its
+  [README](./sdlc-workflow/README.md).
+
 ## Why Use Team Setup?
 
 Team Setup gives every engineer a consistent, batteries-included agent environment from day one.
