@@ -1,0 +1,17 @@
+{
+  "name": "rosetta_dev-scripts",
+  "private": true,
+  "license": "UNLICENSED",
+  "scripts": {
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "husky": "^9.1.7",
+    "yarn": "^1.22.22"
+  },
+  "workspaces": {
+    "packages": [
+      "team-setup"
+    ]
+  }
+}

@@ -1,0 +1,143 @@
+# Rosetta — Root Workspace
+
+Rosetta is an AI-native engineering knowledge platform. Its mission is to transform everyday
+engineering activity into durable, structured organizational knowledge — a shared memory layer for
+people, projects, and AI.
+
+> Chronicle is the memory. Wayfinder is the guide.
+
+This root contains all Rosetta repos.
+
+## Package Manager
+
+Always use `yarn` over `npm`.
+
+## Environment Setup
+
+- Node v20+ (check `.nvmrc` in each repo)
+- Yarn 1.22+
+- GitHub CLI (`gh`) authenticated
+
+## Folder Structure
+
+```
+rosetta/
+├── rosetta_dev-scripts/     Workspace tooling and scaffolding CLI (team-setup)
+├── rosetta_docs/            Cross-cutting artifacts — PRDs, ADRs, docs, shared assets
+│   ├── product/             Product Requirements Documents (PRDs)
+│   ├── architecture/        Architecture decisions and history (ADRs)
+│   ├── docs/                Cross-cutting product & workspace docs
+│   └── shared/              Shared assets across Rosetta repos
+├── rosetta_chronicle/       Memory engine — turns engineering activity into knowledge
+└── rosetta_wayfinder/       Knowledge guide — future UI/query layer over Chronicle
+```
+
+Each repo has a `CLAUDE.md` describing its purpose and structure.
+
+## Architecture — Handler / Service / Repository (MANDATORY)
+
+All TypeScript code in every Rosetta repo MUST follow the
+Handler / Service / Repository pattern with InversifyJS dependency injection. This is a project
+standard, enforced the same way as Conventional Commits and the PR review cycles below.
+
+The full ruleset lives in `.claude/rules/architecture-hsr.md`. In brief:
+
+- Strict one-way dependency: **Handler → Service → Repository**.
+- Every class is `@injectable()`; dependencies are constructor-injected via `@inject(TOKEN)`.
+- Tokens are `Symbol.for(...)` values collected in a `*_TOKENS` const; the token — not the
+  interface — is the runtime injection key.
+- Each class file co-locates its `interface IFoo` and `@injectable() class Foo implements IFoo`.
+
+Read `.claude/rules/architecture-hsr.md` before writing or reviewing any TypeScript.
+
+## Git Workflow
+
+### Starting work
+
+**Always sync the default branch before creating a feature branch.** The first step of any
+new task — before writing code or even analyzing — is to get onto an up-to-date `main`. Never
+branch from a stale or arbitrary current branch.
+
+```bash
+git checkout main
+git pull --ff-only
+git checkout -b f/TICKET-123-short-description
+```
+
+Branch prefixes: `f/` for features, `b/` for bugs.
+
+### Commit messages — Conventional Commits
+
+**Branch has a ticket** (e.g. `f/PROJ-123`): the ticket must be the scope.
+
+```
+feat(PROJ-123): add chronicle git source adapter
+fix(PROJ-456): handle empty commit ranges correctly
+```
+
+**Branch has no ticket** (e.g. `f/my-cool-feature`): standard Conventional Commits.
+
+```
+feat: add chronicle git source adapter
+fix(sources): handle empty commit ranges
+```
+
+Valid types: `feat` `fix` `chore` `docs` `style` `refactor` `perf` `test` `build` `ci` `revert`
+
+Breaking changes append `!` after the type/scope: `feat(PROJ-123)!: drop Node 18 support`.
+
+### Finishing work
+
+When work is complete, push the branch and open a PR:
+
+```bash
+git push -u origin HEAD
+gh pr create --fill
+```
+
+**Immediately after pushing, return to an up-to-date default branch** — do not linger on the
+feature branch:
+
+```bash
+git checkout main
+git pull --ff-only
+```
+
+This keeps the local default branch current and leaves the working tree clean between tasks.
+Auto-branch-deletion on merge is enabled org-side, so the remote feature branch is removed
+automatically once the PR merges; delete the local branch when you next sync.
+
+### Copilot review cycle
+
+After opening or pushing to a PR, GitHub Copilot posts an automated review (typically within 5 minutes). **You must process this before considering the PR ready.**
+
+1. First check if Copilot is enabled on this repo: `gh api repos/{owner}/{repo}/pulls?state=closed&per_page=5` and check any of those PR's reviews for `copilot-pull-request-reviewer[bot]`. If none found, skip the entire cycle — Copilot is not enabled on this repo.
+2. If enabled, poll `gh api repos/{owner}/{repo}/pulls/{number}/reviews` every 30 seconds for up to 10 minutes, stopping as soon as a `copilot-pull-request-reviewer[bot]` review appears.
+3. Read the review body for the overview summary and check `gh api repos/{owner}/{repo}/pulls/{number}/comments` for inline thread comments. Copilot always posts a review body even when it has no inline comments — "generated no new comments" means nothing to address.
+4. Evaluate each inline comment — address anything that is a genuine improvement (dead code, duplicate imports, misleading patterns, correctness issues). Dismiss comments that are stylistic noise or false positives.
+5. Fix, commit, and push (use `fix(<scope>): address Copilot review comments` or a more specific message).
+6. Reply to each addressed comment with the fix commit SHA and a brief explanation.
+7. Resolve each addressed thread via the GraphQL `resolveReviewThread` mutation.
+8. Run this cycle **once** — if Copilot posts new comments on the fix commit, flag them for human review rather than looping indefinitely.
+
+### PR checks review cycle
+
+After pushing to a PR, required status checks (CI) run automatically. **You must monitor and fix failing checks.** This cycle runs in parallel with the Copilot review cycle.
+
+1. Poll `gh run list --branch {branch} --limit 5 --json status,conclusion,name,databaseId` every 30 seconds until all runs reach a terminal state (`completed`, `cancelled`, `failure`), up to 15 minutes.
+2. If all checks pass, the cycle is done.
+3. If any check fails:
+   a. Retrieve logs: `gh run view {run-id} --log-failed`
+   b. Diagnose the failure — read the error output and identify the root cause.
+   c. Fix the issue locally, commit with an appropriate message (e.g. `fix(<scope>): correct type error caught by CI`), and push.
+   d. Return to step 1 — poll the new run.
+4. Repeat until all checks pass, up to **3 iterations**. If checks still fail after 3 fix attempts, flag for human review with a summary of what was tried and what remains broken.
+
+### Cleaning up
+
+After the PR is approved and merged, switch back to main and delete the local branch:
+
+```bash
+git checkout main
+git branch -d f/TICKET-123-short-description
+```

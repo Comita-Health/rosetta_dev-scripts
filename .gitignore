@@ -1,0 +1,8 @@
+node_modules
+coverage
+dist
+.DS_Store
+.cursor/
+.vscode/
+.sdd
+team-setup/src/config/local.json

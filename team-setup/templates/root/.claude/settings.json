@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "defaultMode": "auto",
+    "deny": [
+      "Bash(git reset --hard*)",
+      "Bash(git push --force*)",
+      "Bash(git push -f*)",
+      "Bash(git clean -f*)",
+      "Bash(git checkout -- .*)",
+      "Bash(rm -rf /)",
+      "Bash(rm -rf ~*)",
+      "Bash(rm -rf .*)",
+      "Bash(chmod -R 777*)",
+      "Bash(> *)",
+      "Bash(npm publish*)",
+      "Bash(yarn publish*)",
+      "Bash(aws s3 rm --recursive*)",
+      "Bash(cdk destroy*)",
+      "Bash(sudo *)"
+    ]
+  }
+}
