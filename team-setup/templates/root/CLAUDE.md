@@ -1,14 +1,29 @@
-# Rosetta — Root Workspace
+# Comita Health — Engineering Workspace
 
-Rosetta is infrastructure for collective intelligence — a shared memory layer for people,
-projects, and AI. Engineering is its first domain (not its boundary): transforming everyday
-engineering activity into durable, structured organizational knowledge.
+This is the **Comita Health LLC** engineering workspace. It adopts
+[Rosetta](https://github.com/Rosetta-Foundation) as its shared memory layer and
+methodology: Chronicle is the memory, Wayfinder is the guide. Engine repos
+(`rosetta_*`) are cloned from Rosetta-Foundation; Comita app repos live in
+`Comita-Health`.
 
-> Chronicle is the memory. Wayfinder is the guide.
+> Connected care. Better outcomes.
 
-This root contains all Rosetta repos. Agent tooling is dual-compatible: **Claude Code** and
-**Cursor Agent / CLI**. See `AGENTS.md` for the Cursor-oriented map; this file is the shared brief
-both tools load.
+Agent tooling is dual-compatible: **Claude Code** and **Cursor Agent / CLI**.
+See `AGENTS.md` for the Cursor-oriented map; this file is the shared brief both
+tools load.
+
+## Healthcare Guardrails (non-negotiable)
+
+- **PHI is categorically out of scope** for chronicle capture and for git.
+  Never commit clinical data, patient identifiers, or production dumps.
+- **The promotion gate is the compliance boundary** — knowledge moves from a
+  personal chronicle to the org chronicle only by deliberate, reviewed
+  promotion (PRD-0006 / PRD-0009).
+- Prefer **local / self-hosted** options (ADR-0005) and **local inference**
+  (PRD-0016) for anything that cannot transit external APIs.
+- Provenance trailers and evidence links are the audit trail (ADR-0007).
+
+See `comita/docs/policies/healthcare-guardrails.md` once published.
 
 ## Foundations — Read First
 
@@ -32,15 +47,14 @@ Always use `bun` over `npm`/`yarn` (`bun install`, `bun run <script>`).
 ## Folder Structure
 
 ```
-rosetta/
-├── rosetta_dev-scripts/     Workspace tooling and scaffolding CLI (team-setup)
-├── rosetta_docs/            Cross-cutting artifacts — PRDs, ADRs, docs, shared assets
-│   ├── product/             Product Requirements Documents (PRDs)
-│   ├── architecture/        Architecture decisions and history (ADRs)
-│   ├── docs/                Cross-cutting product & workspace docs
-│   └── shared/              Shared assets across Rosetta repos
-├── rosetta_chronicle/       Memory engine — turns engineering activity into knowledge
-└── rosetta_wayfinder/       Knowledge guide — local-first desktop app over Chronicle
+comita/
+├── rosetta_dev-scripts/     Workspace tooling (Comita-Health fork of team-setup)
+├── rosetta_docs/            Rosetta PRDs, ADRs, foundations (upstream)
+├── rosetta_chronicle/       Memory engine (upstream)
+├── rosetta_wayfinder/       Knowledge guide (upstream)
+├── comita/                  Company docs, brand, policies
+├── comita_admissions/       Production app — referral & admissions management
+└── rosetta_chronicle_<you>/ Personal chronicle (in your GitHub account)
 ```
 
 Each repo has a `CLAUDE.md` describing its purpose and structure.

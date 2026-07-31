@@ -1,6 +1,7 @@
-# Rosetta — Agent instructions (Cursor + Claude Code)
+# Comita Health — Agent instructions (Cursor + Claude Code)
 
-This workspace is set up for **both** Cursor Agent/CLI and Claude Code.
+This **Comita Health LLC** workspace is set up for **both** Cursor Agent/CLI
+and Claude Code, using Rosetta as the engineering memory methodology.
 
 ## Canonical brief
 
@@ -26,7 +27,7 @@ truth for workflow, git conventions, and architecture pointers.
 ```bash
 agent
 # or
-agent "summarize the Rosetta repos in this workspace"
+agent "summarize the Comita and Rosetta repos in this workspace"
 ```
 
 **Claude Code:** open this folder in Claude Code as usual.
