@@ -14,7 +14,7 @@
     "test:coverage": "jest --coverage"
   },
   "author": "Rosetta Team",
-  "license": "UNLICENSED",
+  "license": "Apache-2.0",
   "devDependencies": {
     "@swc/core": "^1.15.47",
     "@swc/jest": "^0.2.39",
