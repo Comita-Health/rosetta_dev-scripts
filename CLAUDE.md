@@ -103,7 +103,10 @@ feat: add chronicle git source adapter
 fix(sources): handle empty commit ranges
 ```
 
-Valid types: `feat` `fix` `chore` `docs` `style` `refactor` `perf` `test` `build` `ci` `revert`
+Valid types: `feat` `fix` `chore` `docs` `style` `refactor` `perf` `test` `build` `ci` `revert` `chronicle`
+
+`chronicle` is reserved for machine-authored ledger commits (ADR-0007 in
+rosetta_docs), e.g. `chronicle(daily): 2026-07-31` — humans never hand-write it.
 
 The `commit-msg` hook will reject messages that don't match. Breaking changes append `!` after the type/scope: `feat(PROJ-123)!: drop Node 18 support`.
 

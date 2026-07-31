@@ -17,7 +17,8 @@ branch=$(git symbolic-ref --short HEAD 2>/dev/null)
 # Extract ticket from branch name (e.g. f/INFR-123 or b/PROJ-456 -> INFR-123 / PROJ-456)
 ticket=$(echo "$branch" | grep -oE '[A-Z]+-[0-9]+' | head -1)
 
-types="feat|fix|chore|docs|style|refactor|perf|test|build|ci|revert"
+# "chronicle" is reserved for machine-authored ledger commits (ADR-0007).
+types="feat|fix|chore|docs|style|refactor|perf|test|build|ci|revert|chronicle"
 
 if [ -n "$ticket" ]; then
   if ! echo "$commit_msg" | grep -qE "^($types)\($ticket\)(\!)?: .+"; then
@@ -28,7 +29,7 @@ if [ -n "$ticket" ]; then
     echo "  Expected:  type($ticket): summary"
     echo "  Example:   feat($ticket): add Claude API proxy handler"
     echo ""
-    echo "  Valid types: feat fix chore docs style refactor perf test build ci revert"
+    echo "  Valid types: feat fix chore docs style refactor perf test build ci revert chronicle"
     echo ""
     exit 1
   fi
@@ -42,7 +43,7 @@ else
     echo "    fix(scope): resolve specific bug"
     echo "    chore: update dependencies"
     echo ""
-    echo "  Valid types: feat fix chore docs style refactor perf test build ci revert"
+    echo "  Valid types: feat fix chore docs style refactor perf test build ci revert chronicle"
     echo ""
     exit 1
   fi
