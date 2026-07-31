@@ -83,6 +83,58 @@ describe('layDownRootConfig', () => {
     expect(calls).not.toContain(path.join('/base', 'CLAUDE.md'));
   });
 
+  it('uses the generic description for unknown rule stems and skips non-md files', () => {
+    mockExistsSync.mockReturnValue(true);
+    mockReaddirSync.mockImplementation((p: string) => {
+      if (p.endsWith('.cursor')) return ['cli.json'];
+      if (p.endsWith(`${path.sep}rules`)) return ['my-custom.md', 'notes.txt'];
+      if (p.endsWith(`${path.sep}commands`)) return [];
+      return [];
+    });
+    mockReadFileSync.mockReturnValue('# custom rule\n');
+
+    layDownRootConfig('/base');
+
+    expect(mockWriteFileSync).toHaveBeenCalledWith(
+      path.join('/base', '.cursor', 'rules', 'my-custom.mdc'),
+      expect.stringContaining('Rosetta rule: my-custom')
+    );
+    const written = mockWriteFileSync.mock.calls.map((c: string[]) => c[0]);
+    expect(written.some((p: string) => p.includes('notes'))).toBe(false);
+  });
+
+  it('falls back to a generated description when a command file is empty', () => {
+    mockExistsSync.mockReturnValue(true);
+    mockReaddirSync.mockImplementation((p: string) => {
+      if (p.endsWith(`${path.sep}commands`)) return ['deploy.md'];
+      if (p.endsWith('.cursor')) return [];
+      return [];
+    });
+    mockReadFileSync.mockReturnValue('\n');
+
+    layDownRootConfig('/base');
+
+    expect(mockWriteFileSync).toHaveBeenCalledWith(
+      path.join('/base', '.cursor', 'rules', 'command-deploy.mdc'),
+      expect.stringContaining('Run the deploy workflow')
+    );
+  });
+
+  it('mirrors nothing when .claude has no rules or commands dirs', () => {
+    mockExistsSync.mockImplementation(
+      (p: string) =>
+        !p.endsWith(`${path.sep}rules`) && !p.endsWith(`${path.sep}commands`)
+    );
+    mockReaddirSync.mockReturnValue([]);
+
+    layDownRootConfig('/base');
+
+    const mdcWrites = mockWriteFileSync.mock.calls.filter((c: string[]) =>
+      String(c[0]).endsWith('.mdc')
+    );
+    expect(mdcWrites).toHaveLength(0);
+  });
+
   it('skips .claude/ when source does not exist', () => {
     mockExistsSync.mockImplementation((p: string) => !p.endsWith('.claude'));
     mockReaddirSync.mockReturnValue([]);

@@ -171,4 +171,78 @@ describe('verifySetup', () => {
     );
     consoleSpy.mockRestore();
   });
+
+  it('reports a healthy flat repo as passing', () => {
+    mockExistsSync.mockReturnValue(true);
+    mockExecSync.mockReturnValue('');
+    mockLstatSync.mockReturnValue(undefined);
+    const consoleSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+    verifySetup('/base', [], {
+      ...shared,
+      sharedRepos: [],
+      flatRepos: [{ name: 'flat-repo', ghRepo: 'flat-repo' }]
+    });
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('✓ flat-repo')
+    );
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('All checks passed')
+    );
+    consoleSpy.mockRestore();
+  });
+
+  it('verifies repo-scoped symlinks inside each repo', () => {
+    const projectWithRepoLink = {
+      ...project,
+      symlinks: [
+        { name: 'assets', target: '../shared/assets', scope: 'repo' as const }
+      ]
+    };
+    mockExistsSync.mockReturnValue(true);
+    mockExecSync.mockReturnValue('');
+    mockLstatSync.mockReturnValue({ isSymbolicLink: () => true });
+    mockReadlinkSync.mockReturnValue('../shared/assets');
+    const consoleSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+    verifySetup('/base', [projectWithRepoLink], {
+      ...shared,
+      sharedRepos: []
+    });
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining(`proj/repo-a/assets -> ${'../shared/assets'}`)
+    );
+    consoleSpy.mockRestore();
+  });
+
+  it('counts missing project CLAUDE.md as an issue', () => {
+    mockExistsSync.mockImplementation(
+      (p: string) => !p.endsWith(path.join('proj', 'CLAUDE.md'))
+    );
+    mockExecSync.mockReturnValue('');
+    mockLstatSync.mockReturnValue(undefined);
+    const consoleSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+    verifySetup('/base', [project], { ...shared, sharedRepos: [] });
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('proj/CLAUDE.md: missing')
+    );
+    consoleSpy.mockRestore();
+  });
+
+  it('counts missing root CLAUDE.md and .claude/settings.json as issues', () => {
+    mockExistsSync.mockImplementation(
+      (p: string) =>
+        !p.endsWith(path.join('/base', 'CLAUDE.md')) &&
+        !p.endsWith('settings.json')
+    );
+    mockExecSync.mockReturnValue('');
+    mockLstatSync.mockReturnValue(undefined);
+    const consoleSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+    verifySetup('/base', [], { ...shared, sharedRepos: [] });
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('root CLAUDE.md: missing')
+    );
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('root .claude/settings.json: missing')
+    );
+    consoleSpy.mockRestore();
+  });
 });
