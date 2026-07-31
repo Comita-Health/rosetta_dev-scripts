@@ -12,12 +12,12 @@ both tools load.
 
 ## Package Manager
 
-Always use `yarn` over `npm`.
+Always use `bun` over `npm`/`yarn` (`bun install`, `bun run <script>`).
 
 ## Environment Setup
 
-- Node v20+ (check `.nvmrc` in each repo)
-- Yarn 1.22+
+- Node v20+ (check `.nvmrc` in each repo) — still the runtime for CLIs, jest, and Vite
+- Bun 1.3+ (package manager — `curl -fsSL https://bun.sh/install | bash`)
 - GitHub CLI (`gh`) authenticated
 - At least one AI agent CLI:
   - Claude Code (`claude`), and/or

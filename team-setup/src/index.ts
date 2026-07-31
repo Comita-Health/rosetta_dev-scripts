@@ -126,7 +126,7 @@ yargs(hideBin(process.argv))
         .option('skip-install', {
           type: 'boolean',
           default: false,
-          describe: 'Skip yarn install'
+          describe: 'Skip bun install'
         })
         .option('skip-clone', {
           type: 'boolean',
@@ -202,7 +202,7 @@ yargs(hideBin(process.argv))
           '\nRun `source ~/.zshrc` or open a new terminal to use `gotor`.'
         )
       );
-      console.log(chalk.gray('Run `yarn dev -- verify` to check health.'));
+      console.log(chalk.gray('Run `bun run dev -- verify` to check health.'));
     }
   )
   .command(

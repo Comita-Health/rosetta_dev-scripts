@@ -83,9 +83,9 @@ describe('checkPrerequisites', () => {
     expect(checkPrerequisites()).toBe(true);
   });
 
-  it('returns false when yarn version is below minimum', () => {
+  it('returns false when bun version is below minimum', () => {
     mockExecSync.mockImplementation((cmd: string) => {
-      if (cmd.startsWith('yarn')) return '1.0.0';
+      if (cmd.startsWith('bun')) return '1.0.0';
       if (cmd === 'gh auth status') return '';
       if (cmd.startsWith('claude') || cmd.startsWith('agent'))
         throw new Error('not found');

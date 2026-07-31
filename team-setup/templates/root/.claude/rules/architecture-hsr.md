@@ -86,12 +86,19 @@ Hard rules on direction:
     "emitDecoratorMetadata": true,
     "strict": true,
     "isolatedModules": true,
-    "esModuleInterop": true
+    "esModuleInterop": true,
+    // TypeScript 7: `types` defaults to [] — list globals explicitly.
+    "types": ["node", "jest"]
   }
 }
 ```
 
-Dependencies: `inversify@^7`, `reflect-metadata@^0.2`.
+TypeScript 7 (native compiler) notes: `moduleResolution: "node"` (node10) is
+removed — use `"nodenext"` (Node CLIs) or `"bundler"` (Vite apps). Tests
+transpile via `@swc/jest` with `legacyDecorator` + `decoratorMetadata`;
+type-checking is the build's job (`tsc`).
+
+Dependencies: `inversify@^7`, `reflect-metadata@^0.2`, `typescript@^7`.
 
 ## Testing the pattern
 

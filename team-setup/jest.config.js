@@ -2,7 +2,20 @@ const base = require('../jest.config.base.json');
 
 module.exports = {
   ...base,
-  preset: 'ts-jest',
+  // @swc/jest transpiles only (no per-file type-check); type-checking is the
+  // build's job (`tsc`, TypeScript 7 native).
+  transform: {
+    '^.+\\.ts$': [
+      '@swc/jest',
+      {
+        jsc: {
+          parser: { syntax: 'typescript' },
+          target: 'es2022'
+        },
+        module: { type: 'commonjs' }
+      }
+    ]
+  },
   testEnvironment: 'node',
   roots: ['<rootDir>/src'],
   testMatch: ['**/__tests__/**/*.test.ts'],
@@ -13,7 +26,7 @@ module.exports = {
       branches: 85,
       functions: 85,
       lines: 85,
-      statements: 85,
-    },
-  },
+      statements: 85
+    }
+  }
 };

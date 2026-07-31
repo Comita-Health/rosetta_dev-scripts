@@ -37,12 +37,12 @@ if ! command -v node &>/dev/null; then
 fi
 grn "✓ node found: $(node --version)"
 
-if ! command -v yarn &>/dev/null; then
-  red "✗ Yarn is required but not found."
-  echo "  Install: npm install -g yarn"
+if ! command -v bun &>/dev/null; then
+  red "✗ Bun is required but not found."
+  echo "  Install: curl -fsSL https://bun.sh/install | bash"
   exit 1
 fi
-grn "✓ yarn found: $(yarn --version)"
+grn "✓ bun found: $(bun --version)"
 
 # ── Clone or update dev-scripts ────────────────────────────────────────────────
 SCRIPTS_DIR="$DEST/$REPO"
@@ -63,12 +63,12 @@ fi
 # ── Install team-setup dependencies ───────────────────────────────────────────
 echo ""
 bold "Installing dependencies..."
-yarn --cwd "$SCRIPTS_DIR" install --frozen-lockfile --silent
+bun install --cwd "$SCRIPTS_DIR" --frozen-lockfile --silent
 
 # ── Run setup ─────────────────────────────────────────────────────────────────
 echo ""
 bold "Running workspace setup..."
-yarn --cwd "$SCRIPTS_DIR" workspace team-setup dev -- setup --base-dir "$DEST" --skip-clone
+(cd "$SCRIPTS_DIR/team-setup" && bun run dev -- setup --base-dir "$DEST" --skip-clone)
 
 echo ""
 bold "────────────────────────────────────────────"
@@ -76,7 +76,7 @@ grn "✓ Bootstrap complete!"
 echo ""
 echo "  Add the goto alias to your shell:"
 echo ""
-yarn --cwd "$SCRIPTS_DIR" workspace team-setup dev -- shell-alias 2>/dev/null | grep 'alias goto'
+(cd "$SCRIPTS_DIR/team-setup" && bun run dev -- shell-alias 2>/dev/null) | grep 'alias goto'
 echo ""
 echo "  Then: source ~/.zshrc"
 echo "  Then: gotor  — to navigate your Rosetta repos"
