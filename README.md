@@ -1,50 +1,64 @@
 # rosetta_dev-scripts
 
 CLI to bootstrap and maintain the **Rosetta** workspace. Clones all repos, creates the directory
-structure, and lays down Claude Code configuration that standardizes how the team works with
-AI-assisted development.
+structure, and lays down **Claude Code + Cursor Agent/CLI** configuration so contributors can use
+either (or both) AI coding agents with the same architecture rules and git conventions.
 
 Rosetta is an AI-native engineering knowledge platform — a shared memory layer for people, projects,
 and AI. Chronicle is the memory; Wayfinder is the guide.
 
 ## Why Use Team Setup?
 
-Team Setup gives every engineer a consistent, batteries-included Claude Code environment from day
-one. Instead of each person configuring their own rules, permissions, and workflows, everyone gets
-the same guardrails and automation.
+Team Setup gives every engineer a consistent, batteries-included agent environment from day one.
+Instead of each person configuring their own rules, permissions, and workflows, everyone gets the
+same guardrails — whether they work in Claude Code, Cursor Agent, or the Cursor CLI.
 
 ### What You Get
 
-**Enforced architecture** — The Handler / Service / Repository + InversifyJS pattern is mandated for
-all TypeScript across every Rosetta repo (runtime and IaC), via `.claude/rules/architecture-hsr.md`.
-Every teammate's agent reads and applies it automatically.
+**Dual agent support** — Workspace root gets:
 
-**Automated PR lifecycle** — Push, open a PR, and let Claude handle the rest:
+- `CLAUDE.md` + `.claude/` (settings, slash commands, rules) for Claude Code
+- `AGENTS.md` + `.cursor/cli.json` + `.cursor/rules/*.mdc` for Cursor Agent/CLI  
+  (rules/commands are mirrored from `.claude/` so content does not drift)
+
+**Enforced architecture** — Handler / Service / Repository + InversifyJS for all TypeScript, via
+`.claude/rules/architecture-hsr.md` and the mirrored `.cursor/rules/architecture-hsr.mdc`.
+
+**Automated PR lifecycle** — Push, open a PR, and let the agent handle the rest:
+
 - Automatic Copilot review processing: reads comments, fixes valid issues, replies with commit SHAs, resolves threads
 - Automatic CI checks monitoring: detects failures, reads logs, diagnoses and fixes issues, re-pushes — loops up to 3 times before escalating to a human
 - Both cycles run in parallel after every push
 
-**Enforced commit conventions** — Conventional Commits format enforced via git hooks:
+**Enforced commit conventions** — Conventional Commits via husky `commit-msg` in **every**
+Rosetta repo (`rosetta_docs`, `rosetta_dev-scripts`, `rosetta_chronicle`, `rosetta_wayfinder`):
+
 - Automatic ticket scope extraction from branch names (e.g. `f/PROJ-123-foo` produces `feat(PROJ-123): ...`)
 - Consistent types: `feat`, `fix`, `chore`, `docs`, `refactor`, `perf`, `test`, `build`, `ci`, `revert`
 - Breaking change notation with `!` suffix
+- **Default: no commits on `main`** — use `f/` / `b/` + PR. Exceptions (foundation bootstrap,
+  emergency hotfix) require explicit human authorization; see workspace `CLAUDE.md`.
 
-**Safe-by-default permissions** — Pre-configured allow/deny lists so Claude can:
-- Read, edit, and write files freely
+**Safe-by-default permissions** — Pre-configured allow/deny lists for Claude (`.claude/settings.json`)
+and Cursor CLI (`.cursor/cli.json`) so agents can:
+
+- Read, edit, and write files freely (except secrets like `.env`)
 - Run git, yarn, node, gh CLI commands without prompting
 - Never force-push, `reset --hard`, or `rm -rf` critical paths
 
 **Shared code style rules** — TypeScript strict mode, Prettier conventions, and import hygiene applied uniformly across all repos in the workspace.
 
-**Slash commands out of the box:**
-- `/review` — Review the current diff for correctness, security, and simplification
-- `/add-repo` — Add new repos to the workspace with proper config scaffolding
+**Slash commands / agent prompts out of the box:**
+
+- Claude Code: `/review`, `/add-repo` under `.claude/commands/`
+- Cursor: matching `command-review` / `command-add-repo` rules under `.cursor/rules/` — ask the agent to follow them
 
 **Multi-repo workspace** — One bootstrap gives you:
+
 - All Rosetta repos cloned into a flat workspace
-- VS Code multi-root workspace file generated automatically
+- VS Code / Cursor multi-root workspace file (`all.code-workspace`)
 - `gotor` fuzzy-navigation alias for quick repo switching
-- Root and per-folder CLAUDE.md context so Claude understands the full landscape
+- Root agent docs so Claude Code and Cursor understand the full landscape
 
 ### Adapting for Another Workspace
 
@@ -56,7 +70,8 @@ The setup is template-driven. To adopt this for a different workspace:
 4. Update the `gotor` alias name/marker/path in `team-setup/src/index.ts` and `ORG`/`REPO`/`DEST` in `bootstrap.sh`
 5. Your team runs the same one-line bootstrap
 
-The CLAUDE.md files, rules, commands, and settings are all just files — version-controlled and updated via `update-config` when templates change.
+Agent docs, rules, commands, and settings are version-controlled files — refresh with `update-config`
+when templates change.
 
 ---
 
@@ -68,6 +83,15 @@ The CLAUDE.md files, rules, commands, and settings are all just files — versio
 - [Node.js 20+](https://github.com/nvm-sh/nvm) — `nvm install 20`
 - [Yarn](https://yarnpkg.com/) — `npm install -g yarn`
 - [fzf](https://github.com/junegunn/fzf) (optional) — `brew install fzf` (for the `gotor` alias)
+- **At least one AI agent:**
+  - [Claude Code](https://docs.anthropic.com/en/docs/claude-code), and/or
+  - [Cursor Agent CLI](https://cursor.com/docs/cli/installation):
+    ```bash
+    curl https://cursor.com/install -fsS | bash
+    # ensure ~/.local/bin is on PATH, then:
+    agent login
+    agent --version
+    ```
 
 ### One-line bootstrap
 
@@ -78,16 +102,17 @@ bash <(gh api repos/Rosetta-Foundation/rosetta_dev-scripts/contents/bootstrap.sh
 ```
 
 That's it. The script will:
+
 1. Clone this repo into `~/projects/rosetta/rosetta_dev-scripts`
 2. Install dependencies
 3. Create the workspace directory structure
-4. Lay down Claude Code config (CLAUDE.md, .claude/)
-5. Generate `all.code-workspace` for VS Code
+4. Lay down Claude Code + Cursor agent config (`CLAUDE.md`, `AGENTS.md`, `.claude/`, `.cursor/`)
+5. Generate `all.code-workspace` (open in VS Code or Cursor)
 6. Print the `gotor` shell alias to add to your `~/.zshrc`
 
 > The bootstrap runs setup with `--skip-clone`, so it scaffolds structure + config. Run
 > `yarn workspace team-setup dev -- setup` afterward (without `--skip-clone`) to clone the
-> Rosetta repos.
+> Rosetta repos and wire Chronicle session hooks for Claude Code and Cursor.
 
 To use a custom destination instead of `~/projects/rosetta`:
 
@@ -103,6 +128,11 @@ Add the printed `gotor` alias to your `~/.zshrc`, then:
 source ~/.zshrc
 gotor   # fuzzy-navigate to any Rosetta repo
 ```
+
+**Cursor:** open `~/projects/rosetta/all.code-workspace` (or the folder) → Agent (`Cmd+I`), or from
+the root run `agent`.
+
+**Claude Code:** open the same workspace root as usual.
 
 ## Commands
 
@@ -127,7 +157,8 @@ yarn workspace team-setup dev -- setup --skip-install
 
 ### `update-config`
 
-Refresh CLAUDE.md files and `.claude/` directory from templates without re-cloning. Run this when templates are updated.
+Refresh agent config files (`CLAUDE.md`, `AGENTS.md`, `.claude/`, `.cursor/`) from templates without
+re-cloning. Run this when templates are updated.
 
 ```bash
 yarn workspace team-setup dev -- update-config
@@ -135,7 +166,7 @@ yarn workspace team-setup dev -- update-config
 
 ### `verify`
 
-Health check — confirms repos are cloned and config files exist.
+Health check — confirms repos are cloned and Claude + Cursor config files exist.
 
 ```bash
 yarn workspace team-setup dev -- verify
@@ -161,38 +192,43 @@ yarn workspace team-setup dev -- shell-alias
 
 ```
 ~/projects/rosetta/
-├── CLAUDE.md                    (from templates/root/)
-├── .claude/                     (settings, commands, rules — incl. architecture-hsr.md)
-├── all.code-workspace           (generated — all repos as VS Code multi-root)
+├── CLAUDE.md                    (shared agent brief — Claude Code + Cursor)
+├── AGENTS.md                    (Cursor-oriented map; points at CLAUDE.md)
+├── .claude/                     (Claude settings, commands, rules)
+├── .cursor/                     (Cursor cli.json + mirrored rules)
+├── all.code-workspace           (generated — open in VS Code or Cursor)
 ├── rosetta_dev-scripts/         (this repo)
 ├── rosetta_docs/                (cloned — PRDs, ADRs, docs, shared assets)
 ├── rosetta_chronicle/           (cloned — memory engine)
-├── rosetta_wayfinder/           (cloned — knowledge guide, placeholder)
+├── rosetta_wayfinder/           (cloned — knowledge guide)
 └── rosetta_chronicle_<you>/     (created + cloned — your private personal Chronicle)
 ```
 
 All workspace repos — `rosetta_dev-scripts`, `rosetta_docs`, `rosetta_chronicle`, and
 `rosetta_wayfinder` — are configured as `flatRepos` in `team-setup/src/config/shared.json` and cloned
-side by side at the workspace root. Cross-cutting artifacts (PRDs, ADRs, vision, shared assets) now
-live in the versioned **`rosetta_docs`** repo rather than being scaffolded as untracked folders, so
-they have history and are PR-reviewable. `tracks/default.json` no longer defines any doc `projects`.
+side by side at the workspace root. Cross-cutting artifacts (PRDs, ADRs, vision, shared assets) live
+in the versioned **`rosetta_docs`** repo. `tracks/default.json` no longer defines any doc `projects`.
 
 ### Personal Chronicle
 
 Setup also provisions a **private, per-engineer Chronicle repository** under the org, named from the
 login of the currently authenticated `gh` user (e.g. `rosetta_chronicle_example-user`). It is
 created **private** — not the org's default `internal` visibility — so only the owner can see it,
-reflecting the platform value *"private by default, shared by intention"* (see
+reflecting the platform value _"private by default, shared by intention"_ (see
 `rosetta_docs/docs/FOUNDATIONS.md` and `rosetta_docs/architecture/ADR-0002`).
 
-This is the only repo derived from the current user rather than a fixed list; each engineer only ever
-creates or clones **their own**. If the repo already exists (e.g. on a repeat `setup`), provisioning
-is skipped with a log line rather than failing. Configured under `personalChronicle` in
-`team-setup/src/config/shared.json`.
+Full `setup` (not `--skip-clone`) also:
+
+- Writes `~/.config/rosetta/chronicle.env` (`CHRONICLE_REPO` / `CHRONICLE_PROJECT`)
+- Registers the Claude Code Stop hook in `~/.claude/settings.json`
+- Registers Cursor `sessionStart` + `stop` hooks in `~/.cursor/hooks.json`
+
+Claude Code session append is fully supported today. Cursor stop hooks are wired and best-effort;
+full Cursor transcript ingestion in Chronicle is a follow-on.
 
 ## Adding a New Repo
 
-1. Add an entry to `flatRepos` in `team-setup/src/config/shared.json` (or use `/add-repo <url>`)
+1. Add an entry to `flatRepos` in `team-setup/src/config/shared.json` (or use `/add-repo <url>` / the Cursor `command-add-repo` rule)
 2. Run `yarn workspace team-setup dev -- update-config` to regenerate config
 3. Run `yarn workspace team-setup dev -- setup --skip-install` to clone it
 4. Commit and push so teammates get it on their next pull
@@ -201,12 +237,13 @@ is skipped with a log line rather than failing. Configured under `personalChroni
 
 When making changes to the tool, update this README in the same commit:
 
-| Change | What to update |
-|--------|---------------|
-| New repo added to `flatRepos` | Directory Structure |
-| New CLI command or flag | Commands section |
-| New feature or behavior | What You Get section |
-| Workspace layout changes | Directory Structure |
+| Change                        | What to update               |
+| ----------------------------- | ---------------------------- |
+| New repo added to `flatRepos` | Directory Structure          |
+| New CLI command or flag       | Commands section             |
+| New feature or behavior       | What You Get section         |
+| Workspace layout changes      | Directory Structure          |
+| Agent-tool support changes    | Prerequisites + What You Get |
 
 The directory structure in this file must mirror the `flatRepos` in
 `team-setup/src/config/shared.json`.

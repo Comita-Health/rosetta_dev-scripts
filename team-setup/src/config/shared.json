@@ -3,10 +3,26 @@
   "baseDir": "~/projects/rosetta",
   "sharedRepos": [],
   "flatRepos": [
-    { "name": "rosetta_docs", "ghRepo": "rosetta_docs", "label": "Docs — PRDs, ADRs & Cross-Cutting Knowledge" },
-    { "name": "rosetta_dev-scripts", "ghRepo": "rosetta_dev-scripts", "label": "Dev Scripts — Workspace Tooling" },
-    { "name": "rosetta_chronicle", "ghRepo": "rosetta_chronicle", "label": "Chronicle — Memory Engine" },
-    { "name": "rosetta_wayfinder", "ghRepo": "rosetta_wayfinder", "label": "Wayfinder — Knowledge Guide" }
+    {
+      "name": "rosetta_docs",
+      "ghRepo": "rosetta_docs",
+      "label": "Docs — PRDs, ADRs & Cross-Cutting Knowledge"
+    },
+    {
+      "name": "rosetta_dev-scripts",
+      "ghRepo": "rosetta_dev-scripts",
+      "label": "Dev Scripts — Workspace Tooling"
+    },
+    {
+      "name": "rosetta_chronicle",
+      "ghRepo": "rosetta_chronicle",
+      "label": "Chronicle — Memory Engine"
+    },
+    {
+      "name": "rosetta_wayfinder",
+      "ghRepo": "rosetta_wayfinder",
+      "label": "Wayfinder — Knowledge Guide"
+    }
   ],
   "personalChronicle": {
     "namePrefix": "rosetta_chronicle",

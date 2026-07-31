@@ -1,0 +1,43 @@
+{
+  "permissions": {
+    "allow": [
+      "Shell(ls)",
+      "Shell(find)",
+      "Shell(grep)",
+      "Shell(rg)",
+      "Shell(cat)",
+      "Shell(pwd)",
+      "Shell(git)",
+      "Shell(yarn)",
+      "Shell(node)",
+      "Shell(npm)",
+      "Shell(npx)",
+      "Shell(mkdir)",
+      "Shell(mv)",
+      "Shell(cp)",
+      "Shell(touch)",
+      "Shell(gh)",
+      "Shell(jq)",
+      "Shell(echo)",
+      "Shell(which)",
+      "Read(**/*)",
+      "Write(**/*)",
+      "WebFetch(docs.github.com)",
+      "WebFetch(*.github.com)",
+      "WebFetch(cursor.com)",
+      "WebFetch(*.cursor.com)",
+      "WebFetch(platform.claude.com)",
+      "WebFetch(*.anthropic.com)"
+    ],
+    "deny": [
+      "Shell(rm)",
+      "Shell(sudo)",
+      "Read(**/.env)",
+      "Read(**/.env.*)",
+      "Write(**/.env)",
+      "Write(**/.env.*)",
+      "Write(**/*.pem)",
+      "Write(**/*.key)"
+    ]
+  }
+}

@@ -4,7 +4,10 @@ import path from 'path';
 import chalk from 'chalk';
 import { ProjectConfig } from '../types';
 
-export const installDeps = (baseDir: string, projects: ProjectConfig[]): void => {
+export const installDeps = (
+  baseDir: string,
+  projects: ProjectConfig[]
+): void => {
   console.log(chalk.bold('\nInstalling dependencies...'));
 
   for (const project of projects) {
@@ -19,7 +22,7 @@ export const installDeps = (baseDir: string, projects: ProjectConfig[]): void =>
         execSync('yarn install --frozen-lockfile', {
           cwd: repoDir,
           encoding: 'utf-8',
-          stdio: ['pipe', 'pipe', 'pipe'],
+          stdio: ['pipe', 'pipe', 'pipe']
         });
         console.log(chalk.green(`  ✓ ${project.dir}/${repo.name}`));
       } catch {
@@ -27,11 +30,13 @@ export const installDeps = (baseDir: string, projects: ProjectConfig[]): void =>
           execSync('yarn install', {
             cwd: repoDir,
             encoding: 'utf-8',
-            stdio: ['pipe', 'pipe', 'pipe'],
+            stdio: ['pipe', 'pipe', 'pipe']
           });
           console.log(chalk.green(`  ✓ ${project.dir}/${repo.name}`));
         } catch {
-          console.log(chalk.yellow(`  ⚠ ${project.dir}/${repo.name}: install failed`));
+          console.log(
+            chalk.yellow(`  ⚠ ${project.dir}/${repo.name}: install failed`)
+          );
         }
       }
     }

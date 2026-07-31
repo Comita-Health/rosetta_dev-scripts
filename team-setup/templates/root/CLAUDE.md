@@ -6,7 +6,9 @@ people, projects, and AI.
 
 > Chronicle is the memory. Wayfinder is the guide.
 
-This root contains all Rosetta repos.
+This root contains all Rosetta repos. Agent tooling is dual-compatible: **Claude Code** and
+**Cursor Agent / CLI**. See `AGENTS.md` for the Cursor-oriented map; this file is the shared brief
+both tools load.
 
 ## Package Manager
 
@@ -17,6 +19,9 @@ Always use `yarn` over `npm`.
 - Node v20+ (check `.nvmrc` in each repo)
 - Yarn 1.22+
 - GitHub CLI (`gh`) authenticated
+- At least one AI agent CLI:
+  - Claude Code (`claude`), and/or
+  - Cursor Agent CLI (`agent` — `curl https://cursor.com/install -fsS | bash` then `agent login`)
 
 ## Folder Structure
 
@@ -29,7 +34,7 @@ rosetta/
 │   ├── docs/                Cross-cutting product & workspace docs
 │   └── shared/              Shared assets across Rosetta repos
 ├── rosetta_chronicle/       Memory engine — turns engineering activity into knowledge
-└── rosetta_wayfinder/       Knowledge guide — future UI/query layer over Chronicle
+└── rosetta_wayfinder/       Knowledge guide — local-first desktop app over Chronicle
 ```
 
 Each repo has a `CLAUDE.md` describing its purpose and structure.
@@ -40,7 +45,8 @@ All TypeScript code in every Rosetta repo MUST follow the
 Handler / Service / Repository pattern with InversifyJS dependency injection. This is a project
 standard, enforced the same way as Conventional Commits and the PR review cycles below.
 
-The full ruleset lives in `.claude/rules/architecture-hsr.md`. In brief:
+The full ruleset lives in `.claude/rules/architecture-hsr.md` (Claude Code) and is mirrored to
+`.cursor/rules/architecture-hsr.mdc` (Cursor) by team-setup. In brief:
 
 - Strict one-way dependency: **Handler → Service → Repository**.
 - Every class is `@injectable()`; dependencies are constructor-injected via `@inject(TOKEN)`.
@@ -48,7 +54,7 @@ The full ruleset lives in `.claude/rules/architecture-hsr.md`. In brief:
   interface — is the runtime injection key.
 - Each class file co-locates its `interface IFoo` and `@injectable() class Foo implements IFoo`.
 
-Read `.claude/rules/architecture-hsr.md` before writing or reviewing any TypeScript.
+Read the architecture rule before writing or reviewing any TypeScript.
 
 ## Git Workflow
 
@@ -65,6 +71,21 @@ git checkout -b f/TICKET-123-short-description
 ```
 
 Branch prefixes: `f/` for features, `b/` for bugs.
+
+**Default: do not commit on `main`.** All product work lands via a topic branch + PR.
+
+### Direct commits to `main` (exceptions)
+
+Topic branches are the default. Direct pushes to `main` are allowed only when a human
+explicitly authorizes it for one of these cases:
+
+1. **Foundation / bootstrap scaffolding** — standing up shared tooling across repos
+   (e.g. husky, org-wide config, one-shot public repo initialization).
+2. **Emergency hotfix** — a production-blocking fix where a human approves skipping the
+   branch+PR cycle. Prefer a follow-up PR note when practical.
+
+Even on an exception, **Conventional Commits still apply**. If authorization is unclear,
+ask — do not assume.
 
 ### Commit messages — Conventional Commits
 

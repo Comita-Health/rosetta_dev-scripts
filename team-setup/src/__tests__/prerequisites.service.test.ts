@@ -44,6 +44,30 @@ describe('checkPrerequisites', () => {
     mockExecSync.mockImplementation((cmd: string) => {
       if (cmd.startsWith('fzf')) throw new Error('not found');
       if (cmd === 'gh auth status') return '';
+      if (cmd.startsWith('claude') || cmd.startsWith('agent'))
+        throw new Error('not found');
+      return 'v24.0.0';
+    });
+    expect(checkPrerequisites()).toBe(true);
+  });
+
+  it('still passes when neither Claude Code nor Cursor Agent CLI is installed', () => {
+    mockExecSync.mockImplementation((cmd: string) => {
+      if (cmd === 'gh auth status') return '';
+      if (cmd.startsWith('claude') || cmd.startsWith('agent'))
+        throw new Error('not found');
+      if (cmd.startsWith('fzf')) throw new Error('not found');
+      return 'v24.0.0';
+    });
+    expect(checkPrerequisites()).toBe(true);
+  });
+
+  it('still passes when only Cursor Agent CLI is present', () => {
+    mockExecSync.mockImplementation((cmd: string) => {
+      if (cmd === 'gh auth status') return '';
+      if (cmd.startsWith('claude')) throw new Error('not found');
+      if (cmd.startsWith('agent')) return '2026.7.0';
+      if (cmd.startsWith('fzf')) throw new Error('not found');
       return 'v24.0.0';
     });
     expect(checkPrerequisites()).toBe(true);
@@ -52,6 +76,8 @@ describe('checkPrerequisites', () => {
   it('handles version output with no decimal (uses full string as version)', () => {
     mockExecSync.mockImplementation((cmd: string) => {
       if (cmd === 'gh auth status') return '';
+      if (cmd.startsWith('claude') || cmd.startsWith('agent'))
+        throw new Error('not found');
       return '24';
     });
     expect(checkPrerequisites()).toBe(true);
@@ -61,6 +87,8 @@ describe('checkPrerequisites', () => {
     mockExecSync.mockImplementation((cmd: string) => {
       if (cmd.startsWith('yarn')) return '1.0.0';
       if (cmd === 'gh auth status') return '';
+      if (cmd.startsWith('claude') || cmd.startsWith('agent'))
+        throw new Error('not found');
       return 'v24.0.0';
     });
     expect(checkPrerequisites()).toBe(false);

@@ -4,7 +4,7 @@ import {
   installChronicleHook,
   buildChronicleEngine,
   seedPersonalRepoFiles,
-  provisionPersonalChronicle,
+  provisionPersonalChronicle
 } from '../services/personal-chronicle.service';
 
 jest.mock('child_process', () => ({ execSync: jest.fn() }));
@@ -12,22 +12,24 @@ jest.mock('fs', () => ({
   existsSync: jest.fn(),
   readFileSync: jest.fn(),
   writeFileSync: jest.fn(),
+  mkdirSync: jest.fn()
 }));
 
 import { execSync } from 'child_process';
-import { existsSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 
 const mockExecSync = execSync as jest.Mock;
 const mockExistsSync = existsSync as jest.Mock;
 const mockReadFileSync = readFileSync as jest.Mock;
 const mockWriteFileSync = writeFileSync as jest.Mock;
+const mockMkdirSync = mkdirSync as jest.Mock;
 
 const config = {
   namePrefix: 'rosetta_chronicle',
   visibility: 'private' as const,
   label: 'Chronicle — Personal Memory',
   description: 'Personal engineering Chronicle.',
-  defaultBranch: 'main',
+  defaultBranch: 'main'
 };
 
 beforeEach(() => {
@@ -44,13 +46,13 @@ afterEach(() => (console.log as jest.Mock).mockRestore());
 describe('derivePersonalRepoName', () => {
   it('lowercases the login and appends it to the prefix', () => {
     expect(derivePersonalRepoName('rosetta_chronicle', 'Example-User')).toBe(
-      'rosetta_chronicle_example-user',
+      'rosetta_chronicle_example-user'
     );
   });
 
   it('collapses slashes in the login to underscores', () => {
     expect(derivePersonalRepoName('rosetta_chronicle', 'org/user')).toBe(
-      'rosetta_chronicle_org_user',
+      'rosetta_chronicle_org_user'
     );
   });
 });
@@ -79,60 +81,131 @@ describe('installChronicleHook', () => {
   const HOOK = '/base/rosetta_chronicle/hooks/stop-append.sh';
   const PROJECTS = '/base';
 
-  it('creates a new settings file with env and hook when none exists', () => {
+  const writtenJsonFor = (suffix: string): Record<string, unknown> => {
+    const call = mockWriteFileSync.mock.calls.find((c: string[]) =>
+      String(c[0]).endsWith(suffix)
+    );
+    expect(call).toBeDefined();
+    return JSON.parse(call![1] as string);
+  };
+
+  it('creates Claude settings, shared env, and Cursor hooks when none exist', () => {
     mockExistsSync.mockReturnValue(false);
     installChronicleHook(REPO, HOOK, PROJECTS);
-    expect(mockWriteFileSync).toHaveBeenCalledTimes(1);
-    const written = JSON.parse(mockWriteFileSync.mock.calls[0][1]);
-    expect(written.env['CHRONICLE_REPO']).toBe(REPO);
-    expect(written.env['CHRONICLE_PROJECT']).toBe(PROJECTS);
-    expect(written.hooks.Stop[0].hooks[0].command).toBe(HOOK);
-    expect(written.hooks.Stop[0].hooks[0].async).toBe(true);
+
+    const envCall = mockWriteFileSync.mock.calls.find((c: string[]) =>
+      String(c[0]).endsWith('chronicle.env')
+    );
+    expect(envCall?.[1]).toContain(`CHRONICLE_REPO="${REPO}"`);
+    expect(envCall?.[1]).toContain(`CHRONICLE_PROJECT="${PROJECTS}"`);
+
+    const written = writtenJsonFor('settings.json');
+    expect(written.env).toEqual(
+      expect.objectContaining({
+        CHRONICLE_REPO: REPO,
+        CHRONICLE_PROJECT: PROJECTS
+      })
+    );
+    expect((written.hooks as { Stop: unknown[] }).Stop[0]).toEqual(
+      expect.objectContaining({
+        hooks: [expect.objectContaining({ command: HOOK, async: true })]
+      })
+    );
+
+    const cursorHooks = writtenJsonFor('hooks.json');
+    expect(cursorHooks.version).toBe(1);
+    expect(
+      (cursorHooks.hooks as { sessionStart: unknown[] }).sessionStart[0]
+    ).toEqual(
+      expect.objectContaining({
+        command: '/base/rosetta_chronicle/hooks/cursor-session-start.sh'
+      })
+    );
+    expect((cursorHooks.hooks as { stop: unknown[] }).stop[0]).toEqual(
+      expect.objectContaining({
+        command: '/base/rosetta_chronicle/hooks/cursor-stop-append.sh',
+        loop_limit: null
+      })
+    );
+    expect(mockMkdirSync).toHaveBeenCalled();
   });
 
   it('merges into an existing settings file preserving other keys', () => {
-    mockExistsSync.mockReturnValue(true);
-    mockReadFileSync.mockReturnValue(JSON.stringify({ model: 'sonnet', env: { EXISTING: '1' } }));
+    mockExistsSync.mockImplementation((p: string) =>
+      String(p).endsWith('settings.json')
+    );
+    mockReadFileSync.mockImplementation((p: string) => {
+      if (String(p).endsWith('settings.json')) {
+        return JSON.stringify({ model: 'sonnet', env: { EXISTING: '1' } });
+      }
+      return '{}';
+    });
     installChronicleHook(REPO, HOOK, PROJECTS);
-    const written = JSON.parse(mockWriteFileSync.mock.calls[0][1]);
+    const written = writtenJsonFor('settings.json');
     expect(written.model).toBe('sonnet');
-    expect(written.env['EXISTING']).toBe('1');
-    expect(written.env['CHRONICLE_REPO']).toBe(REPO);
-    expect(written.env['CHRONICLE_PROJECT']).toBe(PROJECTS);
+    expect((written.env as Record<string, string>)['EXISTING']).toBe('1');
+    expect((written.env as Record<string, string>)['CHRONICLE_REPO']).toBe(
+      REPO
+    );
   });
 
   it('replaces an existing chronicle stop hook without duplicating', () => {
     const existing = {
-      hooks: { Stop: [{ hooks: [{ type: 'command', command: HOOK, async: true }] }] },
+      hooks: {
+        Stop: [{ hooks: [{ type: 'command', command: HOOK, async: true }] }]
+      }
     };
-    mockExistsSync.mockReturnValue(true);
+    mockExistsSync.mockImplementation((p: string) =>
+      String(p).endsWith('settings.json')
+    );
     mockReadFileSync.mockReturnValue(JSON.stringify(existing));
     installChronicleHook(REPO, HOOK, PROJECTS);
-    const written = JSON.parse(mockWriteFileSync.mock.calls[0][1]);
-    expect(written.hooks.Stop).toHaveLength(1);
+    const written = writtenJsonFor('settings.json');
+    expect((written.hooks as { Stop: unknown[] }).Stop).toHaveLength(1);
   });
 
   it('preserves non-chronicle stop hooks when adding the chronicle one', () => {
     const existing = {
-      hooks: { Stop: [{ hooks: [{ type: 'command', command: '/other/hook.sh' }] }] },
+      hooks: {
+        Stop: [{ hooks: [{ type: 'command', command: '/other/hook.sh' }] }]
+      }
     };
-    mockExistsSync.mockReturnValue(true);
+    mockExistsSync.mockImplementation((p: string) =>
+      String(p).endsWith('settings.json')
+    );
     mockReadFileSync.mockReturnValue(JSON.stringify(existing));
     installChronicleHook(REPO, HOOK, PROJECTS);
-    const written = JSON.parse(mockWriteFileSync.mock.calls[0][1]);
-    expect(written.hooks.Stop).toHaveLength(2);
+    const written = writtenJsonFor('settings.json');
+    expect((written.hooks as { Stop: unknown[] }).Stop).toHaveLength(2);
   });
 
-  it('logs a warning and does not throw when settings cannot be parsed', () => {
-    mockExistsSync.mockReturnValue(true);
+  it('skips Claude settings write when settings cannot be parsed but still writes env + Cursor hooks', () => {
+    mockExistsSync.mockImplementation((p: string) =>
+      String(p).endsWith('settings.json')
+    );
     mockReadFileSync.mockReturnValue('not valid json {{{');
     expect(() => installChronicleHook(REPO, HOOK, PROJECTS)).not.toThrow();
-    expect(mockWriteFileSync).not.toHaveBeenCalled();
+    const settingsWrites = mockWriteFileSync.mock.calls.filter((c: string[]) =>
+      String(c[0]).endsWith('settings.json')
+    );
+    expect(settingsWrites).toHaveLength(0);
+    expect(
+      mockWriteFileSync.mock.calls.some((c: string[]) =>
+        String(c[0]).endsWith('chronicle.env')
+      )
+    ).toBe(true);
+    expect(
+      mockWriteFileSync.mock.calls.some((c: string[]) =>
+        String(c[0]).endsWith('hooks.json')
+      )
+    ).toBe(true);
   });
 
   it('logs a warning and does not throw when writeFileSync fails', () => {
     mockExistsSync.mockReturnValue(false);
-    mockWriteFileSync.mockImplementation(() => { throw new Error('permission denied'); });
+    mockWriteFileSync.mockImplementation(() => {
+      throw new Error('permission denied');
+    });
     expect(() => installChronicleHook(REPO, HOOK, PROJECTS)).not.toThrow();
   });
 });
@@ -156,7 +229,9 @@ describe('buildChronicleEngine', () => {
 
   it('does not throw when yarn build fails', () => {
     mockExistsSync.mockReturnValue(false);
-    mockExecSync.mockImplementation(() => { throw new Error('build failed'); });
+    mockExecSync.mockImplementation(() => {
+      throw new Error('build failed');
+    });
     expect(() => buildChronicleEngine(ENGINE)).not.toThrow();
   });
 });
@@ -168,7 +243,10 @@ describe('seedPersonalRepoFiles', () => {
   it('writes .gitignore and commits when it does not exist', () => {
     mockExistsSync.mockImplementation((p: string) => p !== GITIGNORE);
     seedPersonalRepoFiles(REPO);
-    expect(mockWriteFileSync).toHaveBeenCalledWith(GITIGNORE, 'stop-hook.log\n');
+    expect(mockWriteFileSync).toHaveBeenCalledWith(
+      GITIGNORE,
+      'stop-hook.log\n'
+    );
     const cmds = mockExecSync.mock.calls.map((c: string[]) => c[0]);
     expect(cmds).toContain('git add .gitignore');
     expect(cmds).toContain('git commit -m "chore: ignore stop-hook.log"');
@@ -184,9 +262,14 @@ describe('seedPersonalRepoFiles', () => {
 
   it('does not throw when git operations fail', () => {
     mockExistsSync.mockReturnValue(false);
-    mockExecSync.mockImplementation(() => { throw new Error('no remote'); });
+    mockExecSync.mockImplementation(() => {
+      throw new Error('no remote');
+    });
     expect(() => seedPersonalRepoFiles(REPO)).not.toThrow();
-    expect(mockWriteFileSync).toHaveBeenCalledWith(GITIGNORE, 'stop-hook.log\n');
+    expect(mockWriteFileSync).toHaveBeenCalledWith(
+      GITIGNORE,
+      'stop-hook.log\n'
+    );
   });
 });
 
@@ -222,14 +305,14 @@ describe('provisionPersonalChronicle', () => {
     const calls = mockExecSync.mock.calls.map((c: string[]) => c[0]);
     expect(calls).toContainEqual(
       expect.stringContaining(
-        'gh repo create MyOrg/rosetta_chronicle_example-user --private',
-      ),
+        'gh repo create MyOrg/rosetta_chronicle_example-user --private'
+      )
     );
     expect(calls.some((c: string) => c.includes('--add-readme'))).toBe(true);
     expect(calls).toContainEqual(
       expect.stringContaining(
-        'gh repo clone MyOrg/rosetta_chronicle_example-user "/base/rosetta_chronicle_example-user"',
-      ),
+        'gh repo clone MyOrg/rosetta_chronicle_example-user "/base/rosetta_chronicle_example-user"'
+      )
     );
   });
 
@@ -244,7 +327,7 @@ describe('provisionPersonalChronicle', () => {
     provisionPersonalChronicle(config, '/base', 'MyOrg');
     const calls = mockExecSync.mock.calls.map((c: string[]) => c[0]);
     expect(calls).toContainEqual(
-      expect.stringContaining('branches/master/rename -f new_name=main'),
+      expect.stringContaining('branches/master/rename -f new_name=main')
     );
   });
 
@@ -269,7 +352,9 @@ describe('provisionPersonalChronicle', () => {
       if (cmd.includes('.default_branch')) throw new Error('api error');
       return '';
     });
-    expect(() => provisionPersonalChronicle(config, '/base', 'MyOrg')).not.toThrow();
+    expect(() =>
+      provisionPersonalChronicle(config, '/base', 'MyOrg')
+    ).not.toThrow();
     const calls = mockExecSync.mock.calls.map((c: string[]) => c[0]);
     // Clone still proceeds despite the normalization failure.
     expect(calls.some((c: string) => c.includes('gh repo clone'))).toBe(true);
@@ -293,7 +378,8 @@ describe('provisionPersonalChronicle', () => {
     mockExecSync.mockImplementation((cmd: string) => {
       if (cmd.includes('gh api user')) return 'example-user\n';
       if (cmd.includes('gh repo view')) throw new Error('not found');
-      if (cmd.includes('gh repo create')) throw new Error('Name already exists on this account');
+      if (cmd.includes('gh repo create'))
+        throw new Error('Name already exists on this account');
       return '';
     });
     provisionPersonalChronicle(config, '/base', 'MyOrg');
@@ -310,7 +396,9 @@ describe('provisionPersonalChronicle', () => {
       if (cmd.includes('gh repo clone')) throw new Error('network error');
       return '';
     });
-    expect(() => provisionPersonalChronicle(config, '/base', 'MyOrg')).not.toThrow();
+    expect(() =>
+      provisionPersonalChronicle(config, '/base', 'MyOrg')
+    ).not.toThrow();
   });
 
   it('aborts without cloning when create fails for a non-exists reason', () => {
@@ -318,7 +406,8 @@ describe('provisionPersonalChronicle', () => {
     mockExecSync.mockImplementation((cmd: string) => {
       if (cmd.includes('gh api user')) return 'example-user\n';
       if (cmd.includes('gh repo view')) throw new Error('not found');
-      if (cmd.includes('gh repo create')) throw new Error('insufficient permissions');
+      if (cmd.includes('gh repo create'))
+        throw new Error('insufficient permissions');
       return '';
     });
     provisionPersonalChronicle(config, '/base', 'MyOrg');

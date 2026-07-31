@@ -1,9 +1,19 @@
-import { mkdirSync, symlinkSync, readlinkSync, existsSync, lstatSync, unlinkSync } from 'fs';
+import {
+  mkdirSync,
+  symlinkSync,
+  readlinkSync,
+  existsSync,
+  lstatSync,
+  unlinkSync
+} from 'fs';
 import path from 'path';
 import chalk from 'chalk';
 import { ProjectConfig, SymlinkConfig } from '../types';
 
-export const createDirectories = (baseDir: string, projects: ProjectConfig[]): void => {
+export const createDirectories = (
+  baseDir: string,
+  projects: ProjectConfig[]
+): void => {
   console.log(chalk.bold('\nCreating directories...'));
 
   for (const project of projects) {
@@ -15,12 +25,20 @@ export const createDirectories = (baseDir: string, projects: ProjectConfig[]): v
 
 const normalizeSymlink = (entry: string | SymlinkConfig): SymlinkConfig => {
   if (typeof entry === 'string') {
-    return { name: entry, target: path.join('..', 'shared', entry), scope: 'project' };
+    return {
+      name: entry,
+      target: path.join('..', 'shared', entry),
+      scope: 'project'
+    };
   }
   return entry;
 };
 
-const ensureSymlink = (linkPath: string, target: string, displayPath: string): void => {
+const ensureSymlink = (
+  linkPath: string,
+  target: string,
+  displayPath: string
+): void => {
   if (lstatSync(linkPath, { throwIfNoEntry: false })?.isSymbolicLink()) {
     const currentTarget = readlinkSync(linkPath);
     if (currentTarget === target) {
@@ -29,7 +47,9 @@ const ensureSymlink = (linkPath: string, target: string, displayPath: string): v
     }
     unlinkSync(linkPath);
   } else if (existsSync(linkPath)) {
-    console.log(chalk.yellow(`  ⚠ ${displayPath} exists but is not a symlink, skipping`));
+    console.log(
+      chalk.yellow(`  ⚠ ${displayPath} exists but is not a symlink, skipping`)
+    );
     return;
   }
 
@@ -37,7 +57,10 @@ const ensureSymlink = (linkPath: string, target: string, displayPath: string): v
   console.log(chalk.green(`  ✓ ${displayPath} -> ${target}`));
 };
 
-export const createSymlinks = (baseDir: string, projects: ProjectConfig[]): void => {
+export const createSymlinks = (
+  baseDir: string,
+  projects: ProjectConfig[]
+): void => {
   const projectsWithSymlinks = projects.filter(p => p.symlinks.length > 0);
   if (projectsWithSymlinks.length === 0) return;
 

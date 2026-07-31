@@ -4,7 +4,11 @@ import path from 'path';
 import chalk from 'chalk';
 import { ProjectConfig, SharedConfig, SymlinkConfig } from '../types';
 
-export const verifySetup = (baseDir: string, projects: ProjectConfig[], sharedConfig: SharedConfig): void => {
+export const verifySetup = (
+  baseDir: string,
+  projects: ProjectConfig[],
+  sharedConfig: SharedConfig
+): void => {
   console.log(chalk.bold('\nVerifying workspace...'));
   let issues = 0;
 
@@ -36,11 +40,13 @@ export const verifySetup = (baseDir: string, projects: ProjectConfig[], sharedCo
         try {
           execSync(`git -C "${repoDir}" remote get-url origin`, {
             encoding: 'utf-8',
-            stdio: ['pipe', 'pipe', 'pipe'],
+            stdio: ['pipe', 'pipe', 'pipe']
           });
           console.log(chalk.green(`  ✓ ${project.dir}/${repo.name}`));
         } catch {
-          console.log(chalk.yellow(`  ⚠ ${project.dir}/${repo.name}: no remote`));
+          console.log(
+            chalk.yellow(`  ⚠ ${project.dir}/${repo.name}: no remote`)
+          );
           issues++;
         }
       } else {
@@ -50,9 +56,14 @@ export const verifySetup = (baseDir: string, projects: ProjectConfig[], sharedCo
     }
 
     for (const entry of project.symlinks) {
-      const config: SymlinkConfig = typeof entry === 'string'
-        ? { name: entry, target: path.join('..', 'shared', entry), scope: 'project' }
-        : entry;
+      const config: SymlinkConfig =
+        typeof entry === 'string'
+          ? {
+              name: entry,
+              target: path.join('..', 'shared', entry),
+              scope: 'project'
+            }
+          : entry;
 
       const checkLink = (linkPath: string, displayPath: string): void => {
         const stat = lstatSync(linkPath, { throwIfNoEntry: false });
@@ -73,7 +84,12 @@ export const verifySetup = (baseDir: string, projects: ProjectConfig[], sharedCo
 
       if (config.scope === 'repo') {
         for (const repo of project.repos) {
-          const linkPath = path.join(baseDir, project.dir, repo.name, config.name);
+          const linkPath = path.join(
+            baseDir,
+            project.dir,
+            repo.name,
+            config.name
+          );
           checkLink(linkPath, `${project.dir}/${repo.name}/${config.name}`);
         }
       } else {
@@ -90,9 +106,37 @@ export const verifySetup = (baseDir: string, projects: ProjectConfig[], sharedCo
   }
 
   const rootClaude = path.join(baseDir, 'CLAUDE.md');
-  const rootSettings = path.join(baseDir, '.claude', 'settings.json');
-  if (!existsSync(rootClaude)) { console.log(chalk.red('  ✗ root CLAUDE.md: missing')); issues++; }
-  if (!existsSync(rootSettings)) { console.log(chalk.red('  ✗ root .claude/settings.json: missing')); issues++; }
+  const rootAgents = path.join(baseDir, 'AGENTS.md');
+  const rootClaudeSettings = path.join(baseDir, '.claude', 'settings.json');
+  const rootCursorCli = path.join(baseDir, '.cursor', 'cli.json');
+  const rootCursorRules = path.join(baseDir, '.cursor', 'rules');
+
+  if (!existsSync(rootClaude)) {
+    console.log(chalk.red('  ✗ root CLAUDE.md: missing'));
+    issues++;
+  }
+  if (!existsSync(rootAgents)) {
+    console.log(chalk.red('  ✗ root AGENTS.md: missing'));
+    issues++;
+  }
+  if (!existsSync(rootClaudeSettings)) {
+    console.log(chalk.red('  ✗ root .claude/settings.json: missing'));
+    issues++;
+  }
+  if (!existsSync(rootCursorCli)) {
+    console.log(chalk.red('  ✗ root .cursor/cli.json: missing'));
+    issues++;
+  }
+  if (!existsSync(rootCursorRules)) {
+    console.log(chalk.red('  ✗ root .cursor/rules/: missing'));
+    issues++;
+  } else {
+    console.log(
+      chalk.green(
+        '  ✓ root agent config (CLAUDE.md, AGENTS.md, .claude/, .cursor/)'
+      )
+    );
+  }
 
   console.log('');
   if (issues === 0) {

@@ -1,4 +1,9 @@
-import { cloneRepo, cloneRepos, cloneSharedRepos, cloneFlatRepos } from '../services/clone.service';
+import {
+  cloneRepo,
+  cloneRepos,
+  cloneSharedRepos,
+  cloneFlatRepos
+} from '../services/clone.service';
 
 jest.mock('child_process', () => ({ execSync: jest.fn() }));
 jest.mock('fs', () => ({ existsSync: jest.fn() }));
@@ -34,14 +39,18 @@ describe('cloneRepo', () => {
 
   it('returns false and logs error when clone fails', () => {
     mockExistsSync.mockReturnValue(false);
-    mockExecSync.mockImplementation(() => { throw new Error('auth failure'); });
+    mockExecSync.mockImplementation(() => {
+      throw new Error('auth failure');
+    });
     const result = cloneRepo(repo, '/base/my-repo', 'MyOrg');
     expect(result).toBe(false);
   });
 
   it('returns false when a non-Error is thrown', () => {
     mockExistsSync.mockReturnValue(false);
-    mockExecSync.mockImplementation(() => { throw 'string error'; });
+    mockExecSync.mockImplementation(() => {
+      throw 'string error';
+    });
     const result = cloneRepo(repo, '/base/my-repo', 'MyOrg');
     expect(result).toBe(false);
   });

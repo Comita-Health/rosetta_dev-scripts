@@ -12,14 +12,18 @@ export const generateWorkspaceFile = (
   const folders: { path: string; name?: string }[] = [];
 
   for (const repo of sharedConfig.sharedRepos) {
-    const entry: { path: string; name?: string } = { path: path.join('shared', repo.name) };
+    const entry: { path: string; name?: string } = {
+      path: path.join('shared', repo.name)
+    };
     if (repo.label) entry.name = repo.label;
     folders.push(entry);
   }
 
   for (const project of projects) {
     for (const repo of project.repos) {
-      const entry: { path: string; name?: string } = { path: path.join(project.dir, repo.name) };
+      const entry: { path: string; name?: string } = {
+        path: path.join(project.dir, repo.name)
+      };
       if (repo.label) entry.name = repo.label;
       folders.push(entry);
     }
@@ -39,7 +43,7 @@ export const generateWorkspaceFile = (
 
   if (sharedConfig.resolvedPersonalChronicleRepo) {
     const entry: { path: string; name?: string } = {
-      path: sharedConfig.resolvedPersonalChronicleRepo,
+      path: sharedConfig.resolvedPersonalChronicleRepo
     };
     if (sharedConfig.personalChronicle?.label) {
       entry.name = sharedConfig.personalChronicle.label;

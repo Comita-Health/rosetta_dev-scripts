@@ -2,7 +2,8 @@ node_modules
 coverage
 dist
 .DS_Store
-.cursor/
-.vscode/
+# Ignore local IDE state at the repo root only — templates may ship `.cursor/`.
+/.cursor/
+/.vscode/
 .sdd
 team-setup/src/config/local.json

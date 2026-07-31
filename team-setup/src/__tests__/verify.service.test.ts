@@ -4,7 +4,7 @@ jest.mock('child_process', () => ({ execSync: jest.fn() }));
 jest.mock('fs', () => ({
   existsSync: jest.fn(),
   lstatSync: jest.fn(),
-  readlinkSync: jest.fn(),
+  readlinkSync: jest.fn()
 }));
 
 import { execSync } from 'child_process';
@@ -22,14 +22,14 @@ const shared = {
   org: 'MyOrg',
   baseDir: '/base',
   sharedRepos: [{ name: 'common', ghRepo: 'common' }],
-  flatRepos: [],
+  flatRepos: []
 };
 
 const project = {
   id: 'proj',
   dir: 'proj',
   repos: [{ name: 'repo-a', ghRepo: 'repo-a' }],
-  symlinks: [],
+  symlinks: []
 };
 
 const projectWithLink = { ...project, symlinks: ['common'] };
@@ -41,17 +41,23 @@ describe('verifySetup', () => {
     mockLstatSync.mockReturnValue(undefined);
     const consoleSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
     verifySetup('/base', [project], shared);
-    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('All checks passed'));
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('All checks passed')
+    );
     consoleSpy.mockRestore();
   });
 
   it('counts missing shared repo as an issue', () => {
-    mockExistsSync.mockImplementation((p: string) => !p.includes('shared/common'));
+    mockExistsSync.mockImplementation(
+      (p: string) => !p.includes('shared/common')
+    );
     mockExecSync.mockReturnValue('');
     mockLstatSync.mockReturnValue(undefined);
     const consoleSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
     verifySetup('/base', [], shared);
-    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('issue(s) found'));
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('issue(s) found')
+    );
     consoleSpy.mockRestore();
   });
 
@@ -60,7 +66,9 @@ describe('verifySetup', () => {
     mockLstatSync.mockReturnValue(undefined);
     const consoleSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
     verifySetup('/base', [project], { ...shared, sharedRepos: [] });
-    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('issue(s) found'));
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('issue(s) found')
+    );
     consoleSpy.mockRestore();
   });
 
@@ -73,7 +81,9 @@ describe('verifySetup', () => {
     mockLstatSync.mockReturnValue(undefined);
     const consoleSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
     verifySetup('/base', [project], { ...shared, sharedRepos: [] });
-    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('issue(s) found'));
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('issue(s) found')
+    );
     consoleSpy.mockRestore();
   });
 
@@ -84,7 +94,9 @@ describe('verifySetup', () => {
     mockReadlinkSync.mockReturnValue(path.join('..', 'shared', 'common'));
     const consoleSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
     verifySetup('/base', [projectWithLink], { ...shared, sharedRepos: [] });
-    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('All checks passed'));
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('All checks passed')
+    );
     consoleSpy.mockRestore();
   });
 
@@ -100,7 +112,9 @@ describe('verifySetup', () => {
     mockReadlinkSync.mockReturnValue(path.join('..', 'shared', 'common'));
     const consoleSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
     verifySetup('/base', [projectWithLink], { ...shared, sharedRepos: [] });
-    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('issue(s) found'));
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('issue(s) found')
+    );
     consoleSpy.mockRestore();
   });
 
@@ -110,7 +124,9 @@ describe('verifySetup', () => {
     mockLstatSync.mockReturnValue({ isSymbolicLink: () => false });
     const consoleSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
     verifySetup('/base', [projectWithLink], { ...shared, sharedRepos: [] });
-    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('issue(s) found'));
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('issue(s) found')
+    );
     consoleSpy.mockRestore();
   });
 
@@ -119,18 +135,40 @@ describe('verifySetup', () => {
     mockExecSync.mockReturnValue('');
     mockLstatSync.mockReturnValue(undefined);
     const consoleSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
-    verifySetup('/base', [], { ...shared, sharedRepos: [], flatRepos: [{ name: 'flat-repo', ghRepo: 'flat-repo' }] });
-    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('issue(s) found'));
+    verifySetup('/base', [], {
+      ...shared,
+      sharedRepos: [],
+      flatRepos: [{ name: 'flat-repo', ghRepo: 'flat-repo' }]
+    });
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('issue(s) found')
+    );
     consoleSpy.mockRestore();
   });
 
-  it('counts missing CLAUDE.md as an issue', () => {
-    mockExistsSync.mockImplementation((p: string) => !p.endsWith('CLAUDE.md'));
+  it('counts missing root AGENTS.md as an issue', () => {
+    mockExistsSync.mockImplementation((p: string) => !p.endsWith('AGENTS.md'));
     mockExecSync.mockReturnValue('');
     mockLstatSync.mockReturnValue(undefined);
     const consoleSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
-    verifySetup('/base', [project], { ...shared, sharedRepos: [] });
-    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('issue(s) found'));
+    verifySetup('/base', [], { ...shared, sharedRepos: [] });
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('issue(s) found')
+    );
+    consoleSpy.mockRestore();
+  });
+
+  it('counts missing root .cursor/cli.json as an issue', () => {
+    mockExistsSync.mockImplementation(
+      (p: string) => !p.endsWith(path.join('.cursor', 'cli.json'))
+    );
+    mockExecSync.mockReturnValue('');
+    mockLstatSync.mockReturnValue(undefined);
+    const consoleSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+    verifySetup('/base', [], { ...shared, sharedRepos: [] });
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('issue(s) found')
+    );
     consoleSpy.mockRestore();
   });
 });

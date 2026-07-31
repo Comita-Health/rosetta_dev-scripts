@@ -1,0 +1,49 @@
+#!/bin/sh
+
+# Skip merge commits
+if [ -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
+  exit 0
+fi
+
+commit_msg=$(head -1 "$1")
+
+# Skip empty or comment-only messages
+if [ -z "$commit_msg" ] || echo "$commit_msg" | grep -q "^#"; then
+  exit 0
+fi
+
+branch=$(git symbolic-ref --short HEAD 2>/dev/null)
+
+# Extract ticket from branch name (e.g. f/INFR-123 or b/PROJ-456 -> INFR-123 / PROJ-456)
+ticket=$(echo "$branch" | grep -oE '[A-Z]+-[0-9]+' | head -1)
+
+types="feat|fix|chore|docs|style|refactor|perf|test|build|ci|revert"
+
+if [ -n "$ticket" ]; then
+  if ! echo "$commit_msg" | grep -qE "^($types)\($ticket\)(\!)?: .+"; then
+    echo ""
+    echo "  ERROR: Commit message must include ticket as scope."
+    echo "  Branch: $branch  ->  ticket: $ticket"
+    echo ""
+    echo "  Expected:  type($ticket): summary"
+    echo "  Example:   feat($ticket): add Claude API proxy handler"
+    echo ""
+    echo "  Valid types: feat fix chore docs style refactor perf test build ci revert"
+    echo ""
+    exit 1
+  fi
+else
+  if ! echo "$commit_msg" | grep -qE "^($types)(\([^)]+\))?(\!)?: .+"; then
+    echo ""
+    echo "  ERROR: Commit message must follow Conventional Commits format."
+    echo ""
+    echo "  Examples:"
+    echo "    feat: add new feature"
+    echo "    fix(scope): resolve specific bug"
+    echo "    chore: update dependencies"
+    echo ""
+    echo "  Valid types: feat fix chore docs style refactor perf test build ci revert"
+    echo ""
+    exit 1
+  fi
+fi

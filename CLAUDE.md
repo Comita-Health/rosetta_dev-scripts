@@ -1,7 +1,8 @@
 # rosetta_dev-scripts
 
 Rosetta workspace tooling and scaffolding. The `team-setup` CLI bootstraps and maintains the Rosetta
-multi-repo workspace and lays down standardized Claude Code configuration for the whole team.
+multi-repo workspace and lays down standardized **Claude Code + Cursor Agent/CLI** configuration for
+the whole team.
 
 ## Build & Test
 
@@ -26,15 +27,14 @@ yarn workspace team-setup dev -- setup            # Bootstrap workspace
 yarn workspace team-setup dev -- verify           # Health check
 yarn workspace team-setup dev -- tracks           # List tracks
 yarn workspace team-setup dev -- shell-alias      # Print the gotor alias
-yarn workspace team-setup dev -- update-config    # Refresh Claude config from templates
+yarn workspace team-setup dev -- update-config    # Refresh Claude + Cursor config from templates
 ```
 
 ## Workspace Layout
 
 Rosetta uses a **flat** workspace layout. Code repos live directly at the workspace root and are
-configured under `flatRepos` in `team-setup/src/config/shared.json`. The `projects` in
-`team-setup/src/config/tracks/default.json` are plain doc folders (`docs`, `architecture`, `shared`)
-with no repos.
+configured under `flatRepos` in `team-setup/src/config/shared.json`. The default track's
+`projects` list is empty — docs live in `rosetta_docs`.
 
 ## Adding a New Repo
 
@@ -68,6 +68,21 @@ git checkout -b f/TICKET-123-short-description
 ```
 
 Branch prefixes: `f/` for features, `b/` for bugs.
+
+**Default: do not commit on `main`.** All product work lands via a topic branch + PR.
+
+### Direct commits to `main` (exceptions)
+
+Topic branches are the default. Direct pushes to `main` are allowed only when a human
+explicitly authorizes it for one of these cases:
+
+1. **Foundation / bootstrap scaffolding** — standing up shared tooling across repos
+   (e.g. husky, org-wide config, one-shot public repo initialization).
+2. **Emergency hotfix** — a production-blocking fix where a human approves skipping the
+   branch+PR cycle. Prefer a follow-up PR note when practical.
+
+Even on an exception, **Conventional Commits still apply**. If authorization is unclear,
+ask — do not assume.
 
 ### Commit messages — Conventional Commits (enforced by hook)
 

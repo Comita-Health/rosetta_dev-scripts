@@ -15,7 +15,7 @@ const project = {
   id: 'proj',
   dir: 'proj',
   repos: [{ name: 'repo-a', ghRepo: 'repo-a' }],
-  symlinks: [],
+  symlinks: []
 };
 
 describe('installDeps', () => {
@@ -45,15 +45,23 @@ describe('installDeps', () => {
     });
     installDeps('/base', [project]);
     expect(mockExecSync).toHaveBeenCalledTimes(2);
-    expect(mockExecSync).toHaveBeenNthCalledWith(2, 'yarn install', expect.any(Object));
+    expect(mockExecSync).toHaveBeenNthCalledWith(
+      2,
+      'yarn install',
+      expect.any(Object)
+    );
   });
 
   it('logs warning when both yarn install attempts fail', () => {
     mockExistsSync.mockReturnValue(true);
-    mockExecSync.mockImplementation(() => { throw new Error('install failed'); });
+    mockExecSync.mockImplementation(() => {
+      throw new Error('install failed');
+    });
     const consoleSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
     installDeps('/base', [project]);
-    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('install failed'));
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('install failed')
+    );
     consoleSpy.mockRestore();
   });
 

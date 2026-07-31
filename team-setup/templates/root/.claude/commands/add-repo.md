@@ -4,6 +4,7 @@ Rosetta uses a flat workspace layout: code repos live directly at the workspace 
 configured under `flatRepos` in `team-setup/src/config/shared.json` (not under a project `dir`).
 
 Steps:
+
 1. Parse each URL to extract the repo name (e.g. `rosetta_atlas` from the URL) and the owning org.
 2. Edit `team-setup/src/config/shared.json`:
    - Add each repo to the `flatRepos` array: `{ "name": "<repo-name>", "ghRepo": "<repo-name>", "label": "<Human Readable Name>" }`.

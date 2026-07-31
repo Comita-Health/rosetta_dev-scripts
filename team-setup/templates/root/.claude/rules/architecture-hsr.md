@@ -51,7 +51,7 @@ Hard rules on direction:
   export class ChronicleService implements IChronicleService {
     constructor(
       @inject(CHRONICLE_TOKENS.GitRepository)
-      private readonly _gitRepo: IGitRepository,
+      private readonly _gitRepo: IGitRepository
     ) {}
     // ...
   }

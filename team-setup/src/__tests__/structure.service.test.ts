@@ -1,4 +1,7 @@
-import { createDirectories, createSymlinks } from '../services/structure.service';
+import {
+  createDirectories,
+  createSymlinks
+} from '../services/structure.service';
 
 jest.mock('fs', () => ({
   mkdirSync: jest.fn(),
@@ -6,10 +9,17 @@ jest.mock('fs', () => ({
   readlinkSync: jest.fn(),
   existsSync: jest.fn(),
   lstatSync: jest.fn(),
-  unlinkSync: jest.fn(),
+  unlinkSync: jest.fn()
 }));
 
-import { mkdirSync, symlinkSync, readlinkSync, existsSync, lstatSync, unlinkSync } from 'fs';
+import {
+  mkdirSync,
+  symlinkSync,
+  readlinkSync,
+  existsSync,
+  lstatSync,
+  unlinkSync
+} from 'fs';
 import path from 'path';
 
 const mockMkdirSync = mkdirSync as jest.Mock;
@@ -27,7 +37,9 @@ const projectWithLinks = { ...project, symlinks: ['common'] };
 describe('createDirectories', () => {
   it('creates a directory for each project', () => {
     createDirectories('/base', [project]);
-    expect(mockMkdirSync).toHaveBeenCalledWith(path.join('/base', 'proj'), { recursive: true });
+    expect(mockMkdirSync).toHaveBeenCalledWith(path.join('/base', 'proj'), {
+      recursive: true
+    });
   });
 
   it('handles multiple projects', () => {
