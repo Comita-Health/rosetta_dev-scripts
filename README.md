@@ -223,8 +223,12 @@ Full `setup` (not `--skip-clone`) also:
 - Registers the Claude Code Stop hook in `~/.claude/settings.json`
 - Registers Cursor `sessionStart` + `stop` hooks in `~/.cursor/hooks.json`
 
-Claude Code session append is fully supported today. Cursor stop hooks are wired and best-effort;
-full Cursor transcript ingestion in Chronicle is a follow-on.
+Session append is fully supported for both Claude Code and Cursor Agent/CLI: Chronicle reads Cursor
+transcripts from `~/.cursor/projects/` and session metadata from `~/.cursor/chats/`, so live capture
+and `chronicle backfill` cover both tools. A marker-based catch-up sweep also runs in the background
+on Cursor session start (at most once a day), healing recent days — late session titles, sessions
+that ended without a stop event — and covering any gap since the last successful sweep, so even a
+weeks-long absence backfills automatically on your first session back.
 
 ## Adding a New Repo
 
