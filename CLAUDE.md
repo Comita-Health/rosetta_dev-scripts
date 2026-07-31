@@ -130,6 +130,9 @@ rosetta_docs), e.g. `chronicle(daily): 2026-07-31` — humans never hand-write i
 
 The `commit-msg` hook will reject messages that don't match. Breaking changes append `!` after the type/scope: `feat(PROJ-123)!: drop Node 18 support`.
 
+**Sign-off is mandatory (DCO).** Always commit with `git commit -s` — PRs fail the DCO check
+without a `Signed-off-by:` trailer on every commit. See `CONTRIBUTING.md`. There is no CLA.
+
 ### Finishing work
 
 When work is complete, push the branch and open a PR:

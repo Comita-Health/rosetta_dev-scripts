@@ -135,6 +135,11 @@ Chronicle product use normal types.
 
 Breaking changes append `!` after the type/scope: `feat(PROJ-123)!: drop Node 18 support`.
 
+**Sign-off is mandatory (DCO).** Every commit certifies the
+[Developer Certificate of Origin](https://developercertificate.org) — always commit with
+`git commit -s` so the `Signed-off-by:` trailer is present. PRs fail the DCO check without it.
+See each repo's `CONTRIBUTING.md`. There is no CLA.
+
 ### Finishing work
 
 When work is complete, push the branch and open a PR:
