@@ -43,7 +43,7 @@ Rosetta repo (`rosetta_docs`, `rosetta_dev-scripts`, `rosetta_chronicle`, `roset
 and Cursor CLI (`.cursor/cli.json`) so agents can:
 
 - Read, edit, and write files freely (except secrets like `.env`)
-- Run git, yarn, node, gh CLI commands without prompting
+- Run git, bun, node, gh CLI commands without prompting
 - Never force-push, `reset --hard`, or `rm -rf` critical paths
 
 **Shared code style rules** — TypeScript strict mode, Prettier conventions, and import hygiene applied uniformly across all repos in the workspace.
@@ -81,7 +81,7 @@ when templates change.
 
 - [GitHub CLI](https://cli.github.com/) — `brew install gh` then `gh auth login`
 - [Node.js 20+](https://github.com/nvm-sh/nvm) — `nvm install 20`
-- [Yarn](https://yarnpkg.com/) — `npm install -g yarn`
+- [Bun 1.3+](https://bun.sh/) — `curl -fsSL https://bun.sh/install | bash`
 - [fzf](https://github.com/junegunn/fzf) (optional) — `brew install fzf` (for the `gotor` alias)
 - **At least one AI agent:**
   - [Claude Code](https://docs.anthropic.com/en/docs/claude-code), and/or
@@ -111,7 +111,7 @@ That's it. The script will:
 6. Print the `gotor` shell alias to add to your `~/.zshrc`
 
 > The bootstrap runs setup with `--skip-clone`, so it scaffolds structure + config. Run
-> `yarn workspace team-setup dev -- setup` afterward (without `--skip-clone`) to clone the
+> `bun run dev -- setup` afterward (without `--skip-clone`) to clone the
 > Rosetta repos and wire Chronicle session hooks for Claude Code and Cursor.
 
 To use a custom destination instead of `~/projects/rosetta`:
@@ -136,23 +136,23 @@ the root run `agent`.
 
 ## Commands
 
-Once bootstrapped, all commands run from inside `rosetta_dev-scripts/`:
+Once bootstrapped, all commands run from inside `rosetta_dev-scripts/team-setup/`:
 
 ### `setup`
 
 Full workspace bootstrap (what `bootstrap.sh` calls internally).
 
 ```bash
-yarn workspace team-setup dev -- setup
+bun run dev -- setup
 
 # Custom base directory
-yarn workspace team-setup dev -- setup --base-dir ~/work/rosetta
+bun run dev -- setup --base-dir ~/work/rosetta
 
 # Skip cloning (structure + config only)
-yarn workspace team-setup dev -- setup --skip-clone
+bun run dev -- setup --skip-clone
 
-# Skip yarn install
-yarn workspace team-setup dev -- setup --skip-install
+# Skip bun install
+bun run dev -- setup --skip-install
 ```
 
 ### `update-config`
@@ -161,7 +161,7 @@ Refresh agent config files (`CLAUDE.md`, `AGENTS.md`, `.claude/`, `.cursor/`) fr
 re-cloning. Run this when templates are updated.
 
 ```bash
-yarn workspace team-setup dev -- update-config
+bun run dev -- update-config
 ```
 
 ### `verify`
@@ -169,7 +169,7 @@ yarn workspace team-setup dev -- update-config
 Health check — confirms repos are cloned and Claude + Cursor config files exist.
 
 ```bash
-yarn workspace team-setup dev -- verify
+bun run dev -- verify
 ```
 
 ### `tracks`
@@ -177,7 +177,7 @@ yarn workspace team-setup dev -- verify
 List available track configurations.
 
 ```bash
-yarn workspace team-setup dev -- tracks
+bun run dev -- tracks
 ```
 
 ### `shell-alias`
@@ -185,7 +185,7 @@ yarn workspace team-setup dev -- tracks
 Print the `gotor` shell alias.
 
 ```bash
-yarn workspace team-setup dev -- shell-alias
+bun run dev -- shell-alias
 ```
 
 ## Directory Structure After Setup
@@ -233,8 +233,8 @@ weeks-long absence backfills automatically on your first session back.
 ## Adding a New Repo
 
 1. Add an entry to `flatRepos` in `team-setup/src/config/shared.json` (or use `/add-repo <url>` / the Cursor `command-add-repo` rule)
-2. Run `yarn workspace team-setup dev -- update-config` to regenerate config
-3. Run `yarn workspace team-setup dev -- setup --skip-install` to clone it
+2. Run `bun run dev -- update-config` to regenerate config
+3. Run `bun run dev -- setup --skip-install` to clone it
 4. Commit and push so teammates get it on their next pull
 
 ## Keeping This README Current

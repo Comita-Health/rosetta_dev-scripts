@@ -287,14 +287,14 @@ describe('buildChronicleEngine', () => {
     expect(mockExecSync).not.toHaveBeenCalled();
   });
 
-  it('runs yarn build when dist/bin/cli.js is absent', () => {
+  it('runs bun run build when dist/bin/cli.js is absent', () => {
     mockExistsSync.mockReturnValue(false);
     buildChronicleEngine(ENGINE);
     const calls = mockExecSync.mock.calls.map((c: string[]) => c[0]);
-    expect(calls).toContain('yarn build');
+    expect(calls).toContain('bun run build');
   });
 
-  it('does not throw when yarn build fails', () => {
+  it('does not throw when bun run build fails', () => {
     mockExistsSync.mockReturnValue(false);
     mockExecSync.mockImplementation(() => {
       throw new Error('build failed');

@@ -7,27 +7,30 @@ the whole team.
 ## Build & Test
 
 ```bash
-# Install all workspace dependencies
-yarn install
+# Install all workspace dependencies (from the repo root)
+bun install
+
+# All CLI/build/test commands run from team-setup/
+cd team-setup
 
 # Run the team-setup CLI in dev mode
-yarn workspace team-setup dev -- <command>
+bun run dev -- <command>
 
 # Build
-yarn workspace team-setup build
+bun run build
 
 # Test
-yarn workspace team-setup test
+bun run test
 ```
 
 ## team-setup CLI
 
 ```bash
-yarn workspace team-setup dev -- setup            # Bootstrap workspace
-yarn workspace team-setup dev -- verify           # Health check
-yarn workspace team-setup dev -- tracks           # List tracks
-yarn workspace team-setup dev -- shell-alias      # Print the gotor alias
-yarn workspace team-setup dev -- update-config    # Refresh Claude + Cursor config from templates
+bun run dev -- setup            # Bootstrap workspace
+bun run dev -- verify           # Health check
+bun run dev -- tracks           # List tracks
+bun run dev -- shell-alias      # Print the gotor alias
+bun run dev -- update-config    # Refresh Claude + Cursor config from templates
 ```
 
 ## Workspace Layout
@@ -39,8 +42,8 @@ configured under `flatRepos` in `team-setup/src/config/shared.json`. The default
 ## Adding a New Repo
 
 1. Add the repo to `flatRepos` in `team-setup/src/config/shared.json` (see the `/add-repo` command).
-2. Run `yarn workspace team-setup dev -- update-config` to regenerate `all.code-workspace` and config.
-3. Run `yarn workspace team-setup dev -- setup --skip-install` to clone the new repo.
+2. Run `bun run dev -- update-config` to regenerate `all.code-workspace` and config.
+3. Run `bun run dev -- setup --skip-install` to clone the new repo.
 4. Update `README.md` and the folder diagram in `team-setup/templates/root/CLAUDE.md`.
 
 ## README Maintenance

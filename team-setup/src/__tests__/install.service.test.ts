@@ -25,17 +25,17 @@ describe('installDeps', () => {
     expect(mockExecSync).not.toHaveBeenCalled();
   });
 
-  it('runs yarn install --frozen-lockfile when package.json exists', () => {
+  it('runs bun install --frozen-lockfile when package.json exists', () => {
     mockExistsSync.mockReturnValue(true);
     mockExecSync.mockReturnValue('');
     installDeps('/base', [project]);
     expect(mockExecSync).toHaveBeenCalledWith(
-      'yarn install --frozen-lockfile',
+      'bun install --frozen-lockfile',
       expect.objectContaining({ cwd: expect.stringContaining('proj/repo-a') })
     );
   });
 
-  it('falls back to yarn install when --frozen-lockfile fails', () => {
+  it('falls back to bun install when --frozen-lockfile fails', () => {
     mockExistsSync.mockReturnValue(true);
     let callCount = 0;
     mockExecSync.mockImplementation(() => {
@@ -47,12 +47,12 @@ describe('installDeps', () => {
     expect(mockExecSync).toHaveBeenCalledTimes(2);
     expect(mockExecSync).toHaveBeenNthCalledWith(
       2,
-      'yarn install',
+      'bun install',
       expect.any(Object)
     );
   });
 
-  it('logs warning when both yarn install attempts fail', () => {
+  it('logs warning when both bun install attempts fail', () => {
     mockExistsSync.mockReturnValue(true);
     mockExecSync.mockImplementation(() => {
       throw new Error('install failed');

@@ -24,7 +24,8 @@
       "Bash(git pull *)",
       "Bash(git push *)",
       "Bash(git commit *)",
-      "Bash(yarn *)",
+      "Bash(bun *)",
+      "Bash(bunx *)",
       "Bash(node *)",
       "Bash(npm *)",
       "Bash(npx *)",
@@ -53,7 +54,7 @@
       "Bash(chmod -R 777*)",
       "Bash(> *)",
       "Bash(npm publish*)",
-      "Bash(yarn publish*)",
+      "Bash(bun publish*)",
       "Bash(aws s3 rm --recursive*)",
       "Bash(cdk destroy*)",
       "Bash(sudo *)"

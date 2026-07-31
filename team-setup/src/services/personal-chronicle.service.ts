@@ -179,9 +179,9 @@ const normalizeDefaultBranch = (
 };
 
 /**
- * Run `yarn build` in the Chronicle engine repo so dist/bin/cli.js exists
+ * Run `bun run build` in the Chronicle engine repo so dist/bin/cli.js exists
  * when the Stop hook fires for the first time. Best-effort: failure is logged
- * but does not abort setup — the engineer can run `yarn build` manually.
+ * but does not abort setup — the engineer can run `bun run build` manually.
  */
 export const buildChronicleEngine = (engineDir: string): void => {
   const distCli = path.join(engineDir, 'dist', 'bin', 'cli.js');
@@ -189,7 +189,7 @@ export const buildChronicleEngine = (engineDir: string): void => {
 
   console.log(chalk.blue('  ↓ Building Chronicle CLI...'));
   try {
-    execSync('yarn build', {
+    execSync('bun run build', {
       cwd: engineDir,
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe']
@@ -199,7 +199,7 @@ export const buildChronicleEngine = (engineDir: string): void => {
     const message = err instanceof Error ? err.message : String(err);
     console.log(
       chalk.yellow(
-        `  ⚠ Chronicle CLI build failed — run 'yarn build' in ${engineDir}`
+        `  ⚠ Chronicle CLI build failed — run 'bun run build' in ${engineDir}`
       )
     );
     console.log(chalk.yellow(`    ${message.split('\n')[0]}`));

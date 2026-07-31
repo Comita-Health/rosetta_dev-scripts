@@ -19,7 +19,7 @@ export const installDeps = (
 
       console.log(chalk.blue(`  ↓ ${project.dir}/${repo.name}...`));
       try {
-        execSync('yarn install --frozen-lockfile', {
+        execSync('bun install --frozen-lockfile', {
           cwd: repoDir,
           encoding: 'utf-8',
           stdio: ['pipe', 'pipe', 'pipe']
@@ -27,7 +27,7 @@ export const installDeps = (
         console.log(chalk.green(`  ✓ ${project.dir}/${repo.name}`));
       } catch {
         try {
-          execSync('yarn install', {
+          execSync('bun install', {
             cwd: repoDir,
             encoding: 'utf-8',
             stdio: ['pipe', 'pipe', 'pipe']

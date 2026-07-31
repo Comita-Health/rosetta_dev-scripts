@@ -18,10 +18,10 @@ const PREREQUISITES: Prerequisite[] = [
     required: true
   },
   {
-    name: 'Yarn',
-    command: 'yarn',
+    name: 'Bun',
+    command: 'bun',
     versionFlag: '--version',
-    minVersion: '1.22',
+    minVersion: '1.3',
     required: true
   },
   {
