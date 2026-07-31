@@ -23,7 +23,7 @@ tools load.
   (PRD-0016) for anything that cannot transit external APIs.
 - Provenance trailers and evidence links are the audit trail (ADR-0007).
 
-See `comita/docs/policies/healthcare-guardrails.md` once published.
+See `comita_docs/docs/policies/healthcare-guardrails.md` once published.
 
 ## Foundations — Read First
 
@@ -52,7 +52,7 @@ comita/
 ├── rosetta_docs/            Rosetta PRDs, ADRs, foundations (upstream)
 ├── rosetta_chronicle/       Memory engine (upstream)
 ├── rosetta_wayfinder/       Knowledge guide (upstream)
-├── comita/                  Company docs, brand, policies
+├── comita_docs/             Company docs, brand, policies
 ├── comita_admissions/       Production app — referral & admissions management
 └── rosetta_chronicle_<you>/ Personal chronicle (in your GitHub account)
 ```
