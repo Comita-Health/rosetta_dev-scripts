@@ -211,11 +211,20 @@ in the versioned **`rosetta_docs`** repo. `tracks/default.json` no longer define
 
 ### Personal Chronicle
 
-Setup also provisions a **private, per-engineer Chronicle repository** under the org, named from the
-login of the currently authenticated `gh` user (e.g. `rosetta_chronicle_example-user`). It is
-created **private** — not the org's default `internal` visibility — so only the owner can see it,
-reflecting the platform value _"private by default, shared by intention"_ (see
+Setup also provisions a **private, per-person Chronicle repository** under the **user's own GitHub
+account**, named from the login of the currently authenticated `gh` user (e.g.
+`example-user/rosetta_chronicle_example-user`). It is created **private**, so only the owner can
+see it, reflecting the platform value _"private by default, shared by intention"_ (see
 `rosetta_docs/docs/FOUNDATIONS.md` and `rosetta_docs/architecture/ADR-0002`).
+
+The personal chronicle belongs to the person, not the org: your memory must survive leaving any
+organization (ADR-0005's exit test). This also makes onboarding non-engineers simple — create or
+sign into a free GitHub account (free accounts include unlimited private repos), run
+`gh auth login`, then run setup.
+
+**Legacy:** chronicles provisioned by earlier versions live under the org
+(`<org>/rosetta_chronicle_<you>`). Setup still finds and clones them, and prints the
+`gh api …/transfer` command to move ownership to your account when you're ready.
 
 Full `setup` (not `--skip-clone`) also:
 

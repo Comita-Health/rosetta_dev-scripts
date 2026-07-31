@@ -125,13 +125,13 @@ export const derivePersonalRepoName = (
 };
 
 /**
- * True when `gh` reports the org repo already exists. Any other failure
- * (auth, network) returns false so the caller attempts creation and surfaces
- * the real error.
+ * True when `gh` reports the repo already exists under `owner`. Any other
+ * failure (auth, network) returns false so the caller attempts creation and
+ * surfaces the real error.
  */
-const repoExists = (org: string, repoName: string): boolean => {
+const repoExists = (owner: string, repoName: string): boolean => {
   try {
-    execSync(`gh repo view ${org}/${repoName}`, {
+    execSync(`gh repo view ${owner}/${repoName}`, {
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe']
     });
@@ -149,11 +149,11 @@ const repoExists = (org: string, repoName: string): boolean => {
  * a failure is logged, not fatal, since the repo itself was created fine.
  */
 const normalizeDefaultBranch = (
-  org: string,
+  owner: string,
   repoName: string,
   defaultBranch: string
 ): void => {
-  const fullName = `${org}/${repoName}`;
+  const fullName = `${owner}/${repoName}`;
   try {
     const current = execSync(`gh api repos/${fullName} -q .default_branch`, {
       encoding: 'utf-8',
@@ -341,9 +341,17 @@ export const installChronicleHook = (
 };
 
 /**
- * Create the engineer's private Chronicle repo under the org (if it does not
- * already exist) and clone it flat into baseDir. Idempotent: an existing repo
- * is swallowed with an explanatory log line rather than treated as an error.
+ * Create the user's private Chronicle repo under their **own GitHub account**
+ * (if it does not already exist) and clone it flat into baseDir.
+ *
+ * The personal chronicle belongs to the person, not the org (ADR-0002's
+ * personal/org split; ADR-0005's exit test — leaving an org must never cost
+ * you your memory). The org is consulted only as a legacy fallback: chronicles
+ * provisioned by earlier versions of this tool live at `<org>/<repoName>` and
+ * keep working, with a hint to transfer ownership.
+ *
+ * Idempotent: an existing repo is swallowed with an explanatory log line
+ * rather than treated as an error.
  */
 export const provisionPersonalChronicle = (
   config: PersonalChronicleConfig,
@@ -364,7 +372,8 @@ export const provisionPersonalChronicle = (
 
   const repoName = derivePersonalRepoName(config.namePrefix, login);
   const targetDir = path.join(baseDir, repoName);
-  const fullName = `${org}/${repoName}`;
+  const userFullName = `${login}/${repoName}`;
+  const legacyFullName = `${org}/${repoName}`;
 
   const hookScriptPath = path.join(
     baseDir,
@@ -380,23 +389,37 @@ export const provisionPersonalChronicle = (
     return;
   }
 
-  if (repoExists(org, repoName)) {
+  let fullName = userFullName;
+  if (repoExists(login, repoName)) {
     console.log(
-      chalk.gray(`  ⊘ ${fullName} (already exists) — cloning existing repo`)
+      chalk.gray(`  ⊘ ${userFullName} (already exists) — cloning existing repo`)
+    );
+  } else if (repoExists(org, repoName)) {
+    // Legacy: provisioned under the org by an earlier version of this tool.
+    fullName = legacyFullName;
+    console.log(
+      chalk.gray(
+        `  ⊘ ${legacyFullName} (legacy org-hosted chronicle) — cloning`
+      )
+    );
+    console.log(
+      chalk.yellow(
+        `    ↪ Consider transferring it to your account: gh api -X POST repos/${legacyFullName}/transfer -f new_owner=${login}`
+      )
     );
   } else {
     try {
       console.log(
-        chalk.blue(`  ↓ Creating ${config.visibility} repo ${fullName}...`)
+        chalk.blue(`  ↓ Creating ${config.visibility} repo ${userFullName}...`)
       );
       // --add-readme seeds an initial commit so the repo has a real default
       // branch we can normalize (an empty repo cannot have its default set).
       execSync(
-        `gh repo create ${fullName} --${config.visibility} --description "${config.description}" --add-readme`,
+        `gh repo create ${userFullName} --${config.visibility} --description "${config.description}" --add-readme`,
         { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
       );
-      console.log(chalk.green(`  ✓ Created ${fullName}`));
-      normalizeDefaultBranch(org, repoName, config.defaultBranch);
+      console.log(chalk.green(`  ✓ Created ${userFullName}`));
+      normalizeDefaultBranch(login, repoName, config.defaultBranch);
     } catch (err) {
       // Swallow the "already exists" race; surface anything else.
       const message = err instanceof Error ? err.message : String(err);

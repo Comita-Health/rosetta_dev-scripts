@@ -360,7 +360,7 @@ describe('provisionPersonalChronicle', () => {
     expect(calls.some((c: string) => c.includes('gh repo clone'))).toBe(false);
   });
 
-  it('creates a private repo (seeded with a readme) then clones it when nothing exists', () => {
+  it('creates a private repo under the user account (seeded with a readme) then clones it when nothing exists', () => {
     mockExistsSync.mockReturnValue(false);
     mockExecSync.mockImplementation((cmd: string) => {
       if (cmd.includes('gh api user')) return 'example-user\n';
@@ -370,15 +370,55 @@ describe('provisionPersonalChronicle', () => {
     });
     provisionPersonalChronicle(config, '/base', 'MyOrg');
     const calls = mockExecSync.mock.calls.map((c: string[]) => c[0]);
+    // The personal chronicle belongs to the person, not the org (ADR-0002/0005).
     expect(calls).toContainEqual(
       expect.stringContaining(
-        'gh repo create MyOrg/rosetta_chronicle_example-user --private'
+        'gh repo create example-user/rosetta_chronicle_example-user --private'
       )
+    );
+    expect(calls.some((c: string) => c.includes('gh repo create MyOrg/'))).toBe(
+      false
     );
     expect(calls.some((c: string) => c.includes('--add-readme'))).toBe(true);
     expect(calls).toContainEqual(
       expect.stringContaining(
-        'gh repo clone MyOrg/rosetta_chronicle_example-user "/base/rosetta_chronicle_example-user"'
+        'gh repo clone example-user/rosetta_chronicle_example-user "/base/rosetta_chronicle_example-user"'
+      )
+    );
+  });
+
+  it('falls back to a legacy org-hosted chronicle when only the org repo exists', () => {
+    mockExistsSync.mockReturnValue(false);
+    mockExecSync.mockImplementation((cmd: string) => {
+      if (cmd.includes('gh api user')) return 'example-user\n';
+      // User-account repo missing; org repo present.
+      if (cmd.includes('gh repo view example-user/'))
+        throw new Error('not found');
+      if (cmd.includes('gh repo view MyOrg/')) return 'exists';
+      return '';
+    });
+    provisionPersonalChronicle(config, '/base', 'MyOrg');
+    const calls = mockExecSync.mock.calls.map((c: string[]) => c[0]);
+    expect(calls.some((c: string) => c.includes('gh repo create'))).toBe(false);
+    expect(calls).toContainEqual(
+      expect.stringContaining(
+        'gh repo clone MyOrg/rosetta_chronicle_example-user'
+      )
+    );
+  });
+
+  it('prefers the user-account repo when both user and org repos exist', () => {
+    mockExistsSync.mockReturnValue(false);
+    mockExecSync.mockImplementation((cmd: string) => {
+      if (cmd.includes('gh api user')) return 'example-user\n';
+      if (cmd.includes('gh repo view')) return 'exists';
+      return '';
+    });
+    provisionPersonalChronicle(config, '/base', 'MyOrg');
+    const calls = mockExecSync.mock.calls.map((c: string[]) => c[0]);
+    expect(calls).toContainEqual(
+      expect.stringContaining(
+        'gh repo clone example-user/rosetta_chronicle_example-user'
       )
     );
   });
