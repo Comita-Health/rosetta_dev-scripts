@@ -87,9 +87,9 @@ When every task of a spec phase has merged, deploy the merged default branch to 
 
 ### Acceptance criteria
 
-- [ ] test: after the last task of a phase merges, the merged branch deploys to the sandbox exactly once (SHA-idempotent on resume) and the digest posts to the queue with links to the merged SHAs and verdict evidence
-- [ ] test: a veto tag detected on the digest item produces a revert commit covering the phase's merges, a redeploy at the reverted SHA, and a Chronicle revert artifact; absence of a veto changes nothing
-- [ ] test: no deploy, revert, or any other code path in this task can target an environment other than sandbox
+- [x] test: after the last task of a phase merges, the merged branch deploys to the sandbox exactly once (SHA-idempotent on resume) and the digest posts to the queue with links to the merged SHAs and verdict evidence
+- [x] test: a veto tag detected on the digest item produces a revert commit covering the phase's merges, a redeploy at the reverted SHA, and a Chronicle revert artifact; absence of a veto changes nothing
+- [x] test: no deploy, revert, or any other code path in this task can target an environment other than sandbox
 
 ## Task T-06: Escalation surface, budget enforcement, and partial-failure reporting
 

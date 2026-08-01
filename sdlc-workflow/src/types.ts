@@ -244,7 +244,8 @@ export type ArtifactSchema =
   | 'sdlc.verdict.v1'
   | 'sdlc.exceptions.v1'
   | 'sdlc.digest.v1'
-  | 'sdlc.merge.v1';
+  | 'sdlc.merge.v1'
+  | 'sdlc.revert.v1';
 
 export interface ChronicleArtifact {
   schema: ArtifactSchema;

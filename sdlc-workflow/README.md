@@ -24,7 +24,13 @@ PRD-0011 (Full-Loop SDLC Automation):
   enforcement — all four gates green auto-merges the task PR (merge SHA
   recorded in run state and the `sdlc.merge.v1` artifact, attributed to
   `machine-gates`), any red gate blocks with a `merge-blocked`
-  escalation, and `--shadow` restores the record-only calibration mode.
+  escalation, and `--shadow` restores the record-only calibration mode;
+  and T-05 phase boundary — once every task has merged, the merged
+  default branch deploys to the sandbox (SHA-idempotent, step-cached)
+  and the phase digest posts to the PRD-0007 queue with merge links; a
+  `[veto]` tag on that item (`check-veto`) reverts the phase merges
+  through a PR, redeploys the sandbox at the reverted SHA, and records
+  an `sdlc.revert.v1` Chronicle artifact.
 
 ## Usage
 
@@ -57,6 +63,11 @@ bun run dev -- run --spec ../specs/PRD-0011/phase-3-spec.md --repo .. \
 # --task marks that task merged, which unblocks its dependents (P3 T-01)
 bun run dev -- record-merge --run-id <run-id> --sha <merged-sha> \
   --task T-01 --chronicle-repo ../../rosetta_chronicle_roustalski
+
+# After a human vetoes the phase digest ([veto] tag on the queue item),
+# revert the phase merges and redeploy the sandbox (P3 T-05)
+bun run dev -- check-veto --run-id <run-id> --repo .. \
+  --chronicle-repo ../../rosetta_chronicle_roustalski
 
 # Inspect a run: task results, cached step graph, verdicts, exceptions (T-09)
 bun run dev -- status --run-id <run-id>
@@ -195,9 +206,11 @@ Handler / Service / Repository with InversifyJS (workspace rule):
   the cycle transcript as evidence; honest `blocked` when the branch is
   not pushed.
 - `services/digest.service.ts` — phase-boundary digest to the PRD-0007
-  personal queue; append-only, no veto path (T-07).
+  personal queue; append-only. Veto is a separate `check-veto` command
+  that reads the item back (T-07 / P3 T-05).
 - `services/chronicle-commit.service.ts` — versioned run artifacts +
-  merged-SHA recording, committed per ADR-0007 (T-08).
+  merged-SHA / veto-revert recording (`sdlc.merge.v1`, `sdlc.revert.v1`),
+  committed per ADR-0007 (T-08 / P3 T-05).
 - `services/gate-policy-query.service.ts` — reads verdict artifacts back
   for gate-policy consumption (T-08).
 - `repositories/` — PRD parsing (`prd`), model transports (`anthropic`,

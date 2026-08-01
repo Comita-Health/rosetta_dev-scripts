@@ -262,4 +262,34 @@ describe('ChronicleCommitService + GatePolicyQueryService (T-08)', () => {
       })
     ).rejects.toThrow(WorkflowError);
   });
+
+  it('records a veto-triggered revert as sdlc.revert.v1 (P3 T-05)', async () => {
+    const artifactPath = await service.recordRevert({
+      chronicleRepo: ledger,
+      runId: 'run-1',
+      specId: 'SPEC-X',
+      revertedShas: ['merge-1', 'merge-2'],
+      revertSha: 'revert-sha-abc',
+      prUrl: 'https://github.com/org/repo/pull/42'
+    });
+
+    expect(artifactPath).toContain('revert.json');
+    const repo = new ChronicleArtifactRepository();
+    const revert = repo
+      .readArtifacts(ledger, 'run-1')
+      .find(artifact => artifact.schema === 'sdlc.revert.v1');
+    expect(revert?.payload).toEqual({
+      revertedShas: ['merge-1', 'merge-2'],
+      revertSha: 'revert-sha-abc',
+      prUrl: 'https://github.com/org/repo/pull/42',
+      trigger: 'queue-veto'
+    });
+    const message = execSync('git log -1 --format=%B', {
+      cwd: ledger,
+      encoding: 'utf-8'
+    });
+    expect(message).toContain(
+      'chronicle(sdlc): run-1 veto revert at revert-sha'
+    );
+  });
 });

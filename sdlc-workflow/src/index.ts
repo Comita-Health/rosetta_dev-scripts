@@ -394,6 +394,53 @@ yargs(hideBin(process.argv))
     }
   )
   .command(
+    'check-veto',
+    'Check the phase digest queue item for a [veto] tag; revert the phase merges and redeploy the sandbox when present (P3 T-05)',
+    y =>
+      y
+        .option('run-id', {
+          type: 'string',
+          demandOption: true,
+          describe: 'Run identifier whose digest item to check'
+        })
+        .option('repo', {
+          type: 'string',
+          demandOption: true,
+          describe: 'Path to the target repo the phase merged into'
+        })
+        .option('chronicle-repo', {
+          type: 'string',
+          demandOption: true,
+          describe: 'Personal Chronicle ledger repo holding the queue'
+        })
+        .option('runs-dir', {
+          type: 'string',
+          default: path.join(os.homedir(), '.rosetta', 'sdlc-runs'),
+          describe: 'Directory holding run state'
+        }),
+    async argv => {
+      const handler = container.get<IRunHandler>(WORKFLOW_TOKENS.RunHandler);
+      try {
+        await handler.checkVeto({
+          runsDir: argv['runs-dir'],
+          runId: argv['run-id'],
+          repoPath: argv.repo,
+          chronicleRepo: argv['chronicle-repo']
+        });
+      } catch (err) {
+        if (err instanceof WorkflowError) {
+          console.error(chalk.red(`\n✗ ${err.code}: ${err.message}`));
+          for (const detail of err.details) {
+            console.error(chalk.red(`  - ${detail}`));
+          }
+        } else {
+          console.error(chalk.red(`\n✗ ${err}`));
+        }
+        process.exit(1);
+      }
+    }
+  )
+  .command(
     'status',
     'Show a run: task results, cached step graph, verdicts, exceptions (T-09)',
     y =>
