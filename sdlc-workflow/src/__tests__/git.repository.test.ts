@@ -83,6 +83,19 @@ describe('GitRepository', () => {
     );
   });
 
+  it('stages all changes and commits with --no-verify --signoff (#41)', () => {
+    execMock.mockReturnValue('');
+    repo.stageAll('/wt');
+    expect(execMock.mock.calls[0][0]).toContain('add -A');
+    repo.commit('/wt', 'feat(T-01): implement thing', {
+      noVerify: true,
+      signOff: true
+    });
+    expect(execMock.mock.calls[1][0]).toContain('--no-verify');
+    expect(execMock.mock.calls[1][0]).toContain('--signoff');
+    expect(execMock.mock.calls[1][0]).toContain('feat(T-01): implement thing');
+  });
+
   it('wraps git failures in a typed error', () => {
     execMock.mockImplementation(() => {
       throw new Error('fatal: not a git repository');

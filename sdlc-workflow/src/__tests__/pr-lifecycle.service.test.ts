@@ -56,7 +56,9 @@ describe('PrLifecycleService (P3 T-02)', () => {
         fetch: jest.fn(),
         resolveSha: jest.fn(),
         defaultBranch: jest.fn(),
-        revertMerge: jest.fn()
+        revertMerge: jest.fn(),
+        stageAll: jest.fn(),
+        commit: jest.fn()
       });
     container
       .bind<IPullRequestRepository>(WORKFLOW_TOKENS.PullRequestRepository)

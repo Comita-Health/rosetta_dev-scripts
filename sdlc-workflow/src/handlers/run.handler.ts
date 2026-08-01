@@ -17,6 +17,7 @@ import type {
   IExecutorService,
   PoolInput
 } from '../services/executor.service';
+import type { IHeartbeatService } from '../services/heartbeat.service';
 import type { IPullRequestRepository } from '../repositories/pull-request.repository';
 import type { IPrLifecycleService } from '../services/pr-lifecycle.service';
 import type { IReviewerGateService } from '../services/reviewer-gate.service';
@@ -50,6 +51,12 @@ export interface RunTaskInput extends PoolInput {
    * ever issued, regardless of gate outcomes. Default is enforcing.
    */
   shadow?: boolean;
+  /**
+   * Native progress heartbeat interval in seconds (#39). Default 30;
+   * pass 0 to disable. Writes `[heartbeat] {json}` lines and
+   * `<runsDir>/<runId>/heartbeat.jsonl`.
+   */
+  heartbeatSeconds?: number;
 }
 
 export interface RunTaskResult {
@@ -66,10 +73,12 @@ export interface RunTaskResult {
  * personal queue (T-07), and commit run artifacts to the Chronicle (T-08).
  *
  * Every step runs through the T-09 step graph: its result is cached under a
- * key derived from an inputs digest rooted at {task content, base SHA} and
- * chained through the worktree head SHA. Kill the run at any boundary and
+ * key derived from an inputs digest rooted at {task content, integration tip}
+ * and chained through the worktree head SHA. Kill the run at any boundary and
  * resume replays the graph — cache hits are reused, so agents are not
  * re-invoked, the sandbox is not redeployed, and digests are not re-posted.
+ * After deps merge, the tip (and envelope/reviewer baseRef) is the post-merge
+ * integration SHA — never a cumulative frozen-base mega-diff (#42 / F1).
  */
 export interface RecordMergeCliInput {
   chronicleRepo: string;
@@ -151,98 +160,122 @@ export class RunHandler implements IRunHandler {
     @inject(WORKFLOW_TOKENS.RunStateRepository)
     private readonly _runStateRepo: IRunStateRepository,
     @inject(WORKFLOW_TOKENS.SpecDocRepository)
-    private readonly _specDocRepo: ISpecDocRepository
+    private readonly _specDocRepo: ISpecDocRepository,
+    @inject(WORKFLOW_TOKENS.HeartbeatService)
+    private readonly _heartbeat: IHeartbeatService
   ) {}
 
   async runTask(input: RunTaskInput): Promise<RunTaskResult> {
     console.log(chalk.bold(`\nRun ${input.runId} — ${input.specPath}\n`));
 
-    const pool = await this._executor.executeReady(input);
+    const heartbeatSeconds =
+      input.heartbeatSeconds === undefined ? 30 : input.heartbeatSeconds;
+    this._heartbeat.start({
+      runId: input.runId,
+      runsDir: input.runsDir,
+      intervalMs: heartbeatSeconds * 1000
+    });
 
-    if (pool.kind === 'blocked') {
-      console.log(
-        chalk.red(
-          '  ✗ Refused: spec is not Approved (blocked verdict recorded: unapproved-spec).'
-        )
-      );
-      console.log(
-        '  Approve the spec (status: Draft → Approved, ADR-0008) and rerun.'
-      );
-      return { outcome: pool.kind, tasks: [] };
-    }
+    try {
+      const poolInput: PoolInput = {
+        ...input,
+        progress: {
+          set: ctx => {
+            this._heartbeat.setContext(ctx);
+          }
+        }
+      };
+      const pool = await this._executor.executeReady(poolInput);
 
-    if (pool.kind === 'no-ready-task') {
-      console.log(
-        chalk.yellow(
-          '  No ready task (all done, or blocked on unmerged dependencies).'
-        )
-      );
-      // Resume case: the last task may have merged in a prior invocation
-      // with the phase boundary interrupted — replay it (fully cached when
-      // it already ran).
-      if (pool.state !== null) {
-        await this.phaseBoundary(input, pool.state, pool.spec);
-      }
-      return { outcome: pool.kind, tasks: [] };
-    }
-
-    const state = pool.state;
-    if (state === null) {
-      throw new Error('executor returned an executed pool without state');
-    }
-
-    // P3 T-01: implementation fanned out concurrently; the gate pipeline
-    // runs per task, sequentially — gates share the sandbox and the
-    // primary checkout's git object store.
-    for (const outcome of pool.outcomes) {
-      const icon =
-        outcome.kind === 'completed' ? chalk.green('✓') : chalk.red('✗');
-      const cachedNote = outcome.cached ? ' (cached)' : '';
-      console.log(
-        `  ${icon} ${outcome.task.id} ${outcome.kind}${cachedNote} on ${outcome.branch}`
-      );
-      if (outcome.detail !== undefined) {
-        console.log(chalk.gray(`    ${outcome.detail.slice(0, 300)}`));
-      }
-      if (outcome.kind === 'completed') {
-        await this.taskPipeline(input, state, pool.spec, outcome);
-      } else {
-        // P3 T-06: a failed task (e.g. budget exhaustion) may have written
-        // exception entries without entering the gate pipeline — escalate
-        // those so the queue still surfaces them.
-        const entries = state.exceptions.filter(
-          entry => entry.taskId === outcome.task.id
+      if (pool.kind === 'blocked') {
+        console.log(
+          chalk.red(
+            '  ✗ Refused: spec is not Approved (blocked verdict recorded: unapproved-spec).'
+          )
         );
-        this.postEscalations(input, state, outcome.task.id, entries);
+        console.log(
+          '  Approve the spec (status: Draft → Approved, ADR-0008) and rerun.'
+        );
+        return { outcome: pool.kind, tasks: [] };
       }
+
+      if (pool.kind === 'no-ready-task') {
+        console.log(
+          chalk.yellow(
+            '  No ready task (all done, or blocked on unmerged dependencies).'
+          )
+        );
+        // Resume case: the last task may have merged in a prior invocation
+        // with the phase boundary interrupted — replay it (fully cached when
+        // it already ran).
+        if (pool.state !== null) {
+          await this.phaseBoundary(input, pool.state, pool.spec);
+        }
+        return { outcome: pool.kind, tasks: [] };
+      }
+
+      const state = pool.state;
+      if (state === null) {
+        throw new Error('executor returned an executed pool without state');
+      }
+
+      // P3 T-01: implementation fanned out concurrently; the gate pipeline
+      // runs per task, sequentially — gates share the sandbox and the
+      // primary checkout's git object store.
+      for (const outcome of pool.outcomes) {
+        const icon =
+          outcome.kind === 'completed' ? chalk.green('✓') : chalk.red('✗');
+        const cachedNote = outcome.cached ? ' (cached)' : '';
+        console.log(
+          `  ${icon} ${outcome.task.id} ${outcome.kind}${cachedNote} on ${outcome.branch}`
+        );
+        if (outcome.detail !== undefined) {
+          console.log(chalk.gray(`    ${outcome.detail.slice(0, 300)}`));
+        }
+        if (outcome.kind === 'completed') {
+          await this.taskPipeline(input, state, pool.spec, outcome);
+        } else {
+          // P3 T-06: a failed task (e.g. budget exhaustion) may have written
+          // exception entries without entering the gate pipeline — escalate
+          // those so the queue still surfaces them.
+          const entries = state.exceptions.filter(
+            entry => entry.taskId === outcome.task.id
+          );
+          this.postEscalations(input, state, outcome.task.id, entries);
+        }
+      }
+
+      // P3 T-05: once every task of the phase has merged, deploy the merged
+      // default branch to the sandbox and post the phase digest.
+      await this.phaseBoundary(input, state, pool.spec);
+
+      if (input.shadow === true) {
+        console.log(
+          chalk.bold('\n[HUMAN GATE] Shadow mode — nothing advances.')
+        );
+        console.log('  Review the task branches and the recorded verdicts;');
+        console.log('  merging (or not) is your call.');
+      } else {
+        console.log(
+          chalk.bold('\n[ENFORCING] Green gates merged automatically;')
+        );
+        console.log(
+          '  red gates blocked and escalated. Promotion beyond the sandbox'
+        );
+        console.log('  remains a human decision.');
+      }
+
+      return {
+        outcome: pool.kind,
+        tasks: pool.outcomes.map(outcome => ({
+          taskId: outcome.task.id,
+          kind: outcome.kind,
+          branch: outcome.branch
+        }))
+      };
+    } finally {
+      this._heartbeat.stop();
     }
-
-    // P3 T-05: once every task of the phase has merged, deploy the merged
-    // default branch to the sandbox and post the phase digest.
-    await this.phaseBoundary(input, state, pool.spec);
-
-    if (input.shadow === true) {
-      console.log(chalk.bold('\n[HUMAN GATE] Shadow mode — nothing advances.'));
-      console.log('  Review the task branches and the recorded verdicts;');
-      console.log('  merging (or not) is your call.');
-    } else {
-      console.log(
-        chalk.bold('\n[ENFORCING] Green gates merged automatically;')
-      );
-      console.log(
-        '  red gates blocked and escalated. Promotion beyond the sandbox'
-      );
-      console.log('  remains a human decision.');
-    }
-
-    return {
-      outcome: pool.kind,
-      tasks: pool.outcomes.map(outcome => ({
-        taskId: outcome.task.id,
-        kind: outcome.kind,
-        branch: outcome.branch
-      }))
-    };
   }
 
   /**
@@ -268,35 +301,61 @@ export class RunHandler implements IRunHandler {
     // content edit invalidates exactly this task's steps (T-09).
     const chain = { implDigest: outcome.implDigest, headSha };
 
+    this._heartbeat.setContext({
+      taskId: task.id,
+      step: 'pr',
+      worktreePath,
+      lastLine: 'opening task PR'
+    });
+
     // P3 T-02: push the branch and open (or rediscover) the task PR before
     // the gates — the PR is the reviewer-gate and CI-gate subject.
     this.prStep(input, state, task, spec, outcome.branch, worktreePath, chain);
+
+    // F1: diff against the task's integration tip (same tip the worktree
+    // branched from), not the frozen run baseSha — otherwise merged deps
+    // inflate maxDiffLines and blow up the reviewer prompt.
+    const gateBaseRef = outcome.baseSha;
+
+    this._heartbeat.setContext({
+      taskId: task.id,
+      step: 'envelope',
+      worktreePath,
+      lastLine: `baseRef=${gateBaseRef.slice(0, 12)}`
+    });
 
     const envelopeVerdict = await this.gateStep(
       input,
       state,
       'envelope',
       task.id,
-      inputsDigest({ ...chain, envelope: spec.envelope }),
+      inputsDigest({ ...chain, envelope: spec.envelope, baseRef: gateBaseRef }),
       () =>
         this._envelopeGate.evaluate({
           repoPath: input.repoPath,
-          baseRef: state.baseSha,
+          baseRef: gateBaseRef,
           headRef: outcome.branch,
           envelope: spec.envelope
         })
     );
+
+    this._heartbeat.setContext({
+      taskId: task.id,
+      step: 'reviewer',
+      worktreePath,
+      lastLine: 'dispatching reviewer agent'
+    });
 
     const reviewerVerdict = await this.gateStep(
       input,
       state,
       'reviewer',
       task.id,
-      inputsDigest({ ...chain, task }),
+      inputsDigest({ ...chain, task, baseRef: gateBaseRef }),
       async () => {
         const verdict = await this._reviewerGate.review({
           repoPath: input.repoPath,
-          baseRef: state.baseSha,
+          baseRef: gateBaseRef,
           headRef: outcome.branch,
           task,
           envelope: spec.envelope

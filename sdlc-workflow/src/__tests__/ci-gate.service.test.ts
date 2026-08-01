@@ -82,14 +82,16 @@ describe('CiGateService (P3 T-03 live monitor + bounded fix cycle)', () => {
       .toConstantValue({
         headSha,
         push,
-        status: jest.fn(),
+        status: jest.fn().mockReturnValue(''),
         addWorktree: jest.fn(),
         diffStat: jest.fn(),
         diffText: jest.fn(),
         fetch: jest.fn(),
         resolveSha: jest.fn(),
         defaultBranch: jest.fn(),
-        revertMerge: jest.fn()
+        revertMerge: jest.fn(),
+        stageAll: jest.fn(),
+        commit: jest.fn()
       });
     container
       .bind<IRunStateRepository>(WORKFLOW_TOKENS.RunStateRepository)

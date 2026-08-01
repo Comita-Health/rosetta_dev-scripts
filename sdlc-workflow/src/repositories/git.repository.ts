@@ -3,6 +3,14 @@ import { existsSync } from 'fs';
 import { injectable } from 'inversify';
 import { DiffStat, WorkflowError } from '../types';
 
+export interface GitCommitOptions {
+  /** Bypass client hooks (husky). Required on `sdlc/*` branches when the
+   * target repo only allows `f/*` / `b/*` (#41). */
+  noVerify?: boolean;
+  /** Append a `Signed-off-by` trailer (DCO). */
+  signOff?: boolean;
+}
+
 export interface IGitRepository {
   headSha(repoPath: string): string;
   /** `git status --porcelain` output for the primary checkout. */
@@ -38,6 +46,14 @@ export interface IGitRepository {
    * in the given checkout (P3 T-05 veto path).
    */
   revertMerge(repoPath: string, sha: string): void;
+  /** Stage all changes in the checkout (`git add -A`). */
+  stageAll(repoPath: string): void;
+  /**
+   * Create a commit in the checkout. Engine-owned commits on `sdlc/*`
+   * branches pass `{ noVerify: true }` so target-repo husky branch checks
+   * cannot block the run (#41).
+   */
+  commit(repoPath: string, message: string, options?: GitCommitOptions): void;
 }
 
 const git = (repoPath: string, args: string): string => {
@@ -104,6 +120,19 @@ export class GitRepository implements IGitRepository {
 
   revertMerge(repoPath: string, sha: string): void {
     git(repoPath, `revert --no-edit --signoff -m 1 "${sha}"`);
+  }
+
+  stageAll(repoPath: string): void {
+    git(repoPath, 'add -A');
+  }
+
+  commit(repoPath: string, message: string, options?: GitCommitOptions): void {
+    const flags: string[] = [];
+    if (options?.noVerify === true) flags.push('--no-verify');
+    if (options?.signOff === true) flags.push('--signoff');
+    const escaped = message.replace(/"/g, '\\"');
+    const flagStr = flags.length > 0 ? `${flags.join(' ')} ` : '';
+    git(repoPath, `commit ${flagStr}-m "${escaped}"`);
   }
 
   diffStat(repoPath: string, baseRef: string, headRef: string): DiffStat {
