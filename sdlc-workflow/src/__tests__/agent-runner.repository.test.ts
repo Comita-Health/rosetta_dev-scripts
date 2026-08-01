@@ -1,11 +1,41 @@
 import 'reflect-metadata';
+import { EventEmitter } from 'events';
 
-jest.mock('child_process', () => ({ spawnSync: jest.fn() }));
+jest.mock('child_process', () => ({ spawn: jest.fn() }));
 
-import { spawnSync } from 'child_process';
+import { spawn } from 'child_process';
 import { AgentRunnerRepository } from '../repositories/agent-runner.repository';
 
-const spawnMock = spawnSync as jest.Mock;
+const spawnMock = spawn as jest.Mock;
+
+interface FakeChild extends EventEmitter {
+  stdout: EventEmitter;
+  stderr: EventEmitter;
+}
+
+/** Build a fake child process the repo can attach listeners to. */
+const fakeChild = (): FakeChild => {
+  const child = new EventEmitter() as FakeChild;
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  return child;
+};
+
+/** Queue a child that emits the given streams then closes with `status`. */
+const spawnResult = (
+  status: number | null,
+  stdout = '',
+  stderr = ''
+): FakeChild => {
+  const child = fakeChild();
+  spawnMock.mockReturnValueOnce(child);
+  setImmediate(() => {
+    if (stdout.length > 0) child.stdout.emit('data', Buffer.from(stdout));
+    if (stderr.length > 0) child.stderr.emit('data', Buffer.from(stderr));
+    child.emit('close', status);
+  });
+  return child;
+};
 
 describe('AgentRunnerRepository', () => {
   const repo = new AgentRunnerRepository();
@@ -21,7 +51,7 @@ describe('AgentRunnerRepository', () => {
   });
 
   it('runs the agent in the given working directory', async () => {
-    spawnMock.mockReturnValue({ status: 0, stdout: 'done', stderr: '' });
+    spawnResult(0, 'done');
 
     const result = await repo.run('/worktrees/T-01', 'implement it');
 
@@ -32,7 +62,7 @@ describe('AgentRunnerRepository', () => {
   });
 
   it('returns ok=false with output on a non-zero exit', async () => {
-    spawnMock.mockReturnValue({ status: 1, stdout: '', stderr: 'boom' });
+    spawnResult(1, '', 'boom');
 
     await expect(repo.run('/wt', 'p')).resolves.toEqual({
       ok: false,
@@ -40,12 +70,8 @@ describe('AgentRunnerRepository', () => {
     });
   });
 
-  it('falls back to stdout when stderr is missing on failure', async () => {
-    spawnMock.mockReturnValue({
-      status: 2,
-      stdout: 'partial output',
-      stderr: undefined
-    });
+  it('falls back to stdout when stderr is empty on failure', async () => {
+    spawnResult(2, 'partial output');
 
     await expect(repo.run('/wt', 'p')).resolves.toEqual({
       ok: false,
@@ -55,7 +81,7 @@ describe('AgentRunnerRepository', () => {
 
   it('passes CURSOR_MODEL through as --model', async () => {
     process.env.CURSOR_MODEL = 'claude-sonnet-4-5';
-    spawnMock.mockReturnValue({ status: 0, stdout: 'ok', stderr: '' });
+    spawnResult(0, 'ok');
 
     await repo.run('/wt', 'p');
     const [, args] = spawnMock.mock.calls[0];
@@ -64,10 +90,34 @@ describe('AgentRunnerRepository', () => {
   });
 
   it('throws typed when the binary cannot be started', async () => {
-    spawnMock.mockReturnValue({ error: new Error('ENOENT') });
+    const child = fakeChild();
+    spawnMock.mockReturnValueOnce(child);
+    setImmediate(() => child.emit('error', new Error('ENOENT')));
 
     await expect(repo.run('/wt', 'p')).rejects.toMatchObject({
       code: 'MISSING_API_KEY'
     });
+  });
+
+  it('does not block the event loop: two agents run concurrently', async () => {
+    // Neither child closes until both have been spawned — impossible with
+    // the old spawnSync implementation, required by the P3 T-01 pool.
+    const first = fakeChild();
+    const second = fakeChild();
+    spawnMock.mockReturnValueOnce(first).mockReturnValueOnce(second);
+
+    const runs = Promise.all([repo.run('/wt/a', 'a'), repo.run('/wt/b', 'b')]);
+    await new Promise(resolve => setImmediate(resolve));
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+
+    second.stdout.emit('data', Buffer.from('b done'));
+    second.emit('close', 0);
+    first.stdout.emit('data', Buffer.from('a done'));
+    first.emit('close', 0);
+
+    await expect(runs).resolves.toEqual([
+      { ok: true, output: 'a done' },
+      { ok: true, output: 'b done' }
+    ]);
   });
 });

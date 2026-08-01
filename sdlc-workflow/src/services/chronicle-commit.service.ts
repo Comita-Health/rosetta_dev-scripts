@@ -27,6 +27,11 @@ export interface RecordMergeInput {
   runsDir: string;
   runId: string;
   mergedSha: string;
+  /**
+   * P3 T-01: when set, also records the merge on this task's result,
+   * which is what makes its dependents eligible in the pool.
+   */
+  taskId?: string;
 }
 
 /**
@@ -136,6 +141,14 @@ export class ChronicleCommitService implements IChronicleCommitService {
       );
     }
     this._runStateRepo.recordMergedSha(input.runsDir, state, input.mergedSha);
+    if (input.taskId !== undefined) {
+      this._runStateRepo.recordTaskMerged(
+        input.runsDir,
+        state,
+        input.taskId,
+        input.mergedSha
+      );
+    }
 
     const path = this._artifactRepo.writeArtifact(
       input.chronicleRepo,
@@ -146,7 +159,11 @@ export class ChronicleCommitService implements IChronicleCommitService {
         runId: input.runId,
         specId: state.specId,
         recordedAt: new Date().toISOString(),
-        payload: { mergedSha: input.mergedSha, approvedBy: 'human' }
+        payload: {
+          mergedSha: input.mergedSha,
+          approvedBy: 'human',
+          ...(input.taskId !== undefined ? { taskId: input.taskId } : {})
+        }
       }
     );
     this._artifactRepo.commit(

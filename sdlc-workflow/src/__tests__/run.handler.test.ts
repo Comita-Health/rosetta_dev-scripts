@@ -11,7 +11,8 @@ import type { IDigestService } from '../services/digest.service';
 import type { IEnvelopeGateService } from '../services/envelope-gate.service';
 import type {
   ExecutorOutcome,
-  IExecutorService
+  IExecutorService,
+  PoolOutcome
 } from '../services/executor.service';
 import type { IReviewerGateService } from '../services/reviewer-gate.service';
 import type { ISandboxDeployService } from '../services/sandbox-deploy.service';
@@ -48,7 +49,8 @@ const INPUT = {
   specPath: '/specs/spec.md',
   repoPath: '/repo',
   runId: 'run-1',
-  runsDir: '/runs'
+  runsDir: '/runs',
+  maxParallel: 3
 };
 
 const verdictOf = (
@@ -63,10 +65,10 @@ const verdictOf = (
   recordedAt: 'x'
 });
 
-describe('RunHandler (shadow-mode single-task loop)', () => {
+describe('RunHandler (shadow-mode pooled task loop)', () => {
   let handler: IRunHandler;
   let state: RunState;
-  let executeNext: jest.Mock;
+  let executeReady: jest.Mock;
   let evaluate: jest.Mock;
   let review: jest.Mock;
   let deploy: jest.Mock;
@@ -84,13 +86,24 @@ describe('RunHandler (shadow-mode single-task loop)', () => {
   let recordStep: jest.Mock;
   let stateLoad: jest.Mock;
 
-  const completedOutcome = (): ExecutorOutcome => ({
+  const taskOutcome = (
+    overrides: Partial<ExecutorOutcome> = {}
+  ): ExecutorOutcome => ({
     kind: 'completed',
-    spec: SPEC,
-    state,
     task: SPEC.tasks[0],
     branch: 'sdlc/run-1/T-01',
-    implDigest: 'impl-digest'
+    cached: false,
+    implDigest: 'impl-digest',
+    ...overrides
+  });
+
+  const executedPool = (
+    outcomes: ExecutorOutcome[] = [taskOutcome()]
+  ): PoolOutcome => ({
+    kind: 'executed',
+    spec: SPEC,
+    state,
+    outcomes
   });
 
   let breachVerdict: GateVerdict;
@@ -125,7 +138,7 @@ describe('RunHandler (shadow-mode single-task loop)', () => {
       'failing gates: ci, envelope'
     ]);
 
-    executeNext = jest.fn().mockImplementation(async () => completedOutcome());
+    executeReady = jest.fn().mockImplementation(async () => executedPool());
     evaluate = jest.fn().mockResolvedValue(breachVerdict);
     review = jest.fn().mockResolvedValue(reviewerVerdict);
     deploy = jest.fn().mockResolvedValue({
@@ -182,7 +195,7 @@ describe('RunHandler (shadow-mode single-task loop)', () => {
     const container = new Container();
     container
       .bind<IExecutorService>(WORKFLOW_TOKENS.ExecutorService)
-      .toConstantValue({ executeNext });
+      .toConstantValue({ executeReady });
     container
       .bind<IEnvelopeGateService>(WORKFLOW_TOKENS.EnvelopeGateService)
       .toConstantValue({ evaluate });
@@ -228,6 +241,7 @@ describe('RunHandler (shadow-mode single-task loop)', () => {
         recordCriteria,
         recordStep,
         recordMergedSha: jest.fn(),
+        recordTaskMerged: jest.fn(),
         load: stateLoad,
         save: jest.fn(),
         recordTaskResult: jest.fn()
@@ -246,9 +260,8 @@ describe('RunHandler (shadow-mode single-task loop)', () => {
 
     // Shadow semantics: breaches are recorded, the run is not failed by them.
     expect(result).toEqual({
-      outcome: 'completed',
-      taskId: 'T-01',
-      branch: 'sdlc/run-1/T-01'
+      outcome: 'executed',
+      tasks: [{ taskId: 'T-01', kind: 'completed', branch: 'sdlc/run-1/T-01' }]
     });
     // envelope, reviewer, sandbox, verification, ci, phase
     expect(appendVerdict).toHaveBeenCalledTimes(6);
@@ -319,7 +332,7 @@ describe('RunHandler (shadow-mode single-task loop)', () => {
 
     const result = await handler.runTask(INPUT);
 
-    expect(result.outcome).toBe('completed');
+    expect(result.outcome).toBe('executed');
     const call = aggregate.mock.calls[0][0];
     expect(call.gates.verification.outcome).toBe('blocked');
     expect(call.gates.verification.reasons).toEqual(['bad criterion prefix']);
@@ -366,11 +379,12 @@ describe('RunHandler (shadow-mode single-task loop)', () => {
   });
 
   it('halts at intake for a blocked run without evaluating gates', async () => {
-    executeNext.mockResolvedValue({
+    executeReady.mockResolvedValue({
       kind: 'blocked',
       spec: SPEC,
       state,
-      detail: 'unapproved-spec'
+      detail: 'unapproved-spec',
+      outcomes: []
     });
 
     const result = await handler.runTask(INPUT);
@@ -382,10 +396,11 @@ describe('RunHandler (shadow-mode single-task loop)', () => {
   });
 
   it('reports no-ready-task without gate evaluation', async () => {
-    executeNext.mockResolvedValue({
+    executeReady.mockResolvedValue({
       kind: 'no-ready-task',
       spec: SPEC,
-      state: null
+      state: null,
+      outcomes: []
     });
 
     const result = await handler.runTask(INPUT);
@@ -394,33 +409,55 @@ describe('RunHandler (shadow-mode single-task loop)', () => {
     expect(evaluate).not.toHaveBeenCalled();
   });
 
-  it('throws on an incomplete executor outcome (contract violation)', async () => {
-    executeNext.mockResolvedValue({
-      kind: 'completed',
+  it('throws on an executed pool without state (contract violation)', async () => {
+    executeReady.mockResolvedValue({
+      kind: 'executed',
       spec: SPEC,
-      state
-      // task, branch and implDigest missing — violates the contract
+      state: null,
+      outcomes: [taskOutcome()]
     });
 
     await expect(handler.runTask(INPUT)).rejects.toThrow(
-      'executor returned an incomplete outcome'
+      'executor returned an executed pool without state'
     );
   });
 
-  it('still runs all gates on a failed task branch', async () => {
-    executeNext.mockImplementation(async () => ({
-      ...completedOutcome(),
-      kind: 'failed' as const,
-      detail: 'agent exploded'
-    }));
+  it('skips the gate pipeline for a failed task, reporting the failure (P3 T-01)', async () => {
+    executeReady.mockImplementation(async () =>
+      executedPool([taskOutcome({ kind: 'failed', detail: 'agent exploded' })])
+    );
 
     const result = await handler.runTask(INPUT);
 
-    expect(result.outcome).toBe('failed');
-    expect(evaluate).toHaveBeenCalledTimes(1);
-    expect(review).toHaveBeenCalledTimes(1);
-    expect(deploy).toHaveBeenCalledTimes(1);
-    expect(appendVerdict).toHaveBeenCalledTimes(6);
+    expect(result.tasks).toEqual([
+      { taskId: 'T-01', kind: 'failed', branch: 'sdlc/run-1/T-01' }
+    ]);
+    expect(evaluate).not.toHaveBeenCalled();
+    expect(review).not.toHaveBeenCalled();
+    expect(deploy).not.toHaveBeenCalled();
+  });
+
+  it('pipelines every completed task of a pooled wave (P3 T-01)', async () => {
+    const taskB = makeTask({ id: 'T-02' });
+    executeReady.mockImplementation(async () =>
+      executedPool([
+        taskOutcome(),
+        taskOutcome({ task: taskB, branch: 'sdlc/run-1/T-02' })
+      ])
+    );
+
+    const result = await handler.runTask(INPUT);
+
+    expect(result.tasks.map(task => task.taskId)).toEqual(['T-01', 'T-02']);
+    // Each completed task goes through the full gate pipeline.
+    expect(evaluate).toHaveBeenCalledTimes(2);
+    expect(review).toHaveBeenCalledTimes(2);
+    expect(deploy).toHaveBeenCalledTimes(2);
+    expect(verify).toHaveBeenCalledTimes(2);
+    expect(ciEvaluate).toHaveBeenCalledTimes(2);
+    expect(aggregate).toHaveBeenCalledTimes(2);
+    // 6 verdicts per task.
+    expect(appendVerdict).toHaveBeenCalledTimes(12);
   });
 
   it('skips digest and chronicle steps without --chronicle-repo', async () => {
@@ -486,7 +523,7 @@ describe('RunHandler (shadow-mode single-task loop)', () => {
     });
     const result = await handler.runTask(INPUT);
 
-    expect(result.outcome).toBe('completed');
+    expect(result.outcome).toBe('executed');
     expect(evaluate).toHaveBeenCalledTimes(1);
     expect(review).toHaveBeenCalledTimes(1);
     expect(deploy).toHaveBeenCalledTimes(2); // first call was the kill
@@ -557,19 +594,21 @@ describe('RunHandler (shadow-mode single-task loop)', () => {
     ).toThrow(WorkflowError);
   });
 
-  it('dispatches record-merge to the chronicle service', async () => {
+  it('dispatches record-merge to the chronicle service, task ID included', async () => {
     await handler.recordMerge({
       chronicleRepo: '/chronicle',
       runsDir: '/runs',
       runId: 'run-1',
-      mergedSha: 'abc123def456'
+      mergedSha: 'abc123def456',
+      taskId: 'T-01'
     });
 
     expect(recordMerge).toHaveBeenCalledWith({
       chronicleRepo: '/chronicle',
       runsDir: '/runs',
       runId: 'run-1',
-      mergedSha: 'abc123def456'
+      mergedSha: 'abc123def456',
+      taskId: 'T-01'
     });
   });
 });

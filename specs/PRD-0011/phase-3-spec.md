@@ -30,9 +30,9 @@ Replace the single-slot executor with a pool: every spec task whose dependsOn ar
 
 ### Acceptance criteria
 
-- [ ] test: given a spec with independent ready tasks, the pool executes them concurrently in separate worktrees and records a per-task result for each, with concurrent state writes serialized and none lost
-- [ ] test: a task whose dependsOn is unmerged is not started, and a failed task blocks its dependents while unrelated tasks proceed to completion
-- [ ] test: killing a pooled run and resuming reuses every completed task's cached steps and re-executes only interrupted or not-yet-started work
+- [x] test: given a spec with independent ready tasks, the pool executes them concurrently in separate worktrees and records a per-task result for each, with concurrent state writes serialized and none lost
+- [x] test: a task whose dependsOn is unmerged is not started, and a failed task blocks its dependents while unrelated tasks proceed to completion
+- [x] test: killing a pooled run and resuming reuses every completed task's cached steps and re-executes only interrupted or not-yet-started work
 
 ## Task T-02: Task-branch push and PR lifecycle
 

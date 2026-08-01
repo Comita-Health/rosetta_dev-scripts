@@ -10,9 +10,9 @@ import type { ICiGateService } from '../services/ci-gate.service';
 import type { IDigestService } from '../services/digest.service';
 import type { IEnvelopeGateService } from '../services/envelope-gate.service';
 import type {
-  ExecutorInput,
   ExecutorOutcome,
-  IExecutorService
+  IExecutorService,
+  PoolInput
 } from '../services/executor.service';
 import type { IReviewerGateService } from '../services/reviewer-gate.service';
 import type { ISandboxDeployService } from '../services/sandbox-deploy.service';
@@ -24,13 +24,14 @@ import { WORKFLOW_TOKENS } from '../tokens';
 import {
   GateVerdict,
   RunState,
+  SpecDocument,
   SpecTask,
   stepKey,
   WorkflowError
 } from '../types';
 import { inputsDigest } from '../utils/digest';
 
-export interface RunTaskInput extends ExecutorInput {
+export interface RunTaskInput extends PoolInput {
   /**
    * Path to the personal Chronicle ledger repo. When present, the phase
    * boundary posts a digest to the PRD-0007 queue (T-07) and commits run
@@ -40,9 +41,8 @@ export interface RunTaskInput extends ExecutorInput {
 }
 
 export interface RunTaskResult {
-  outcome: ExecutorOutcome['kind'];
-  taskId?: string;
-  branch?: string;
+  outcome: 'blocked' | 'no-ready-task' | 'executed';
+  tasks: { taskId: string; kind: ExecutorOutcome['kind']; branch: string }[];
 }
 
 /**
@@ -64,6 +64,8 @@ export interface RecordMergeCliInput {
   runsDir: string;
   runId: string;
   mergedSha: string;
+  /** P3 T-01: also mark this task merged, unblocking its dependents. */
+  taskId?: string;
 }
 
 export interface StatusCliInput {
@@ -114,9 +116,9 @@ export class RunHandler implements IRunHandler {
   async runTask(input: RunTaskInput): Promise<RunTaskResult> {
     console.log(chalk.bold(`\nRun ${input.runId} — ${input.specPath}\n`));
 
-    const outcome = await this._executor.executeNext(input);
+    const pool = await this._executor.executeReady(input);
 
-    if (outcome.kind === 'blocked') {
+    if (pool.kind === 'blocked') {
       console.log(
         chalk.red(
           '  ✗ Refused: spec is not Approved (blocked verdict recorded: unapproved-spec).'
@@ -125,38 +127,69 @@ export class RunHandler implements IRunHandler {
       console.log(
         '  Approve the spec (status: Draft → Approved, ADR-0008) and rerun.'
       );
-      return { outcome: outcome.kind };
+      return { outcome: pool.kind, tasks: [] };
     }
 
-    if (outcome.kind === 'no-ready-task') {
+    if (pool.kind === 'no-ready-task') {
       console.log(
-        chalk.yellow('  No ready task (all done or blocked on dependencies).')
+        chalk.yellow(
+          '  No ready task (all done, or blocked on unmerged dependencies).'
+        )
       );
-      return { outcome: outcome.kind };
+      return { outcome: pool.kind, tasks: [] };
     }
 
-    const task = outcome.task;
-    const state = outcome.state;
-    if (
-      task === undefined ||
-      state === null ||
-      outcome.branch === undefined ||
-      outcome.implDigest === undefined
-    ) {
-      // Executor contract guarantees these for completed/failed outcomes.
-      throw new Error('executor returned an incomplete outcome');
+    const state = pool.state;
+    if (state === null) {
+      throw new Error('executor returned an executed pool without state');
     }
 
-    const icon =
-      outcome.kind === 'completed' ? chalk.green('✓') : chalk.red('✗');
-    const cachedNote = outcome.cached === true ? ' (cached)' : '';
+    // P3 T-01: implementation fanned out concurrently; the gate pipeline
+    // runs per task, sequentially — gates share the sandbox and the
+    // primary checkout's git object store.
+    for (const outcome of pool.outcomes) {
+      const icon =
+        outcome.kind === 'completed' ? chalk.green('✓') : chalk.red('✗');
+      const cachedNote = outcome.cached ? ' (cached)' : '';
+      console.log(
+        `  ${icon} ${outcome.task.id} ${outcome.kind}${cachedNote} on ${outcome.branch}`
+      );
+      if (outcome.detail !== undefined) {
+        console.log(chalk.gray(`    ${outcome.detail.slice(0, 300)}`));
+      }
+      if (outcome.kind === 'completed') {
+        await this.taskPipeline(input, state, pool.spec, outcome);
+      }
+    }
+
+    console.log(chalk.bold('\n[HUMAN GATE] Shadow mode — nothing advances.'));
+    console.log('  Review the task branches and the recorded verdicts;');
     console.log(
-      `  ${icon} ${task.id} ${outcome.kind}${cachedNote} on ${outcome.branch}`
+      '  merging (or not) is your call. Gate enforcement lands in P3 T-04.'
     );
-    if (outcome.detail !== undefined) {
-      console.log(chalk.gray(`    ${outcome.detail.slice(0, 300)}`));
-    }
 
+    return {
+      outcome: pool.kind,
+      tasks: pool.outcomes.map(outcome => ({
+        taskId: outcome.task.id,
+        kind: outcome.kind,
+        branch: outcome.branch
+      }))
+    };
+  }
+
+  /**
+   * The per-task shadow-gate pipeline of SPEC-PRD-0011-P2, unchanged in
+   * substance: envelope → reviewer → sandbox → verification → CI → phase
+   * aggregate → chronicle/digest, every step through the T-09 cache.
+   */
+  private async taskPipeline(
+    input: RunTaskInput,
+    state: RunState,
+    spec: SpecDocument,
+    outcome: ExecutorOutcome
+  ): Promise<void> {
+    const task = outcome.task;
     const worktreePath = path.join(
       input.runsDir,
       input.runId,
@@ -173,13 +206,13 @@ export class RunHandler implements IRunHandler {
       state,
       'envelope',
       task.id,
-      inputsDigest({ ...chain, envelope: outcome.spec.envelope }),
+      inputsDigest({ ...chain, envelope: spec.envelope }),
       () =>
         this._envelopeGate.evaluate({
           repoPath: input.repoPath,
           baseRef: state.baseSha,
-          headRef: outcome.branch as string,
-          envelope: outcome.spec.envelope
+          headRef: outcome.branch,
+          envelope: spec.envelope
         })
     );
 
@@ -193,9 +226,9 @@ export class RunHandler implements IRunHandler {
         const verdict = await this._reviewerGate.review({
           repoPath: input.repoPath,
           baseRef: state.baseSha,
-          headRef: outcome.branch as string,
+          headRef: outcome.branch,
           task,
-          envelope: outcome.spec.envelope
+          envelope: spec.envelope
         });
         if (verdict.transcript !== undefined) {
           const evidenceId = `${task.id}-reviewer-transcript`;
@@ -261,7 +294,7 @@ export class RunHandler implements IRunHandler {
         },
         state,
         taskId: task.id,
-        budgetK: outcome.spec.envelope.budgetK
+        budgetK: spec.envelope.budgetK
       });
       phaseVerdict = aggregate.verdict;
       phaseVerdict.taskId = task.id;
@@ -289,15 +322,7 @@ export class RunHandler implements IRunHandler {
       }
     }
 
-    await this.chronicleSteps(input, state, task, outcome, chain, phaseVerdict);
-
-    console.log(chalk.bold('\n[HUMAN GATE] Shadow mode — nothing advances.'));
-    console.log(`  Review branch ${outcome.branch} and the recorded verdicts;`);
-    console.log(
-      '  merging (or not) is your call. Gate enforcement is Phase 3.'
-    );
-
-    return { outcome: outcome.kind, taskId: task.id, branch: outcome.branch };
+    await this.chronicleSteps(input, state, task, spec, chain, phaseVerdict);
   }
 
   showStatus(input: StatusCliInput): void {
@@ -325,7 +350,10 @@ export class RunHandler implements IRunHandler {
         result.status === 'completed' ? chalk.green('✓') : chalk.red('✗');
       console.log(
         `  ${icon} ${result.taskId} ${result.status}` +
-          (result.branch !== undefined ? ` on ${result.branch}` : '')
+          (result.branch !== undefined ? ` on ${result.branch}` : '') +
+          (result.mergedSha !== undefined
+            ? chalk.green(` merged@${result.mergedSha.slice(0, 12)}`)
+            : '')
       );
     }
 
@@ -385,7 +413,7 @@ export class RunHandler implements IRunHandler {
     input: RunTaskInput,
     state: RunState,
     task: SpecTask,
-    outcome: ExecutorOutcome,
+    spec: SpecDocument,
     chain: { implDigest?: string; headSha: string },
     phaseVerdict: GateVerdict
   ): Promise<void> {
@@ -403,7 +431,7 @@ export class RunHandler implements IRunHandler {
     if (state.steps[recordKey] === undefined) {
       const recorded = await this._chronicle.record({
         chronicleRepo: input.chronicleRepo,
-        spec: outcome.spec,
+        spec,
         state
       });
       this._runStateRepo.recordStep(input.runsDir, state, recordKey, {

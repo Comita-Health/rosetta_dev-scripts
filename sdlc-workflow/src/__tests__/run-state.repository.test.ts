@@ -132,6 +132,24 @@ describe('RunStateRepository', () => {
     const loaded = repo.load(dir, 'run-1');
     expect(loaded?.mergedSha).toBe('abc123');
   });
+
+  it('records a per-task merge, and no-ops for an unknown task (P3 T-01)', () => {
+    const state = makeState();
+    state.taskResults['T-01'] = {
+      taskId: 'T-01',
+      status: 'completed',
+      recordedAt: 'x'
+    };
+    repo.save(dir, state);
+
+    repo.recordTaskMerged(dir, state, 'T-01', 'merge-sha');
+    expect(repo.load(dir, 'run-1')?.taskResults['T-01'].mergedSha).toBe(
+      'merge-sha'
+    );
+
+    repo.recordTaskMerged(dir, state, 'T-99', 'other-sha');
+    expect(repo.load(dir, 'run-1')?.taskResults['T-99']).toBeUndefined();
+  });
 });
 
 describe('SurfaceMapRepository', () => {

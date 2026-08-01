@@ -45,6 +45,13 @@ export interface IRunStateRepository {
   ): void;
   /** T-08: record the human-approved merged SHA and persist. */
   recordMergedSha(runsDir: string, state: RunState, sha: string): void;
+  /** P3 T-01: record a task's merge, unblocking its dependents. */
+  recordTaskMerged(
+    runsDir: string,
+    state: RunState,
+    taskId: string,
+    sha: string
+  ): void;
 }
 
 const stateFile = (runsDir: string, runId: string): string =>
@@ -124,6 +131,18 @@ export class RunStateRepository implements IRunStateRepository {
 
   recordMergedSha(runsDir: string, state: RunState, sha: string): void {
     state.mergedSha = sha;
+    this.save(runsDir, state);
+  }
+
+  recordTaskMerged(
+    runsDir: string,
+    state: RunState,
+    taskId: string,
+    sha: string
+  ): void {
+    const result = state.taskResults[taskId];
+    if (result === undefined) return;
+    result.mergedSha = sha;
     this.save(runsDir, state);
   }
 }
