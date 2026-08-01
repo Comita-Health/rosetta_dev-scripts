@@ -1,0 +1,159 @@
+import { inject, injectable } from 'inversify';
+import type { IChronicleArtifactRepository } from '../repositories/chronicle-artifact.repository';
+import type { IRunStateRepository } from '../repositories/run-state.repository';
+import { WORKFLOW_TOKENS } from '../tokens';
+import {
+  ChronicleArtifact,
+  RunState,
+  SpecDocument,
+  VerdictArtifactPayload,
+  WorkflowError
+} from '../types';
+import { inputsDigest } from '../utils/digest';
+
+export interface ChronicleRecordInput {
+  chronicleRepo: string;
+  spec: SpecDocument;
+  state: RunState;
+}
+
+export interface ChronicleRecordOutcome {
+  /** Repo-relative paths of every artifact written. */
+  artifactPaths: string[];
+}
+
+export interface RecordMergeInput {
+  chronicleRepo: string;
+  runsDir: string;
+  runId: string;
+  mergedSha: string;
+}
+
+/**
+ * SPEC-PRD-0011-P2 T-08: commit run outputs to the Chronicle as versioned
+ * JSON artifacts — the consumed spec, per-task results, every gate verdict
+ * (gate identity + inputs digest + outcome + evidence refs), and the
+ * exception ledger. A human-approved merge records the merged SHA via
+ * {@link recordMerge}. Commits follow ADR-0007 (`chronicle(sdlc): ...`
+ * with provenance trailers) and a clean tree is a no-op, so resume never
+ * duplicates ledger writes.
+ */
+export interface IChronicleCommitService {
+  record(input: ChronicleRecordInput): Promise<ChronicleRecordOutcome>;
+  recordMerge(input: RecordMergeInput): Promise<string>;
+}
+
+@injectable()
+export class ChronicleCommitService implements IChronicleCommitService {
+  constructor(
+    @inject(WORKFLOW_TOKENS.ChronicleArtifactRepository)
+    private readonly _artifactRepo: IChronicleArtifactRepository,
+    @inject(WORKFLOW_TOKENS.RunStateRepository)
+    private readonly _runStateRepo: IRunStateRepository
+  ) {}
+
+  async record(input: ChronicleRecordInput): Promise<ChronicleRecordOutcome> {
+    const { chronicleRepo, spec, state } = input;
+    const now = new Date().toISOString();
+    const paths: string[] = [];
+    const write = (name: string, artifact: ChronicleArtifact): void => {
+      paths.push(
+        this._artifactRepo.writeArtifact(
+          chronicleRepo,
+          state.runId,
+          name,
+          artifact
+        )
+      );
+    };
+
+    write('spec', {
+      schema: 'sdlc.spec.v1',
+      runId: state.runId,
+      specId: spec.id,
+      recordedAt: now,
+      payload: {
+        status: spec.status,
+        contentDigest: inputsDigest(spec),
+        envelope: spec.envelope,
+        tasks: spec.tasks
+      }
+    });
+
+    for (const result of Object.values(state.taskResults)) {
+      write(`task-${result.taskId}`, {
+        schema: 'sdlc.task-result.v1',
+        runId: state.runId,
+        specId: spec.id,
+        recordedAt: now,
+        payload: result
+      });
+    }
+
+    state.verdicts.forEach((verdict, index) => {
+      const payload: VerdictArtifactPayload = {
+        gate: verdict.gate,
+        inputsDigest:
+          verdict.inputsDigest ??
+          inputsDigest({ gate: verdict.gate, reasons: verdict.reasons }),
+        outcome: verdict.outcome,
+        wouldEscalate: verdict.wouldEscalate,
+        reasons: verdict.reasons,
+        evidenceRefs: verdict.evidenceIds ?? [],
+        taskId: verdict.taskId ?? 'run'
+      };
+      write(`verdict-${String(index).padStart(3, '0')}-${verdict.gate}`, {
+        schema: 'sdlc.verdict.v1',
+        runId: state.runId,
+        specId: spec.id,
+        recordedAt: now,
+        payload
+      });
+    });
+
+    write('exceptions', {
+      schema: 'sdlc.exceptions.v1',
+      runId: state.runId,
+      specId: spec.id,
+      recordedAt: now,
+      payload: state.exceptions
+    });
+
+    this._artifactRepo.commit(
+      chronicleRepo,
+      'sdlc',
+      `${state.runId} run artifacts`
+    );
+    return { artifactPaths: paths };
+  }
+
+  async recordMerge(input: RecordMergeInput): Promise<string> {
+    const state = this._runStateRepo.load(input.runsDir, input.runId);
+    if (state === null) {
+      throw new WorkflowError(
+        `run ${input.runId} has no recorded state`,
+        'RUN_NOT_FOUND'
+      );
+    }
+    this._runStateRepo.recordMergedSha(input.runsDir, state, input.mergedSha);
+
+    const path = this._artifactRepo.writeArtifact(
+      input.chronicleRepo,
+      input.runId,
+      'merge',
+      {
+        schema: 'sdlc.merge.v1',
+        runId: input.runId,
+        specId: state.specId,
+        recordedAt: new Date().toISOString(),
+        payload: { mergedSha: input.mergedSha, approvedBy: 'human' }
+      }
+    );
+    this._artifactRepo.commit(
+      input.chronicleRepo,
+      'sdlc',
+      `${input.runId} merged at ${input.mergedSha.slice(0, 12)}`
+    );
+    return path;
+  }
+}

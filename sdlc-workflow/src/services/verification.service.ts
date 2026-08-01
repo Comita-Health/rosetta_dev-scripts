@@ -174,6 +174,14 @@ export class VerificationService implements IVerificationService {
     if (failing.length > 0) outcome = 'breach';
     else if (manual.length > 0) outcome = 'human-required';
 
+    const evidenceIds = [
+      ...new Set(
+        verdicts
+          .map(verdict => verdict.evidenceId)
+          .filter((id): id is string => id !== undefined)
+      )
+    ];
+
     return {
       gate: 'verification',
       outcome,
@@ -182,6 +190,7 @@ export class VerificationService implements IVerificationService {
         ...failing.map(verdict => `failed: ${verdict.criterion}`),
         ...manual.map(verdict => `human required: ${verdict.criterion}`)
       ],
+      evidenceIds,
       recordedAt: new Date().toISOString()
     };
   }

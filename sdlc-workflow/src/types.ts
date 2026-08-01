@@ -85,6 +85,8 @@ export interface TaskRunResult {
   branch?: string;
   worktreePath?: string;
   detail?: string;
+  /** Implementation-step digest the attempt ran against (T-09). */
+  inputsDigest?: string;
   recordedAt: string; // ISO timestamp
 }
 
@@ -98,11 +100,20 @@ export type GateOutcome = 'pass' | 'breach' | 'blocked' | 'human-required';
  */
 export interface GateVerdict {
   gate: string; // e.g. 'envelope', 'reviewer', 'phase', 'intake'
+  /** Task this verdict was recorded for; absent for run-level verdicts. */
+  taskId?: string;
   outcome: GateOutcome;
   wouldEscalate: boolean;
   reasons: string[];
   /** Full agent transcript for agent-driven gates (T-05). */
   transcript?: string;
+  /**
+   * SHA-256 of the gate's inputs (T-08/T-09): lets gate policy learn from
+   * track record and lets resume detect unchanged inputs.
+   */
+  inputsDigest?: string;
+  /** Evidence artifact IDs backing this verdict (T-04/T-08). */
+  evidenceIds?: string[];
   recordedAt: string; // ISO timestamp
 }
 
@@ -174,6 +185,26 @@ export interface CriterionVerdict {
   recordedAt: string; // ISO timestamp
 }
 
+/**
+ * One completed step in the T-09 resumable step graph. The key it is stored
+ * under is `<name>:<taskId>:<inputsDigest>` — a step re-executes only when
+ * its inputs change or it never completed. Kill-resume at any boundary is
+ * safe because completion is recorded after the side effect.
+ */
+export interface StepResult {
+  name: string; // e.g. 'implementation', 'envelope', 'digest-post'
+  taskId: string;
+  inputsDigest: string;
+  /** Cached gate verdict for gate steps, reused verbatim on resume. */
+  verdict?: GateVerdict;
+  /** Small step-specific payload (e.g. sandbox health report). */
+  detail?: string;
+  completedAt: string; // ISO timestamp
+}
+
+export const stepKey = (name: string, taskId: string, digest: string): string =>
+  `${name}:${taskId}:${digest}`;
+
 export interface RunState {
   runId: string;
   specId: string;
@@ -183,12 +214,45 @@ export interface RunState {
   verdicts: GateVerdict[];
   exceptions: ExceptionEntry[];
   criterionVerdicts: CriterionVerdict[];
+  /** T-09 step graph: cached step results keyed by name:taskId:inputsDigest. */
+  steps: Record<string, StepResult>;
   sandbox?: SandboxRecord;
+  /** Merged SHA recorded when a human approves the merge (T-08). */
+  mergedSha?: string;
   /** Cumulative model-token spend in thousands, metered where available. */
   tokenSpendK: number;
   /** Per-task count of failing CI fix attempts (Phase-3 machinery records). */
   ciFixAttempts: Record<string, number>;
   updatedAt: string; // ISO timestamp
+}
+
+// --- T-08 Chronicle artifact schemas (versioned from day one) ---
+
+export type ArtifactSchema =
+  | 'sdlc.spec.v1'
+  | 'sdlc.task-result.v1'
+  | 'sdlc.verdict.v1'
+  | 'sdlc.exceptions.v1'
+  | 'sdlc.digest.v1'
+  | 'sdlc.merge.v1';
+
+export interface ChronicleArtifact {
+  schema: ArtifactSchema;
+  runId: string;
+  specId: string;
+  recordedAt: string; // ISO timestamp
+  payload: unknown;
+}
+
+/** Payload of an `sdlc.verdict.v1` artifact — the gate-policy contract. */
+export interface VerdictArtifactPayload {
+  gate: string;
+  inputsDigest: string;
+  outcome: GateOutcome;
+  wouldEscalate: boolean;
+  reasons: string[];
+  evidenceRefs: string[]; // resolvable evidence artifact IDs
+  taskId: string;
 }
 
 export interface DiffStat {
@@ -208,6 +272,7 @@ export type WorkflowErrorCode =
   | 'INVALID_BACKEND'
   | 'SPEC_MALFORMED'
   | 'CONTRACT_MALFORMED'
+  | 'RUN_NOT_FOUND'
   | 'GIT_FAILED';
 
 export class WorkflowError extends Error {

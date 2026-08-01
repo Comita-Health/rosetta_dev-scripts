@@ -7,7 +7,7 @@ date: 2026-07-31
 owner: Russ Watson
 envelope:
   allowedPaths: ['sdlc-workflow/**', 'specs/PRD-0011/**']
-  forbiddenSurfaces: ["migrations", "auth", "ci-config", "production-deploy", "personal-queue-schema"]
+  forbiddenSurfaces: ['migrations', 'auth', 'ci-config', 'production-deploy', 'personal-queue-schema']
   maxDiffLines: 2500
   budgetK: 200
 ---
@@ -108,6 +108,11 @@ A reviewer agent with no shared context with the implementation agent reviews th
 
 Combine the four machine gates — CI status, verification verdict (T-04), reviewer concurrence (T-05), envelope compliance (T-02) — into a single phase-gate verdict recorded in shadow mode; human approval remains the only actual advance mechanism this phase. The exception ledger records every would-escalate trigger from S-02 (reviewer disagreement, third failing CI fix attempt, envelope breach, budget exhaustion) with enough context for later human triage. Track token spend against the budget supplied at invocation so exhaustion is a real computed trigger, not a stub.
 
+> **Amendment (2026-07-31):** the CI input to the aggregator is the real
+> gate — GitHub check runs for the task branch head SHA, queried through
+> the operator's `gh` session. An unpushed task branch (the shadow-mode
+> default) records an honest `blocked` CI verdict rather than a stub.
+
 ### Acceptance criteria
 
 - [x] test: the aggregate gate verdict is green only when CI is green, the verification verdict is green, the reviewer concurs, and the envelope check passes; each failing combination yields red with the failing gates enumerated
@@ -125,9 +130,9 @@ Post a digest to the PRD-0007 personal queue at the phase boundary summarizing t
 
 ### Acceptance criteria
 
-- [ ] test: completing the single-task loop posts exactly one digest to the personal queue containing the task ID, aggregate gate verdict, evidence artifact links, and any exception-ledger entries
-- [ ] test: digest posting uses the existing PRD-0007 queue API and the queue consumer contract test passes unchanged
-- [ ] test: no veto-handling or revert code path is invoked from digest posting in this phase, asserted by exercising the digest flow with a simulated veto response
+- [x] test: completing the single-task loop posts exactly one digest to the personal queue containing the task ID, aggregate gate verdict, evidence artifact links, and any exception-ledger entries
+- [x] test: digest posting uses the existing PRD-0007 queue API and the queue consumer contract test passes unchanged
+- [x] test: no veto-handling or revert code path is invoked from digest posting in this phase, asserted by exercising the digest flow with a simulated veto response
 
 ## Task T-08: Chronicle artifact commits for run outputs
 
@@ -139,9 +144,9 @@ Commit the run's structured outputs to the Chronicle: the consumed implementatio
 
 ### Acceptance criteria
 
-- [ ] test: a completed single-task run commits Chronicle artifacts for the spec, the per-task result, every gate verdict, and the exception ledger, each validating against a versioned artifact schema
-- [ ] test: a human-approved merge records the merged SHA in the run's Chronicle artifact
-- [ ] test: every per-phase verdict artifact includes gate identity, an inputs digest, the outcome, and resolvable evidence references, verified by a consumer-style test that reads verdicts back through the gate-policy query interface
+- [x] test: a completed single-task run commits Chronicle artifacts for the spec, the per-task result, every gate verdict, and the exception ledger, each validating against a versioned artifact schema
+- [x] test: a human-approved merge records the merged SHA in the run's Chronicle artifact
+- [x] test: every per-phase verdict artifact includes gate identity, an inputs digest, the outcome, and resolvable evidence references, verified by a consumer-style test that reads verdicts back through the gate-policy query interface
 
 ## Task T-09: Resumable run state with cached step results
 
@@ -153,7 +158,7 @@ Persist run state as a step graph where each step's result is cached under a key
 
 ### Acceptance criteria
 
-- [ ] test: killing a run after the implementation step and resuming reuses the cached implementation-agent result and worktree branch without re-invoking the agent
-- [ ] test: modifying a task's spec content between runs invalidates only that task's cached steps, and unaffected cached results are still reused
-- [ ] test: a kill-resume cycle at each step boundary in the single-task loop produces no duplicate sandbox deployments and no duplicate digest posts
+- [x] test: killing a run after the implementation step and resuming reuses the cached implementation-agent result and worktree branch without re-invoking the agent
+- [x] test: modifying a task's spec content between runs invalidates only that task's cached steps, and unaffected cached results are still reused
+- [x] test: a kill-resume cycle at each step boundary in the single-task loop produces no duplicate sandbox deployments and no duplicate digest posts
 - [ ] agent: an operator agent kills a live run mid-verification, resumes it, and confirms via the run-status interface that the run completes with only the interrupted and downstream steps re-executed

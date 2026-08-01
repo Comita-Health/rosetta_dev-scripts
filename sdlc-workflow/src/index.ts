@@ -26,6 +26,18 @@ import {
   ShellCommandRepository,
   IShellCommandRepository
 } from './repositories/shell-command.repository';
+import {
+  QueueRepository,
+  IQueueRepository
+} from './repositories/queue.repository';
+import {
+  ChronicleArtifactRepository,
+  IChronicleArtifactRepository
+} from './repositories/chronicle-artifact.repository';
+import {
+  CiStatusRepository,
+  ICiStatusRepository
+} from './repositories/ci-status.repository';
 import { CursorCliRepository } from './repositories/cursor-cli.repository';
 import { IModelRepository } from './repositories/model.repository';
 import {
@@ -79,6 +91,16 @@ import {
   SpecSynthesisService,
   ISpecSynthesisService
 } from './services/spec-synthesis.service';
+import { CiGateService, ICiGateService } from './services/ci-gate.service';
+import { DigestService, IDigestService } from './services/digest.service';
+import {
+  ChronicleCommitService,
+  IChronicleCommitService
+} from './services/chronicle-commit.service';
+import {
+  GatePolicyQueryService,
+  IGatePolicyQueryService
+} from './services/gate-policy-query.service';
 import { WORKFLOW_TOKENS } from './tokens';
 import { WorkflowError } from './types';
 import { resolveInferenceBackend } from './utils/backend-select';
@@ -151,6 +173,25 @@ container
 container
   .bind<IAggregatorService>(WORKFLOW_TOKENS.AggregatorService)
   .to(AggregatorService);
+container
+  .bind<IQueueRepository>(WORKFLOW_TOKENS.QueueRepository)
+  .to(QueueRepository);
+container
+  .bind<IChronicleArtifactRepository>(
+    WORKFLOW_TOKENS.ChronicleArtifactRepository
+  )
+  .to(ChronicleArtifactRepository);
+container
+  .bind<ICiStatusRepository>(WORKFLOW_TOKENS.CiStatusRepository)
+  .to(CiStatusRepository);
+container.bind<ICiGateService>(WORKFLOW_TOKENS.CiGateService).to(CiGateService);
+container.bind<IDigestService>(WORKFLOW_TOKENS.DigestService).to(DigestService);
+container
+  .bind<IChronicleCommitService>(WORKFLOW_TOKENS.ChronicleCommitService)
+  .to(ChronicleCommitService);
+container
+  .bind<IGatePolicyQueryService>(WORKFLOW_TOKENS.GatePolicyQueryService)
+  .to(GatePolicyQueryService);
 container.bind<IRunHandler>(WORKFLOW_TOKENS.RunHandler).to(RunHandler);
 
 yargs(hideBin(process.argv))
@@ -233,6 +274,11 @@ yargs(hideBin(process.argv))
           type: 'string',
           default: path.join(os.homedir(), '.rosetta', 'sdlc-runs'),
           describe: 'Directory holding run state and task worktrees'
+        })
+        .option('chronicle-repo', {
+          type: 'string',
+          describe:
+            'Personal Chronicle ledger repo — enables the T-07 queue digest and T-08 artifact commits'
         }),
     async argv => {
       const handler = container.get<IRunHandler>(WORKFLOW_TOKENS.RunHandler);
@@ -246,11 +292,59 @@ yargs(hideBin(process.argv))
           specPath: argv.spec,
           repoPath: argv.repo,
           runId,
-          runsDir: argv['runs-dir']
+          runsDir: argv['runs-dir'],
+          chronicleRepo: argv['chronicle-repo']
         });
         if (result.outcome === 'blocked' || result.outcome === 'failed') {
           process.exit(1);
         }
+      } catch (err) {
+        if (err instanceof WorkflowError) {
+          console.error(chalk.red(`\n✗ ${err.code}: ${err.message}`));
+          for (const detail of err.details) {
+            console.error(chalk.red(`  - ${detail}`));
+          }
+        } else {
+          console.error(chalk.red(`\n✗ ${err}`));
+        }
+        process.exit(1);
+      }
+    }
+  )
+  .command(
+    'record-merge',
+    'Record a human-approved merge in the run Chronicle artifact (T-08)',
+    y =>
+      y
+        .option('run-id', {
+          type: 'string',
+          demandOption: true,
+          describe: 'Run identifier the merge belongs to'
+        })
+        .option('sha', {
+          type: 'string',
+          demandOption: true,
+          describe: 'Merged commit SHA on the default branch'
+        })
+        .option('chronicle-repo', {
+          type: 'string',
+          demandOption: true,
+          describe: 'Personal Chronicle ledger repo'
+        })
+        .option('runs-dir', {
+          type: 'string',
+          default: path.join(os.homedir(), '.rosetta', 'sdlc-runs'),
+          describe: 'Directory holding run state'
+        }),
+    async argv => {
+      const handler = container.get<IRunHandler>(WORKFLOW_TOKENS.RunHandler);
+      try {
+        await handler.recordMerge({
+          chronicleRepo: argv['chronicle-repo'],
+          runsDir: argv['runs-dir'],
+          runId: argv['run-id'],
+          mergedSha: argv.sha
+        });
       } catch (err) {
         if (err instanceof WorkflowError) {
           console.error(chalk.red(`\n✗ ${err.code}: ${err.message}`));

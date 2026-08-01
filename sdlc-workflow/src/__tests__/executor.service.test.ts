@@ -8,10 +8,11 @@ import type { ISpecDocRepository } from '../repositories/spec-doc.repository';
 import {
   ExecutorService,
   IExecutorService,
+  implementationDigest,
   taskBranch
 } from '../services/executor.service';
 import { WORKFLOW_TOKENS } from '../tokens';
-import { RunState, SpecDocument } from '../types';
+import { RunState, SpecDocument, stepKey } from '../types';
 import { makeEnvelope, makeTask } from './fixtures';
 
 const makeSpec = (overrides: Partial<SpecDocument> = {}): SpecDocument => ({
@@ -55,7 +56,9 @@ describe('ExecutorService (T-01)', () => {
       recordTaskResult: jest.fn(),
       recordExceptions: jest.fn(),
       recordSandbox: jest.fn(),
-      recordCriteria: jest.fn()
+      recordCriteria: jest.fn(),
+      recordStep: jest.fn(),
+      recordMergedSha: jest.fn()
     };
 
     const container = new Container();
@@ -122,6 +125,7 @@ describe('ExecutorService (T-01)', () => {
       verdicts: [],
       exceptions: [],
       criterionVerdicts: [],
+      steps: {},
       tokenSpendK: 0,
       ciFixAttempts: {},
       updatedAt: 'x'
@@ -144,6 +148,7 @@ describe('ExecutorService (T-01)', () => {
       verdicts: [],
       exceptions: [],
       criterionVerdicts: [],
+      steps: {},
       tokenSpendK: 0,
       ciFixAttempts: {},
       updatedAt: 'x'
@@ -203,5 +208,183 @@ describe('ExecutorService (T-01)', () => {
 
     expect(outcome.kind).toBe('failed');
     expect(outcome.detail).toBe('spawn refused');
+  });
+
+  describe('T-09 step cache', () => {
+    const baseState = (): RunState => ({
+      runId: 'run-1',
+      specId: 'SPEC-PRD-0099-P2',
+      specPath: INPUT.specPath,
+      baseSha: 'base-sha',
+      taskResults: {},
+      verdicts: [],
+      exceptions: [],
+      criterionVerdicts: [],
+      steps: {},
+      tokenSpendK: 0,
+      ciFixAttempts: {},
+      updatedAt: 'x'
+    });
+
+    it('records the implementation step on success', async () => {
+      await executor.executeNext(INPUT);
+
+      const digest = implementationDigest(makeSpec().tasks[0], 'base-sha');
+      expect(stateMock.recordStep).toHaveBeenCalledWith(
+        '/runs',
+        expect.anything(),
+        stepKey('implementation', 'T-01', digest),
+        expect.objectContaining({
+          name: 'implementation',
+          taskId: 'T-01',
+          inputsDigest: digest
+        })
+      );
+    });
+
+    it('does not record a step for a failed implementation', async () => {
+      agentRun.mockResolvedValue({ ok: false, output: 'boom' });
+
+      await executor.executeNext(INPUT);
+
+      expect(stateMock.recordStep).not.toHaveBeenCalled();
+    });
+
+    it('reuses a cached implementation without re-invoking the agent (kill-resume)', async () => {
+      const task = makeSpec().tasks[0];
+      const digest = implementationDigest(task, 'base-sha');
+      const state = baseState();
+      state.taskResults['T-01'] = {
+        taskId: 'T-01',
+        status: 'completed',
+        branch: 'sdlc/run-1/T-01',
+        inputsDigest: digest,
+        recordedAt: 'x'
+      };
+      state.steps[stepKey('implementation', 'T-01', digest)] = {
+        name: 'implementation',
+        taskId: 'T-01',
+        inputsDigest: digest,
+        completedAt: 'x'
+      };
+      stateMock.load.mockReturnValue(state);
+
+      const outcome = await executor.executeNext(INPUT);
+
+      expect(outcome.kind).toBe('completed');
+      expect(outcome.cached).toBe(true);
+      expect(outcome.task?.id).toBe('T-01');
+      expect(outcome.branch).toBe('sdlc/run-1/T-01');
+      expect(agentRun).not.toHaveBeenCalled();
+      expect(gitMock.addWorktree).not.toHaveBeenCalled();
+    });
+
+    it('skips a task whose phase verdict landed and picks the next one', async () => {
+      const task = makeSpec().tasks[0];
+      const digest = implementationDigest(task, 'base-sha');
+      const state = baseState();
+      state.taskResults['T-01'] = {
+        taskId: 'T-01',
+        status: 'completed',
+        branch: 'sdlc/run-1/T-01',
+        inputsDigest: digest,
+        recordedAt: 'x'
+      };
+      state.steps[stepKey('implementation', 'T-01', digest)] = {
+        name: 'implementation',
+        taskId: 'T-01',
+        inputsDigest: digest,
+        completedAt: 'x'
+      };
+      state.steps[stepKey('phase', 'T-01', 'phase-digest')] = {
+        name: 'phase',
+        taskId: 'T-01',
+        inputsDigest: 'phase-digest',
+        completedAt: 'x'
+      };
+      stateMock.load.mockReturnValue(state);
+
+      const outcome = await executor.executeNext(INPUT);
+
+      expect(outcome.task?.id).toBe('T-02');
+      expect(agentRun).toHaveBeenCalledTimes(1);
+    });
+
+    it('re-runs a task whose spec content changed, leaving other tasks cached (invalidation)', async () => {
+      const state = baseState();
+      // T-01 completed under *old* content: its recorded digest no longer
+      // matches the digest of the current task content.
+      state.taskResults['T-01'] = {
+        taskId: 'T-01',
+        status: 'completed',
+        branch: 'sdlc/run-1/T-01',
+        inputsDigest: 'old-content-digest',
+        recordedAt: 'x'
+      };
+      state.steps[stepKey('implementation', 'T-01', 'old-content-digest')] = {
+        name: 'implementation',
+        taskId: 'T-01',
+        inputsDigest: 'old-content-digest',
+        completedAt: 'x'
+      };
+      state.steps[stepKey('phase', 'T-01', 'old-phase-digest')] = {
+        name: 'phase',
+        taskId: 'T-01',
+        inputsDigest: 'old-phase-digest',
+        completedAt: 'x'
+      };
+      // A cached step belonging to another task must survive untouched.
+      const otherKey = stepKey('implementation', 'T-02', 'other-digest');
+      state.steps[otherKey] = {
+        name: 'implementation',
+        taskId: 'T-02',
+        inputsDigest: 'other-digest',
+        completedAt: 'x'
+      };
+      stateMock.load.mockReturnValue(state);
+
+      const outcome = await executor.executeNext(INPUT);
+
+      // The edited task is re-selected and the agent re-invoked.
+      expect(outcome.task?.id).toBe('T-01');
+      expect(outcome.cached).toBe(false);
+      expect(agentRun).toHaveBeenCalledTimes(1);
+      // Only T-01's chain is invalidated: T-02's cached step is untouched.
+      expect(state.steps[otherKey]).toBeDefined();
+    });
+
+    it('does not retry a failed attempt at unchanged content', async () => {
+      const spec = makeSpec();
+      const digest = implementationDigest(spec.tasks[0], 'base-sha');
+      const state = baseState();
+      state.taskResults['T-01'] = {
+        taskId: 'T-01',
+        status: 'failed',
+        inputsDigest: digest,
+        recordedAt: 'x'
+      };
+      stateMock.load.mockReturnValue(state);
+
+      const outcome = await executor.executeNext(INPUT);
+
+      expect(outcome.kind).toBe('no-ready-task');
+      expect(agentRun).not.toHaveBeenCalled();
+    });
+
+    it('retries a failed attempt once the content changed', async () => {
+      const state = baseState();
+      state.taskResults['T-01'] = {
+        taskId: 'T-01',
+        status: 'failed',
+        inputsDigest: 'old-content-digest',
+        recordedAt: 'x'
+      };
+      stateMock.load.mockReturnValue(state);
+
+      const outcome = await executor.executeNext(INPUT);
+
+      expect(outcome.task?.id).toBe('T-01');
+      expect(agentRun).toHaveBeenCalledTimes(1);
+    });
   });
 });
