@@ -64,6 +64,61 @@ export interface SynthesizedSpec {
   markdown: string;
 }
 
+// SPEC-PRD-0011-P2 contracts
+export type SpecStatus = 'Draft' | 'Approved' | 'Done' | 'Superseded';
+
+/** A full implementation spec parsed back from its ADR-0008 Markdown. */
+export interface SpecDocument {
+  id: string; // e.g. 'SPEC-PRD-0011-P2'
+  prdId: string;
+  phase: number;
+  status: SpecStatus;
+  envelope: Envelope;
+  tasks: SpecTask[];
+}
+
+export type TaskRunStatus = 'completed' | 'failed' | 'blocked';
+
+export interface TaskRunResult {
+  taskId: string;
+  status: TaskRunStatus;
+  branch?: string;
+  worktreePath?: string;
+  detail?: string;
+  recordedAt: string; // ISO timestamp
+}
+
+export type GateOutcome = 'pass' | 'breach' | 'blocked';
+
+/**
+ * A machine-gate verdict. Phase 2 runs every gate in shadow mode: the
+ * verdict is computed and persisted (with `wouldEscalate` when it would
+ * have blocked) but never enforced — human approval is the only advance
+ * mechanism.
+ */
+export interface GateVerdict {
+  gate: string; // e.g. 'envelope', 'intake'
+  outcome: GateOutcome;
+  wouldEscalate: boolean;
+  reasons: string[];
+  recordedAt: string; // ISO timestamp
+}
+
+export interface RunState {
+  runId: string;
+  specId: string;
+  specPath: string;
+  baseSha: string;
+  taskResults: Record<string, TaskRunResult>;
+  verdicts: GateVerdict[];
+  updatedAt: string; // ISO timestamp
+}
+
+export interface DiffStat {
+  files: Array<{ path: string; lines: number }>;
+  totalLines: number;
+}
+
 export type WorkflowErrorCode =
   | 'PRD_NOT_FOUND'
   | 'PRD_MALFORMED'
@@ -73,7 +128,9 @@ export type WorkflowErrorCode =
   | 'SPEC_INVALID'
   | 'SPEC_EXISTS'
   | 'MISSING_API_KEY'
-  | 'INVALID_BACKEND';
+  | 'INVALID_BACKEND'
+  | 'SPEC_MALFORMED'
+  | 'GIT_FAILED';
 
 export class WorkflowError extends Error {
   constructor(
