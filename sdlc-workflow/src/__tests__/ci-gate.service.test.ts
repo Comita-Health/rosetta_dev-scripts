@@ -39,6 +39,9 @@ describe('CiGateService (P3 T-03 live monitor + bounded fix cycle)', () => {
   let agentRun: jest.Mock;
   let headSha: jest.Mock;
   let push: jest.Mock;
+  let status: jest.Mock;
+  let stageAll: jest.Mock;
+  let commit: jest.Mock;
   let recordCiFixAttempt: jest.Mock;
 
   const input = () => ({
@@ -63,6 +66,9 @@ describe('CiGateService (P3 T-03 live monitor + bounded fix cycle)', () => {
     let fixCount = 0;
     headSha = jest.fn().mockImplementation(() => `fixed-sha-${++fixCount}`);
     push = jest.fn();
+    status = jest.fn().mockReturnValue('');
+    stageAll = jest.fn();
+    commit = jest.fn();
     recordCiFixAttempt = jest
       .fn()
       .mockImplementation((_d, s: RunState, taskId: string) => {
@@ -82,14 +88,16 @@ describe('CiGateService (P3 T-03 live monitor + bounded fix cycle)', () => {
       .toConstantValue({
         headSha,
         push,
-        status: jest.fn(),
+        status,
         addWorktree: jest.fn(),
         diffStat: jest.fn(),
         diffText: jest.fn(),
         fetch: jest.fn(),
         resolveSha: jest.fn(),
         defaultBranch: jest.fn(),
-        revertMerge: jest.fn()
+        revertMerge: jest.fn(),
+        stageAll,
+        commit
       });
     container
       .bind<IRunStateRepository>(WORKFLOW_TOKENS.RunStateRepository)
@@ -247,5 +255,45 @@ describe('CiGateService (P3 T-03 live monitor + bounded fix cycle)', () => {
     expect(push).not.toHaveBeenCalled();
     expect(verdict.outcome).toBe('breach');
     expect(verdict.transcript).toContain('produced no commit');
+  });
+
+  it('engine-commits a dirty CI fix worktree when the agent left no tip advance (#41)', async () => {
+    // First poll red at abc123; after salvage commit, new sha goes green.
+    checkRuns.mockReturnValueOnce(red).mockReturnValueOnce(green);
+    let committed = false;
+    headSha.mockImplementation(() =>
+      committed ? 'fixed-by-engine' : 'abc123'
+    );
+    status.mockReturnValue(' M src/a.ts\n');
+    commit.mockImplementation(() => {
+      committed = true;
+    });
+
+    const verdict = await gate.monitor(input());
+
+    expect(stageAll).toHaveBeenCalledWith('/runs/run-1/worktrees/T-01');
+    expect(commit).toHaveBeenCalledWith(
+      '/runs/run-1/worktrees/T-01',
+      expect.stringMatching(/^fix\(T-01\):/),
+      { noVerify: true, signOff: true }
+    );
+    expect(push).toHaveBeenCalled();
+    expect(verdict.outcome).toBe('pass');
+    expect(verdict.transcript).toContain('engine committed dirty CI fix');
+  });
+
+  it('records engine commit failure for a dirty CI fix without advancing (#41)', async () => {
+    checkRuns.mockReturnValue(red);
+    headSha.mockReturnValue('abc123');
+    status.mockReturnValue(' M src/a.ts\n');
+    commit.mockImplementation(() => {
+      throw new Error('hook exploded');
+    });
+
+    const verdict = await gate.monitor(input());
+
+    expect(verdict.outcome).toBe('breach');
+    expect(verdict.transcript).toContain('engine commit failed');
+    expect(push).not.toHaveBeenCalled();
   });
 });

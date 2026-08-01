@@ -198,10 +198,33 @@ export class CiGateService implements ICiGateService {
         continue; // consumes the attempt; re-poll the unchanged sha
       }
 
-      const fixedSha = this._gitRepo.headSha(input.worktreePath);
+      let fixedSha = this._gitRepo.headSha(input.worktreePath);
       if (fixedSha === sha) {
-        log.push(`fix agent produced no commit (attempt ${attempt})`);
-        continue; // attempt consumed; same sha will fail again or exhaust
+        // #41: salvage a dirty worktree when husky blocked the agent commit.
+        const dirty = this._gitRepo.status(input.worktreePath).trim();
+        if (dirty.length > 0) {
+          try {
+            this._gitRepo.stageAll(input.worktreePath);
+            this._gitRepo.commit(
+              input.worktreePath,
+              `fix(${input.task.id}): CI fix attempt ${attempt}`,
+              { noVerify: true, signOff: true }
+            );
+            fixedSha = this._gitRepo.headSha(input.worktreePath);
+            log.push(
+              `engine committed dirty CI fix (--no-verify) on attempt ${attempt}`
+            );
+          } catch (err) {
+            const reason = err instanceof Error ? err.message : String(err);
+            log.push(
+              `fix agent produced no commit (attempt ${attempt}); engine commit failed: ${reason.slice(0, 200)}`
+            );
+            continue;
+          }
+        } else {
+          log.push(`fix agent produced no commit (attempt ${attempt})`);
+          continue; // attempt consumed; same sha will fail again or exhaust
+        }
       }
       this._gitRepo.push(input.worktreePath, input.branch);
       log.push(`fix pushed: ${sha} -> ${fixedSha}`);

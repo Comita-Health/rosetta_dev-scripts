@@ -65,6 +65,8 @@ bun run dev -- run --spec ../specs/PRD-0011/phase-3-spec.md --repo .. \
 #                     digest and T-08 artifact commits (skipped when absent)
 #   --max-parallel    concurrent implementation agents per wave (default: 3)
 #   --shadow          record gate verdicts but never merge (calibration mode)
+#   --heartbeat       emit structured progress every N seconds (default: 30;
+#                     0 disables). Also appends <runsDir>/<runId>/heartbeat.jsonl
 
 # Record a human-approved merge in the run's Chronicle artifact (T-08);
 # --task marks that task merged, which unblocks its dependents (P3 T-01)
@@ -89,6 +91,28 @@ gate evaluates the task branch diff against the spec's blast-radius envelope
 P3 T-04 the gates enforce by default: green across the board merges the
 task PR automatically; any red gate blocks and escalates (`--shadow`
 disables enforcement for calibration).
+
+### Engine branches and target-repo hooks (#41)
+
+Task branches are `sdlc/<run-id>/<task-id>`. If the target repo's husky
+pre-commit only allows `f/*` / `b/*`, agent `git commit -s` fails. The
+engine therefore:
+
+1. prompts agents to use `git commit --no-verify -s`, and
+2. **owns a salvage commit** when the agent exits with a dirty worktree on
+   the tip (`git add -A && git commit --no-verify -s`).
+
+Target repos may alternatively allow `sdlc/*` in their branch check; either
+path unblocks multi-task runs. CI still validates the PR.
+
+### Progress heartbeat (#39)
+
+`run --heartbeat <seconds>` (default `30`) prints
+`[heartbeat] {json}` lines with `runId`, `taskId`, `step`, `stepElapsedMs`,
+`agentAlive`, `worktreeDirty`, `worktreeHead`, and `lastLine`, and appends
+the same records to `<runsDir>/<runId>/heartbeat.jsonl`. Pass `--heartbeat 0`
+to disable. Prefer OS `nohup` for long detached runs (see #38 / #43 F2) —
+do not rely on IDE harness backgrounding.
 
 ## Repo-owned `.sdlc/` contracts
 
@@ -122,13 +146,17 @@ itself `blocked` (sandbox) or degrades the criteria to `human-required`
 
 Every pipeline step — implementation, each gate, the digest post, the
 Chronicle commit — is cached in run state under a key derived from a
-SHA-256 **inputs digest** rooted at `{task content, base SHA}` and chained
-through the worktree head SHA. Kill the run at any boundary and rerun the
-same command: cache hits are replayed (agents are not re-invoked, the
-sandbox is not redeployed, digests are not re-posted), and only steps whose
-inputs changed or never completed execute. Editing a task's spec content
-changes its digest and invalidates exactly that task's chain. `status`
-shows what is cached versus what would re-execute.
+SHA-256 **inputs digest** rooted at `{task content, integration tip}` and
+chained through the worktree head SHA. Wave-1 tasks use the frozen run
+`baseSha`; after `record-merge --task`, dependents branch from (and
+envelope/reviewer diff against) the post-merge tip — see
+[`docs/merged-tip-baseRef.md`](./docs/merged-tip-baseRef.md). Kill the run
+at any boundary and rerun the same command: cache hits are replayed
+(agents are not re-invoked, the sandbox is not redeployed, digests are not
+re-posted), and only steps whose inputs changed or never completed execute.
+Editing a task's spec content changes its digest and invalidates exactly
+that task's chain. `status` shows what is cached versus what would
+re-execute.
 
 This repo dogfoods the pipeline against itself:
 [`SPEC-LIVE-VALIDATION-P1`](../specs/PRD-0011/live-validation-spec.md) is a

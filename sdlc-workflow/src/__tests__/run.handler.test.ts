@@ -19,6 +19,7 @@ import type {
   IExecutorService,
   PoolOutcome
 } from '../services/executor.service';
+import type { IHeartbeatService } from '../services/heartbeat.service';
 import type { IReviewerGateService } from '../services/reviewer-gate.service';
 import type { ISandboxDeployService } from '../services/sandbox-deploy.service';
 import type { IVerificationService } from '../services/verification.service';
@@ -109,6 +110,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
     branch: 'sdlc/run-1/T-01',
     cached: false,
     implDigest: 'impl-digest',
+    baseSha: 'base-sha',
     ...overrides
   });
 
@@ -299,7 +301,17 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
         fetch: jest.fn(),
         resolveSha: jest.fn().mockReturnValue('main-sha'),
         defaultBranch: jest.fn().mockReturnValue('main'),
-        revertMerge
+        revertMerge,
+        stageAll: jest.fn(),
+        commit: jest.fn()
+      });
+    container
+      .bind<IHeartbeatService>(WORKFLOW_TOKENS.HeartbeatService)
+      .toConstantValue({
+        start: jest.fn(),
+        setContext: jest.fn(),
+        tick: jest.fn(),
+        stop: jest.fn()
       });
     container
       .bind<IRunStateRepository>(WORKFLOW_TOKENS.RunStateRepository)
@@ -547,6 +559,42 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
     expect(aggregate).toHaveBeenCalledTimes(2);
     // 6 verdicts per task.
     expect(appendVerdict).toHaveBeenCalledTimes(12);
+  });
+
+  it('envelope and reviewer diff against the task integration tip, not frozen base (#42 F1)', async () => {
+    executeReady.mockImplementation(async () =>
+      executedPool([
+        taskOutcome({
+          task: makeTask({ id: 'T-04', dependsOn: ['T-01'] }),
+          branch: 'sdlc/run-1/T-04',
+          baseSha: 'integration-tip'
+        })
+      ])
+    );
+    state.taskResults['T-04'] = {
+      taskId: 'T-04',
+      status: 'completed',
+      branch: 'sdlc/run-1/T-04',
+      recordedAt: 'x'
+    };
+
+    await handler.runTask(INPUT);
+
+    expect(evaluate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseRef: 'integration-tip',
+        headRef: 'sdlc/run-1/T-04'
+      })
+    );
+    expect(review).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseRef: 'integration-tip',
+        headRef: 'sdlc/run-1/T-04'
+      })
+    );
+    expect(evaluate).not.toHaveBeenCalledWith(
+      expect.objectContaining({ baseRef: 'base-sha' })
+    );
   });
 
   it('pushes the task branch and opens its PR before the gates, recording the URL (P3 T-02)', async () => {

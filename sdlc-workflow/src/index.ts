@@ -113,6 +113,10 @@ import {
   EscalationService,
   IEscalationService
 } from './services/escalation.service';
+import {
+  HeartbeatService,
+  IHeartbeatService
+} from './services/heartbeat.service';
 import { WORKFLOW_TOKENS } from './tokens';
 import { WorkflowError } from './types';
 import { resolveInferenceBackend } from './utils/backend-select';
@@ -213,6 +217,9 @@ container
 container
   .bind<IEscalationService>(WORKFLOW_TOKENS.EscalationService)
   .to(EscalationService);
+container
+  .bind<IHeartbeatService>(WORKFLOW_TOKENS.HeartbeatService)
+  .to(HeartbeatService);
 container.bind<IRunHandler>(WORKFLOW_TOKENS.RunHandler).to(RunHandler);
 
 yargs(hideBin(process.argv))
@@ -312,6 +319,12 @@ yargs(hideBin(process.argv))
           default: false,
           describe:
             'Calibration mode: record gate verdicts but never merge (P3 T-04)'
+        })
+        .option('heartbeat', {
+          type: 'number',
+          default: 30,
+          describe:
+            'Emit structured progress lines every N seconds (0 disables) — #39'
         }),
     async argv => {
       const handler = container.get<IRunHandler>(WORKFLOW_TOKENS.RunHandler);
@@ -328,7 +341,8 @@ yargs(hideBin(process.argv))
           runsDir: argv['runs-dir'],
           chronicleRepo: argv['chronicle-repo'],
           maxParallel: argv['max-parallel'],
-          shadow: argv.shadow
+          shadow: argv.shadow,
+          heartbeatSeconds: argv.heartbeat
         });
         const anyFailed = result.tasks.some(task => task.kind === 'failed');
         if (result.outcome === 'blocked' || anyFailed) {
