@@ -1,7 +1,14 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { injectable } from 'inversify';
 import path from 'path';
-import { ExceptionEntry, GateVerdict, RunState, TaskRunResult } from '../types';
+import {
+  CriterionVerdict,
+  ExceptionEntry,
+  GateVerdict,
+  RunState,
+  SandboxRecord,
+  TaskRunResult
+} from '../types';
 
 /**
  * Persists run state as JSON under `<runsDir>/<runId>/state.json` so a
@@ -22,6 +29,12 @@ export interface IRunStateRepository {
     state: RunState,
     entries: ExceptionEntry[]
   ): void;
+  recordSandbox(runsDir: string, state: RunState, record: SandboxRecord): void;
+  recordCriteria(
+    runsDir: string,
+    state: RunState,
+    verdicts: CriterionVerdict[]
+  ): void;
 }
 
 const stateFile = (runsDir: string, runId: string): string =>
@@ -35,6 +48,7 @@ export class RunStateRepository implements IRunStateRepository {
     const state = JSON.parse(readFileSync(file, 'utf-8')) as RunState;
     // Fill fields introduced after older state files were written.
     state.exceptions = state.exceptions ?? [];
+    state.criterionVerdicts = state.criterionVerdicts ?? [];
     state.tokenSpendK = state.tokenSpendK ?? 0;
     state.ciFixAttempts = state.ciFixAttempts ?? {};
     return state;
@@ -69,6 +83,21 @@ export class RunStateRepository implements IRunStateRepository {
   ): void {
     if (entries.length === 0) return;
     state.exceptions.push(...entries);
+    this.save(runsDir, state);
+  }
+
+  recordSandbox(runsDir: string, state: RunState, record: SandboxRecord): void {
+    state.sandbox = record;
+    this.save(runsDir, state);
+  }
+
+  recordCriteria(
+    runsDir: string,
+    state: RunState,
+    verdicts: CriterionVerdict[]
+  ): void {
+    if (verdicts.length === 0) return;
+    state.criterionVerdicts.push(...verdicts);
     this.save(runsDir, state);
   }
 }

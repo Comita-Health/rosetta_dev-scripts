@@ -43,6 +43,34 @@ gate evaluates the task branch diff against the spec's blast-radius envelope
 (forbidden-surface labels resolve via `<repo>/.sdlc/surfaces.json`); in this
 phase every gate verdict is shadow-mode only.
 
+## Repo-owned `.sdlc/` contracts
+
+The engine never owns deployment or test mechanics — the target repo
+declares them:
+
+```jsonc
+// .sdlc/environments.json — only the "sandbox" entry is ever read (S-04:
+// no code path can reach any other environment). Commands receive the
+// deployed SHA as SDLC_SANDBOX_SHA; health output must echo it.
+{
+  "sandbox": {
+    "deployCommand": "git push origin HEAD:build-env/dev && gh run watch --exit-status",
+    "healthCommand": "curl -fsS https://app.dev.example.com/health",
+    "timeoutMinutes": 45 // default
+  }
+}
+
+// .sdlc/verification.json — scripted check for test-tier criteria.
+{ "testCommand": "bun test" }
+
+// .sdlc/surfaces.json — forbidden-surface label → path globs.
+{ "migrations": ["**/migrations/**"] }
+```
+
+A missing contract never fails the run: the corresponding gate records
+itself `blocked` (sandbox) or degrades the criteria to `human-required`
+(verification), keeping the shadow-mode phase verdict honest.
+
 ## Environment
 
 Inference runs over one of three transports, selected automatically:
@@ -78,6 +106,13 @@ Handler / Service / Repository with InversifyJS (workspace rule):
   selection, worktree + implementation-agent execution (T-01).
 - `services/envelope-gate.service.ts` — diff vs blast-radius envelope,
   shadow-mode verdict (T-02).
+- `services/sandbox-deploy.service.ts` — task-branch build → sandbox via the
+  repo-owned contract; idempotent per SHA, health must report the deployed
+  SHA, structurally unable to reach any other environment (T-03).
+- `services/verification.service.ts` — tiered acceptance-criteria runner:
+  test-tier via the repo's scripted check, agent-tier via an independent
+  verifier agent driving the sandbox, manual-tier forces human-required;
+  every criterion verdict references its evidence artifact (T-04).
 - `services/reviewer-gate.service.ts` — independent reviewer agent over the
   diff + task + envelope only; concur/disagree with cited reasons and the
   full transcript attached (T-05).
@@ -91,10 +126,13 @@ Handler / Service / Repository with InversifyJS (workspace rule):
   schema-constrained inference with one retry (`inference`), spec file writes
   (`spec-file`), spec reads (`spec-doc`), git worktrees/diffs (`git`),
   workspace-mutating agent runs (`agent-runner`), resumable run state
-  (`run-state`), protected-surface map (`surface-map`).
+  (`run-state`), protected-surface map (`surface-map`), `.sdlc/` contracts
+  (`contract`), contract command execution (`shell-command`), evidence
+  artifacts (`evidence`).
 - `utils/` — pure functions: PRD parser, JSON-schema validator, spec renderer,
   ADR-0008 format validator, spec parser (round-trip of the renderer), glob
-  matcher, implementation-agent prompt builder.
+  matcher, criterion-tier parser, and the implementation / reviewer /
+  verifier agent prompt builders.
 
 ## Testing
 

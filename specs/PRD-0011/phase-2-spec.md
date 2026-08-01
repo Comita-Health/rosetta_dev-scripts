@@ -55,11 +55,21 @@ Evaluate the task branch diff against the spec's blast-radius envelope: allowedP
 
 The verification runner (T-04) needs a running sandbox built from the task branch, so this phase deploys pre-merge rather than post-merge; the post-merge auto-deploy and veto-triggered revert land in a later phase. Deployment must be idempotent per commit SHA so resume does not redeploy unchanged builds, and must expose a health check the verifier can poll. Hard constraint from S-04: no code path here may promote beyond the sandbox environment.
 
+> **Amendment (2026-07-31):** deployment mechanics are repo-owned, not
+> engine-owned. The repo declares its sandbox in
+> `.sdlc/environments.json` (`sandbox` → `deployCommand`,
+> `healthCommand`, `timeoutMinutes`); commands receive the deployed SHA
+> as `SDLC_SANDBOX_SHA` and the health output must echo it. The engine
+> reads **only** the `sandbox` entry — no API exists for any other
+> environment, which is how the S-04 hard constraint is enforced
+> structurally. Informed by a real adopter whose "deploy" is a branch
+> push that triggers a CDK pipeline: no built-in adapter could own that.
+
 ### Acceptance criteria
 
-- [ ] test: deploying a task branch produces a sandbox instance whose health endpoint reports the deployed commit SHA
-- [ ] test: redeploying the same SHA is a no-op that reports the existing healthy instance
-- [ ] test: no deployment target other than the sandbox environment is reachable from this code path, asserted by exercising the deployer against the full environment configuration
+- [x] test: deploying a task branch produces a sandbox instance whose health endpoint reports the deployed commit SHA
+- [x] test: redeploying the same SHA is a no-op that reports the existing healthy instance
+- [x] test: no deployment target other than the sandbox environment is reachable from this code path, asserted by exercising the deployer against the full environment configuration
 
 ## Task T-04: Tiered acceptance-criteria verification runner with attached evidence
 
@@ -71,10 +81,10 @@ Parse the spec's per-task criteria by verification-tier prefix (test:/agent:/man
 
 ### Acceptance criteria
 
-- [ ] test: criteria are parsed by tier prefix and a criterion with a missing or unknown prefix fails spec validation before any execution begins
-- [ ] test: every test-tier criterion executes as a scripted check and its pass/fail result plus captured output are recorded per criterion
+- [x] test: criteria are parsed by tier prefix and a criterion with a missing or unknown prefix fails spec validation before any execution begins
+- [x] test: every test-tier criterion executes as a scripted check and its pass/fail result plus captured output are recorded per criterion
 - [ ] agent: for a sample task with agent-tier criteria, a verifier agent exercises the running sandbox interface and each resulting verdict carries the agent transcript as attached evidence
-- [ ] test: the aggregate phase verification verdict is green only when every criterion verdict is green, and a manual-tier criterion forces the verdict into a human-required state
+- [x] test: the aggregate phase verification verdict is green only when every criterion verdict is green, and a manual-tier criterion forces the verdict into a human-required state
 
 ## Task T-05: Independent reviewer-agent concurrence gate in shadow mode
 
