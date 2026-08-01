@@ -2,7 +2,7 @@
 id: SPEC-PRD-0011-P3
 prd: PRD-0011
 phase: 3
-status: Draft # Draft | Approved | Done | Superseded
+status: Approved # Draft | Approved | Done | Superseded
 date: 2026-08-01
 owner: Russ Watson
 envelope:
