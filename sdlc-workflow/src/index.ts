@@ -39,6 +39,10 @@ import {
   ISurfaceMapRepository
 } from './repositories/surface-map.repository';
 import {
+  AggregatorService,
+  IAggregatorService
+} from './services/aggregator.service';
+import {
   DecomposeService,
   IDecomposeService
 } from './services/decompose.service';
@@ -46,6 +50,10 @@ import {
   EnvelopeGateService,
   IEnvelopeGateService
 } from './services/envelope-gate.service';
+import {
+  ReviewerGateService,
+  IReviewerGateService
+} from './services/reviewer-gate.service';
 import { ExecutorService, IExecutorService } from './services/executor.service';
 import {
   SpecSynthesisService,
@@ -102,6 +110,12 @@ container
 container
   .bind<IEnvelopeGateService>(WORKFLOW_TOKENS.EnvelopeGateService)
   .to(EnvelopeGateService);
+container
+  .bind<IReviewerGateService>(WORKFLOW_TOKENS.ReviewerGateService)
+  .to(ReviewerGateService);
+container
+  .bind<IAggregatorService>(WORKFLOW_TOKENS.AggregatorService)
+  .to(AggregatorService);
 container.bind<IRunHandler>(WORKFLOW_TOKENS.RunHandler).to(RunHandler);
 
 yargs(hideBin(process.argv))

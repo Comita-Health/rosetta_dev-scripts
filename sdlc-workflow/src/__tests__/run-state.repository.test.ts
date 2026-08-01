@@ -9,7 +9,7 @@ import os from 'os';
 import path from 'path';
 import { RunStateRepository } from '../repositories/run-state.repository';
 import { SurfaceMapRepository } from '../repositories/surface-map.repository';
-import { RunState } from '../types';
+import type { RunState } from '../types';
 
 const makeState = (): RunState => ({
   runId: 'run-1',
@@ -18,6 +18,9 @@ const makeState = (): RunState => ({
   baseSha: 'base',
   taskResults: {},
   verdicts: [],
+  exceptions: [],
+  tokenSpendK: 0,
+  ciFixAttempts: {},
   updatedAt: 'x'
 });
 
@@ -62,6 +65,45 @@ describe('RunStateRepository', () => {
     expect(loaded?.verdicts).toHaveLength(1);
     expect(loaded?.verdicts[0].wouldEscalate).toBe(true);
     expect(loaded?.taskResults['T-01'].status).toBe('completed');
+  });
+
+  it('records exception-ledger entries persistently', () => {
+    const state = makeState();
+    repo.recordExceptions(dir, state, [
+      {
+        trigger: 'budget-exhaustion',
+        taskId: 'T-01',
+        context: ['token spend 250k exceeds budget 200k'],
+        recordedAt: 'x'
+      }
+    ]);
+
+    const loaded = repo.load(dir, 'run-1');
+    expect(loaded?.exceptions).toHaveLength(1);
+    expect(loaded?.exceptions[0].trigger).toBe('budget-exhaustion');
+  });
+
+  it('does not write when there are no exceptions to record', () => {
+    const state = makeState();
+    repo.recordExceptions(dir, state, []);
+    expect(repo.load(dir, 'run-1')).toBeNull();
+  });
+
+  it('fills fields missing from state files written by older versions', () => {
+    const legacy = makeState() as Partial<RunState>;
+    delete legacy.exceptions;
+    delete legacy.tokenSpendK;
+    delete legacy.ciFixAttempts;
+    mkdirSync(path.join(dir, 'run-1'), { recursive: true });
+    writeFileSync(
+      path.join(dir, 'run-1', 'state.json'),
+      JSON.stringify(legacy)
+    );
+
+    const loaded = repo.load(dir, 'run-1');
+    expect(loaded?.exceptions).toEqual([]);
+    expect(loaded?.tokenSpendK).toBe(0);
+    expect(loaded?.ciFixAttempts).toEqual({});
   });
 });
 

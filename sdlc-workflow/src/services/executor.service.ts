@@ -143,6 +143,9 @@ export class ExecutorService implements IExecutorService {
       baseSha: this._gitRepo.headSha(input.repoPath),
       taskResults: {},
       verdicts: [],
+      exceptions: [],
+      tokenSpendK: 0,
+      ciFixAttempts: {},
       updatedAt: new Date().toISOString()
     };
   }

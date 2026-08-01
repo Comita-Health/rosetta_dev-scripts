@@ -20,6 +20,8 @@ export interface IGitRepository {
   ): void;
   /** Numstat diff between two refs (added + deleted lines per file). */
   diffStat(repoPath: string, baseRef: string, headRef: string): DiffStat;
+  /** Full unified diff text between two refs. */
+  diffText(repoPath: string, baseRef: string, headRef: string): string;
 }
 
 const git = (repoPath: string, args: string): string => {
@@ -56,6 +58,10 @@ export class GitRepository implements IGitRepository {
       return;
     }
     git(repoPath, `worktree add -b "${branch}" "${worktreePath}" "${baseSha}"`);
+  }
+
+  diffText(repoPath: string, baseRef: string, headRef: string): string {
+    return git(repoPath, `diff "${baseRef}".."${headRef}"`);
   }
 
   diffStat(repoPath: string, baseRef: string, headRef: string): DiffStat {

@@ -2,11 +2,13 @@ import 'reflect-metadata';
 import { Container } from 'inversify';
 import { IRunHandler, RunHandler } from '../handlers/run.handler';
 import type { IRunStateRepository } from '../repositories/run-state.repository';
+import type { IAggregatorService } from '../services/aggregator.service';
 import type { IEnvelopeGateService } from '../services/envelope-gate.service';
 import type {
   ExecutorOutcome,
   IExecutorService
 } from '../services/executor.service';
+import type { IReviewerGateService } from '../services/reviewer-gate.service';
 import { WORKFLOW_TOKENS } from '../tokens';
 import { GateVerdict, RunState, SpecDocument } from '../types';
 import { makeEnvelope, makeTask } from './fixtures';
@@ -27,6 +29,9 @@ const STATE: RunState = {
   baseSha: 'base-sha',
   taskResults: {},
   verdicts: [],
+  exceptions: [],
+  tokenSpendK: 0,
+  ciFixAttempts: {},
   updatedAt: 'x'
 };
 
@@ -37,11 +42,26 @@ const INPUT = {
   runsDir: '/runs'
 };
 
+const verdictOf = (
+  gate: string,
+  outcome: GateVerdict['outcome'],
+  reasons: string[] = []
+): GateVerdict => ({
+  gate,
+  outcome,
+  wouldEscalate: outcome !== 'pass',
+  reasons,
+  recordedAt: 'x'
+});
+
 describe('RunHandler (shadow-mode single-task loop)', () => {
   let handler: IRunHandler;
   let executeNext: jest.Mock;
   let evaluate: jest.Mock;
+  let review: jest.Mock;
+  let aggregate: jest.Mock;
   let appendVerdict: jest.Mock;
+  let recordExceptions: jest.Mock;
 
   const completedOutcome = (): ExecutorOutcome => ({
     kind: 'completed',
@@ -51,18 +71,31 @@ describe('RunHandler (shadow-mode single-task loop)', () => {
     branch: 'sdlc/run-1/T-01'
   });
 
-  const breachVerdict: GateVerdict = {
-    gate: 'envelope',
-    outcome: 'breach',
-    wouldEscalate: true,
-    reasons: ['outside allowedPaths: infra/x.yml'],
-    recordedAt: 'x'
-  };
+  const breachVerdict = verdictOf('envelope', 'breach', [
+    'outside allowedPaths: infra/x.yml'
+  ]);
+  const reviewerVerdict = verdictOf('reviewer', 'pass', ['looks solid']);
+  const phaseVerdict = verdictOf('phase', 'breach', [
+    'failing gates: ci, verification, envelope'
+  ]);
 
   beforeEach(() => {
     executeNext = jest.fn().mockResolvedValue(completedOutcome());
     evaluate = jest.fn().mockResolvedValue(breachVerdict);
+    review = jest.fn().mockResolvedValue(reviewerVerdict);
+    aggregate = jest.fn().mockReturnValue({
+      verdict: phaseVerdict,
+      exceptions: [
+        {
+          trigger: 'envelope-breach',
+          taskId: 'T-01',
+          context: ['outside allowedPaths: infra/x.yml'],
+          recordedAt: 'x'
+        }
+      ]
+    });
     appendVerdict = jest.fn();
+    recordExceptions = jest.fn();
 
     const container = new Container();
     container
@@ -72,9 +105,16 @@ describe('RunHandler (shadow-mode single-task loop)', () => {
       .bind<IEnvelopeGateService>(WORKFLOW_TOKENS.EnvelopeGateService)
       .toConstantValue({ evaluate });
     container
+      .bind<IReviewerGateService>(WORKFLOW_TOKENS.ReviewerGateService)
+      .toConstantValue({ review });
+    container
+      .bind<IAggregatorService>(WORKFLOW_TOKENS.AggregatorService)
+      .toConstantValue({ aggregate });
+    container
       .bind<IRunStateRepository>(WORKFLOW_TOKENS.RunStateRepository)
       .toConstantValue({
         appendVerdict,
+        recordExceptions,
         load: jest.fn(),
         save: jest.fn(),
         recordTaskResult: jest.fn()
@@ -88,26 +128,50 @@ describe('RunHandler (shadow-mode single-task loop)', () => {
     (console.log as jest.Mock).mockRestore();
   });
 
-  it('persists a breach verdict with wouldEscalate and proceeds unblocked', async () => {
+  it('persists all gate verdicts and exceptions, proceeding unblocked on breaches', async () => {
     const result = await handler.runTask(INPUT);
 
-    // Shadow semantics: the breach is recorded, the run is not failed by it.
+    // Shadow semantics: breaches are recorded, the run is not failed by them.
     expect(result).toEqual({
       outcome: 'completed',
       taskId: 'T-01',
       branch: 'sdlc/run-1/T-01'
     });
+    expect(appendVerdict).toHaveBeenCalledTimes(3); // envelope, reviewer, phase
     expect(appendVerdict).toHaveBeenCalledWith(
       '/runs',
       expect.anything(),
       breachVerdict
     );
-    expect(evaluate).toHaveBeenCalledWith({
-      repoPath: '/repo',
-      baseRef: 'base-sha',
-      headRef: 'sdlc/run-1/T-01',
-      envelope: SPEC.envelope
-    });
+    expect(appendVerdict).toHaveBeenCalledWith(
+      '/runs',
+      expect.anything(),
+      reviewerVerdict
+    );
+    expect(appendVerdict).toHaveBeenCalledWith(
+      '/runs',
+      expect.anything(),
+      phaseVerdict
+    );
+    expect(recordExceptions).toHaveBeenCalledWith(
+      '/runs',
+      expect.anything(),
+      expect.arrayContaining([
+        expect.objectContaining({ trigger: 'envelope-breach' })
+      ])
+    );
+  });
+
+  it('feeds the reviewer and envelope verdicts to the aggregator with pending ci/verification', async () => {
+    await handler.runTask(INPUT);
+
+    const call = aggregate.mock.calls[0][0];
+    expect(call.gates.envelope).toBe(breachVerdict);
+    expect(call.gates.reviewer).toBe(reviewerVerdict);
+    expect(call.gates.ci.outcome).toBe('blocked');
+    expect(call.gates.verification.outcome).toBe('blocked');
+    expect(call.taskId).toBe('T-01');
+    expect(call.budgetK).toBe(SPEC.envelope.budgetK);
   });
 
   it('halts at intake for a blocked run without evaluating gates', async () => {
@@ -122,6 +186,7 @@ describe('RunHandler (shadow-mode single-task loop)', () => {
 
     expect(result.outcome).toBe('blocked');
     expect(evaluate).not.toHaveBeenCalled();
+    expect(review).not.toHaveBeenCalled();
     expect(appendVerdict).not.toHaveBeenCalled();
   });
 
@@ -151,7 +216,7 @@ describe('RunHandler (shadow-mode single-task loop)', () => {
     );
   });
 
-  it('still runs the envelope gate on a failed task branch', async () => {
+  it('still runs all gates on a failed task branch', async () => {
     executeNext.mockResolvedValue({
       ...completedOutcome(),
       kind: 'failed',
@@ -162,6 +227,7 @@ describe('RunHandler (shadow-mode single-task loop)', () => {
 
     expect(result.outcome).toBe('failed');
     expect(evaluate).toHaveBeenCalledTimes(1);
-    expect(appendVerdict).toHaveBeenCalledTimes(1);
+    expect(review).toHaveBeenCalledTimes(1);
+    expect(appendVerdict).toHaveBeenCalledTimes(3);
   });
 });

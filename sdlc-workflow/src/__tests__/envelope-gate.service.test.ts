@@ -37,6 +37,7 @@ describe('EnvelopeGateService (T-02)', () => {
       .bind<IGitRepository>(WORKFLOW_TOKENS.GitRepository)
       .toConstantValue({
         diffStat,
+        diffText: jest.fn(),
         headSha: jest.fn(),
         status: jest.fn(),
         addWorktree: jest.fn()

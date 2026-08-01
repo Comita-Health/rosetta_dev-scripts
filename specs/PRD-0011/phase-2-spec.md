@@ -28,10 +28,10 @@ Consume the phase-1 implementation-spec artifact as the contract; do not re-deri
 
 ### Acceptance criteria
 
-- [ ] test: given a spec fixture lacking an approval record, the executor refuses to start and records a blocked verdict with reason 'unapproved-spec'
-- [ ] test: given an approved spec fixture, the executor selects exactly one task whose dependsOn are all satisfied, and reports no-ready-task without side effects when none qualify
-- [ ] test: the implementation agent runs in a newly created git worktree on a branch named deterministically from run ID and task ID, and the primary checkout shows no modifications afterward
-- [ ] test: an implementation-agent failure produces a recorded per-task failure result rather than an unhandled error, leaving the run in a resumable state
+- [x] test: given a spec fixture lacking an approval record, the executor refuses to start and records a blocked verdict with reason 'unapproved-spec'
+- [x] test: given an approved spec fixture, the executor selects exactly one task whose dependsOn are all satisfied, and reports no-ready-task without side effects when none qualify
+- [x] test: the implementation agent runs in a newly created git worktree on a branch named deterministically from run ID and task ID, and the primary checkout shows no modifications afterward
+- [x] test: an implementation-agent failure produces a recorded per-task failure result rather than an unhandled error, leaving the run in a resumable state
 
 ## Task T-02: Envelope compliance gate in shadow mode
 
@@ -43,9 +43,9 @@ Evaluate the task branch diff against the spec's blast-radius envelope: allowedP
 
 ### Acceptance criteria
 
-- [ ] test: a diff confined to allowedPaths and under maxDiffLines yields a pass verdict
-- [ ] test: a diff touching a path labelled by any forbiddenSurfaces entry, or exceeding maxDiffLines, yields a breach verdict identifying the offending paths or line count
-- [ ] test: in shadow mode a breach verdict is persisted with wouldEscalate=true and the run proceeds unblocked
+- [x] test: a diff confined to allowedPaths and under maxDiffLines yields a pass verdict
+- [x] test: a diff touching a path labelled by any forbiddenSurfaces entry, or exceeding maxDiffLines, yields a breach verdict identifying the offending paths or line count
+- [x] test: in shadow mode a breach verdict is persisted with wouldEscalate=true and the run proceeds unblocked
 
 ## Task T-03: Sandbox deployment of the task branch build
 
@@ -86,9 +86,9 @@ A reviewer agent with no shared context with the implementation agent reviews th
 
 ### Acceptance criteria
 
-- [ ] test: the reviewer agent is invoked with only the PR diff, the spec task, and the envelope — no implementation-agent conversation state — asserted via the constructed prompt payload
+- [x] test: the reviewer agent is invoked with only the PR diff, the spec task, and the envelope — no implementation-agent conversation state — asserted via the constructed prompt payload
 - [ ] agent: on a sample task PR, the reviewer agent produces a concur-or-disagree verdict with cited reasons, and the full review transcript is attached to the verdict
-- [ ] test: a disagree verdict is persisted with wouldEscalate=true and does not block the run, and no code path exists that converts a disagree verdict into an auto-approval
+- [x] test: a disagree verdict is persisted with wouldEscalate=true and does not block the run, and no code path exists that converts a disagree verdict into an auto-approval
 
 ## Task T-06: Shadow gate aggregator and exception ledger
 
@@ -100,10 +100,10 @@ Combine the four machine gates — CI status, verification verdict (T-04), revie
 
 ### Acceptance criteria
 
-- [ ] test: the aggregate gate verdict is green only when CI is green, the verification verdict is green, the reviewer concurs, and the envelope check passes; each failing combination yields red with the failing gates enumerated
-- [ ] test: a third consecutive failing CI fix attempt on the task writes a wouldEscalate ledger entry with attempt history
-- [ ] test: cumulative token spend exceeding the invocation budget writes a budget-exhaustion wouldEscalate ledger entry
-- [ ] test: in shadow mode a red aggregate verdict is persisted but does not advance, block, or merge anything — the run halts awaiting human approval regardless of verdict color
+- [x] test: the aggregate gate verdict is green only when CI is green, the verification verdict is green, the reviewer concurs, and the envelope check passes; each failing combination yields red with the failing gates enumerated
+- [x] test: a third consecutive failing CI fix attempt on the task writes a wouldEscalate ledger entry with attempt history
+- [x] test: cumulative token spend exceeding the invocation budget writes a budget-exhaustion wouldEscalate ledger entry
+- [x] test: in shadow mode a red aggregate verdict is persisted but does not advance, block, or merge anything — the run halts awaiting human approval regardless of verdict color
 
 ## Task T-07: Phase-boundary digest posting in shadow mode
 
