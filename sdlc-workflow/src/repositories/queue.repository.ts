@@ -16,6 +16,12 @@ export interface IQueueRepository {
    * Returns true when a line was actually appended.
    */
   appendItem(chronicleRepo: string, title: string, tags: string[]): boolean;
+  /**
+   * The inline `[tag]` tags of the first queue item whose line contains
+   * `titleFragment`, or null when no such item exists (P3 T-05: reading
+   * the human's veto back off the digest item).
+   */
+  itemTags(chronicleRepo: string, titleFragment: string): string[] | null;
 }
 
 const QUEUE_PATH = path.join('chronicles', 'queue.md');
@@ -67,5 +73,21 @@ export class QueueRepository implements IQueueRepository {
 
     writeFileSync(file, lines.join('\n'));
     return true;
+  }
+
+  itemTags(chronicleRepo: string, titleFragment: string): string[] | null {
+    const file = path.join(chronicleRepo, QUEUE_PATH);
+    if (!existsSync(file)) return null;
+
+    const line = readFileSync(file, 'utf-8')
+      .split('\n')
+      .find(
+        entry => /^\s*- \[[ xX]\]/.test(entry) && entry.includes(titleFragment)
+      );
+    if (line === undefined) return null;
+
+    // Strip the checkbox itself so `[x]` is never read as a tag.
+    const body = line.replace(/^\s*- \[[ xX]\]\s*/, '');
+    return Array.from(body.matchAll(/\[([a-z][\w:-]*)\]/gi), match => match[1]);
   }
 }

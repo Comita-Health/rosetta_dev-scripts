@@ -55,6 +55,34 @@ describe('GitRepository', () => {
     expect(diff.totalLines).toBe(15);
   });
 
+  it('fetches origin and resolves refs to SHAs (P3 T-05)', () => {
+    execMock.mockReturnValue('def456\n');
+    repo.fetch('/repo');
+    expect(execMock.mock.calls[0][0]).toContain('fetch origin');
+    expect(repo.resolveSha('/repo', 'origin/main')).toBe('def456');
+    expect(execMock.mock.calls[1][0]).toContain('rev-parse "origin/main"');
+  });
+
+  it('reads the default branch from origin/HEAD, falling back to main', () => {
+    execMock.mockReturnValue('refs/remotes/origin/trunk\n');
+    expect(repo.defaultBranch('/repo')).toBe('trunk');
+
+    execMock.mockImplementation(() => {
+      throw new Error(
+        'fatal: ref refs/remotes/origin/HEAD is not a symbolic ref'
+      );
+    });
+    expect(repo.defaultBranch('/repo')).toBe('main');
+  });
+
+  it('reverts a merge commit first-parent with sign-off (P3 T-05)', () => {
+    execMock.mockReturnValue('');
+    repo.revertMerge('/wt', 'merge-sha');
+    expect(execMock.mock.calls[0][0]).toContain(
+      'revert --no-edit --signoff -m 1 "merge-sha"'
+    );
+  });
+
   it('wraps git failures in a typed error', () => {
     execMock.mockImplementation(() => {
       throw new Error('fatal: not a git repository');

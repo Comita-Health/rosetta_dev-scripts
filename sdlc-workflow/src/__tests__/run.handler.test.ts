@@ -3,6 +3,7 @@ import { Container } from 'inversify';
 import { IRunHandler, RunHandler } from '../handlers/run.handler';
 import type { IEvidenceRepository } from '../repositories/evidence.repository';
 import type { IGitRepository } from '../repositories/git.repository';
+import type { IQueueRepository } from '../repositories/queue.repository';
 import type { IRunStateRepository } from '../repositories/run-state.repository';
 import type { IAggregatorService } from '../services/aggregator.service';
 import type { IChronicleCommitService } from '../services/chronicle-commit.service';
@@ -90,6 +91,11 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
   let stateLoad: jest.Mock;
   let openTaskPr: jest.Mock;
   let prMerge: jest.Mock;
+  let recordRevert: jest.Mock;
+  let itemTags: jest.Mock;
+  let revertMerge: jest.Mock;
+  let prCreate: jest.Mock;
+  let gitPush: jest.Mock;
 
   const taskOutcome = (
     overrides: Partial<ExecutorOutcome> = {}
@@ -216,6 +222,14 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
       created: true
     });
     prMerge = jest.fn().mockReturnValue('merged-sha-abc');
+    recordRevert = jest.fn().mockResolvedValue('chronicles/sdlc/run-1/revert');
+    itemTags = jest.fn().mockReturnValue(null);
+    revertMerge = jest.fn();
+    gitPush = jest.fn();
+    prCreate = jest.fn().mockReturnValue({
+      url: 'https://github.com/org/repo/pull/99',
+      number: 99
+    });
 
     const container = new Container();
     container
@@ -233,10 +247,13 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
     container
       .bind<IPullRequestRepository>(WORKFLOW_TOKENS.PullRequestRepository)
       .toConstantValue({
-        findByBranch: jest.fn(),
-        create: jest.fn(),
+        findByBranch: jest.fn().mockReturnValue(null),
+        create: prCreate,
         merge: prMerge
       });
+    container
+      .bind<IQueueRepository>(WORKFLOW_TOKENS.QueueRepository)
+      .toConstantValue({ appendItem: jest.fn(), itemTags });
     container
       .bind<ISandboxDeployService>(WORKFLOW_TOKENS.SandboxDeployService)
       .toConstantValue({ deploy });
@@ -254,7 +271,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
       .toConstantValue({ post: digestPost });
     container
       .bind<IChronicleCommitService>(WORKFLOW_TOKENS.ChronicleCommitService)
-      .toConstantValue({ record: chronicleRecord, recordMerge });
+      .toConstantValue({ record: chronicleRecord, recordMerge, recordRevert });
     container
       .bind<IEvidenceRepository>(WORKFLOW_TOKENS.EvidenceRepository)
       .toConstantValue({ save: evidenceSave, load: jest.fn() });
@@ -266,7 +283,11 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
         addWorktree: jest.fn(),
         diffStat: jest.fn(),
         diffText: jest.fn(),
-        push: jest.fn()
+        push: gitPush,
+        fetch: jest.fn(),
+        resolveSha: jest.fn().mockReturnValue('main-sha'),
+        defaultBranch: jest.fn().mockReturnValue('main'),
+        revertMerge
       });
     container
       .bind<IRunStateRepository>(WORKFLOW_TOKENS.RunStateRepository)
@@ -692,6 +713,218 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
           context: [expect.stringContaining('merge conflict')]
         })
       );
+    });
+  });
+
+  describe('P3 T-05 phase boundary and veto', () => {
+    const greenGates = () => {
+      evaluate.mockResolvedValue(verdictOf('envelope', 'pass'));
+      review.mockResolvedValue(verdictOf('reviewer', 'pass'));
+      verify.mockResolvedValue({
+        verdict: verdictOf('verification', 'pass'),
+        criteria: criterionVerdicts
+      });
+      ciEvaluate.mockResolvedValue(verdictOf('ci', 'pass'));
+      aggregate.mockReturnValue({
+        verdict: verdictOf('phase', 'pass'),
+        exceptions: []
+      });
+    };
+
+    const phaseDeployCalls = () =>
+      deploy.mock.calls.filter(([arg]) => arg.worktreePath.includes('_phase'));
+
+    it('deploys the merged default branch exactly once and posts the phase digest with merge links', async () => {
+      greenGates();
+
+      await handler.runTask({ ...INPUT, chronicleRepo: '/chronicle' });
+
+      // The phase deploy targets the merged default branch head in the
+      // dedicated _phase worktree — not a task branch.
+      const calls = phaseDeployCalls();
+      expect(calls).toHaveLength(1);
+      expect(calls[0][0]).toEqual(expect.objectContaining({ sha: 'main-sha' }));
+      // The phase digest carries the merged SHAs and the recorded verdicts.
+      const phasePost = digestPost.mock.calls.find(
+        ([arg]) => arg.taskId === 'phase'
+      );
+      expect(phasePost).toBeDefined();
+      expect(phasePost?.[0].merges).toEqual([
+        { taskId: 'T-01', mergedSha: 'merged-sha-abc' }
+      ]);
+      expect(phasePost?.[0].verdicts.length).toBeGreaterThan(0);
+
+      // Resume: the boundary is step-cached — no second deploy, no
+      // duplicate digest.
+      await handler.runTask({ ...INPUT, chronicleRepo: '/chronicle' });
+      expect(phaseDeployCalls()).toHaveLength(1);
+      expect(
+        digestPost.mock.calls.filter(([arg]) => arg.taskId === 'phase')
+      ).toHaveLength(1);
+    });
+
+    it('does not reach the phase boundary while any task is unmerged', async () => {
+      greenGates();
+      prMerge.mockImplementation(() => {
+        throw new WorkflowError('merge conflict', 'GH_FAILED');
+      });
+
+      await handler.runTask({ ...INPUT, chronicleRepo: '/chronicle' });
+
+      expect(phaseDeployCalls()).toHaveLength(0);
+      expect(
+        digestPost.mock.calls.filter(([arg]) => arg.taskId === 'phase')
+      ).toHaveLength(0);
+    });
+
+    it('replays the phase boundary on a no-ready-task resume', async () => {
+      greenGates();
+      // Seed a fully-merged state and force the executor into the
+      // no-ready-task kind so the resume path is exercised.
+      state.taskResults['T-01'].mergedSha = 'merged-sha-abc';
+      executeReady.mockResolvedValue({
+        kind: 'no-ready-task',
+        spec: SPEC,
+        state,
+        outcomes: []
+      });
+
+      await handler.runTask({ ...INPUT, chronicleRepo: '/chronicle' });
+
+      expect(phaseDeployCalls()).toHaveLength(1);
+      expect(
+        digestPost.mock.calls.filter(([arg]) => arg.taskId === 'phase')
+      ).toHaveLength(1);
+    });
+
+    it('leaves the phase-deploy step uncached when the sandbox deploy fails', async () => {
+      greenGates();
+      deploy.mockResolvedValue({
+        verdict: verdictOf('sandbox', 'breach', ['deploy failed']),
+        record: { sha: 'main-sha', status: 'failed', recordedAt: 'x' }
+      });
+
+      await handler.runTask({ ...INPUT, chronicleRepo: '/chronicle' });
+
+      expect(phaseDeployCalls()).toHaveLength(1);
+      // Step not recorded → digest not posted → retryable on next run.
+      expect(
+        Object.values(state.steps).some(step => step.name === 'phase-deploy')
+      ).toBe(false);
+      expect(
+        digestPost.mock.calls.filter(([arg]) => arg.taskId === 'phase')
+      ).toHaveLength(0);
+    });
+
+    it('deploys the phase but skips the digest without --chronicle-repo', async () => {
+      greenGates();
+
+      await handler.runTask(INPUT);
+
+      expect(phaseDeployCalls()).toHaveLength(1);
+      expect(
+        digestPost.mock.calls.filter(([arg]) => arg.taskId === 'phase')
+      ).toHaveLength(0);
+    });
+
+    describe('checkVeto', () => {
+      const VETO_INPUT = {
+        runsDir: '/runs',
+        runId: 'run-1',
+        repoPath: '/repo',
+        chronicleRepo: '/chronicle'
+      };
+
+      beforeEach(() => {
+        const vetoState = makeState();
+        vetoState.taskResults['T-01'] = {
+          taskId: 'T-01',
+          status: 'completed',
+          branch: 'sdlc/run-1/T-01',
+          mergedSha: 'merge-sha-1',
+          recordedAt: '2026-08-01T00:00:00Z'
+        };
+        vetoState.taskResults['T-02'] = {
+          taskId: 'T-02',
+          status: 'completed',
+          branch: 'sdlc/run-1/T-02',
+          mergedSha: 'merge-sha-2',
+          recordedAt: '2026-08-01T01:00:00Z'
+        };
+        stateLoad.mockReturnValue(vetoState);
+      });
+
+      it('a [veto] tag reverts the phase merges through a PR, redeploys the sandbox, and records the Chronicle artifact', async () => {
+        itemTags.mockReturnValue(['follow-up', 'veto']);
+
+        const result = await handler.checkVeto(VETO_INPUT);
+
+        expect(result).toEqual({
+          veto: true,
+          reverted: true,
+          prUrl: 'https://github.com/org/repo/pull/99'
+        });
+        // Most recent merge reverted first.
+        expect(revertMerge.mock.calls.map(call => call[1])).toEqual([
+          'merge-sha-2',
+          'merge-sha-1'
+        ]);
+        expect(gitPush).toHaveBeenCalledWith(
+          expect.stringContaining('_revert'),
+          'sdlc/run-1/revert'
+        );
+        expect(prCreate).toHaveBeenCalled();
+        // Sandbox redeployed at the reverted SHA — through the same
+        // sandbox-only deploy service, no environment parameter exists.
+        const revertDeploys = deploy.mock.calls.filter(([arg]) =>
+          arg.worktreePath.includes('_revert')
+        );
+        expect(revertDeploys).toHaveLength(1);
+        expect(Object.keys(revertDeploys[0][0]).sort()).toEqual([
+          'previous',
+          'sha',
+          'worktreePath'
+        ]);
+        expect(recordRevert).toHaveBeenCalledWith(
+          expect.objectContaining({
+            revertedShas: ['merge-sha-1', 'merge-sha-2'],
+            prUrl: 'https://github.com/org/repo/pull/99'
+          })
+        );
+
+        // Idempotent: a second check replays the cached revert.
+        const second = await handler.checkVeto(VETO_INPUT);
+        expect(second.reverted).toBe(true);
+        expect(revertMerge).toHaveBeenCalledTimes(2); // no new reverts
+      });
+
+      it('absence of a veto tag changes nothing', async () => {
+        itemTags.mockReturnValue(['follow-up']);
+
+        const result = await handler.checkVeto(VETO_INPUT);
+
+        expect(result).toEqual({ veto: false, reverted: false });
+        expect(revertMerge).not.toHaveBeenCalled();
+        expect(deploy).not.toHaveBeenCalled();
+        expect(recordRevert).not.toHaveBeenCalled();
+      });
+
+      it('does nothing when the run has no merges', async () => {
+        stateLoad.mockReturnValue(makeState());
+
+        const result = await handler.checkVeto(VETO_INPUT);
+
+        expect(result).toEqual({ veto: false, reverted: false });
+        expect(itemTags).not.toHaveBeenCalled();
+      });
+
+      it('rejects check-veto for an unknown run', async () => {
+        stateLoad.mockReturnValue(null);
+
+        await expect(handler.checkVeto(VETO_INPUT)).rejects.toThrow(
+          expect.objectContaining({ code: 'RUN_NOT_FOUND' })
+        );
+      });
     });
   });
 

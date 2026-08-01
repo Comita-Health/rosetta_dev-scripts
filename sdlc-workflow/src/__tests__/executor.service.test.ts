@@ -69,7 +69,11 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
       addWorktree: jest.fn(),
       diffStat: jest.fn(),
       diffText: jest.fn(),
-      push: jest.fn()
+      push: jest.fn(),
+      fetch: jest.fn(),
+      resolveSha: jest.fn(),
+      defaultBranch: jest.fn(),
+      revertMerge: jest.fn()
     };
     agentRun = jest.fn().mockResolvedValue({ ok: true, output: 'done' });
     stateMock = {

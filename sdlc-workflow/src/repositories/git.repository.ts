@@ -27,6 +27,17 @@ export interface IGitRepository {
    * pushing an already-pushed branch at the same head is a no-op for git.
    */
   push(repoPath: string, branch: string): void;
+  /** Fetch origin so remote-tracking refs are current (P3 T-05). */
+  fetch(repoPath: string): void;
+  /** Resolve any ref (e.g. `origin/main`) to a SHA. */
+  resolveSha(repoPath: string, ref: string): string;
+  /** The repo's default branch name, from origin/HEAD (fallback: main). */
+  defaultBranch(repoPath: string): string;
+  /**
+   * Revert a merge commit (first-parent mainline) with a signed-off commit
+   * in the given checkout (P3 T-05 veto path).
+   */
+  revertMerge(repoPath: string, sha: string): void;
 }
 
 const git = (repoPath: string, args: string): string => {
@@ -71,6 +82,28 @@ export class GitRepository implements IGitRepository {
 
   push(repoPath: string, branch: string): void {
     git(repoPath, `push -u origin "${branch}"`);
+  }
+
+  fetch(repoPath: string): void {
+    git(repoPath, 'fetch origin');
+  }
+
+  resolveSha(repoPath: string, ref: string): string {
+    return git(repoPath, `rev-parse "${ref}"`).trim();
+  }
+
+  defaultBranch(repoPath: string): string {
+    try {
+      const ref = git(repoPath, 'symbolic-ref refs/remotes/origin/HEAD').trim();
+      const name = ref.split('/').pop();
+      return name !== undefined && name.length > 0 ? name : 'main';
+    } catch {
+      return 'main';
+    }
+  }
+
+  revertMerge(repoPath: string, sha: string): void {
+    git(repoPath, `revert --no-edit --signoff -m 1 "${sha}"`);
   }
 
   diffStat(repoPath: string, baseRef: string, headRef: string): DiffStat {
