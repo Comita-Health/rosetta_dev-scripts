@@ -52,6 +52,13 @@ export interface IRunStateRepository {
     taskId: string,
     sha: string
   ): void;
+  /** P3 T-02: record the task's PR URL on its result. */
+  recordTaskPrUrl(
+    runsDir: string,
+    state: RunState,
+    taskId: string,
+    prUrl: string
+  ): void;
 }
 
 const stateFile = (runsDir: string, runId: string): string =>
@@ -143,6 +150,18 @@ export class RunStateRepository implements IRunStateRepository {
     const result = state.taskResults[taskId];
     if (result === undefined) return;
     result.mergedSha = sha;
+    this.save(runsDir, state);
+  }
+
+  recordTaskPrUrl(
+    runsDir: string,
+    state: RunState,
+    taskId: string,
+    prUrl: string
+  ): void {
+    const result = state.taskResults[taskId];
+    if (result === undefined) return;
+    result.prUrl = prUrl;
     this.save(runsDir, state);
   }
 }

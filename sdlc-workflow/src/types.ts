@@ -93,6 +93,8 @@ export interface TaskRunResult {
    * merely implemented. Set by auto-merge (P3 T-04) or `record-merge --task`.
    */
   mergedSha?: string;
+  /** URL of the task's PR (P3 T-02, PRD-0011 §4 TaskResult.prUrl). */
+  prUrl?: string;
   recordedAt: string; // ISO timestamp
 }
 
@@ -279,7 +281,8 @@ export type WorkflowErrorCode =
   | 'SPEC_MALFORMED'
   | 'CONTRACT_MALFORMED'
   | 'RUN_NOT_FOUND'
-  | 'GIT_FAILED';
+  | 'GIT_FAILED'
+  | 'GH_FAILED';
 
 export class WorkflowError extends Error {
   constructor(

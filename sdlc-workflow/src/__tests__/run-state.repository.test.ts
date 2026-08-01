@@ -150,6 +150,24 @@ describe('RunStateRepository', () => {
     repo.recordTaskMerged(dir, state, 'T-99', 'other-sha');
     expect(repo.load(dir, 'run-1')?.taskResults['T-99']).toBeUndefined();
   });
+
+  it('records a task PR URL (P3 T-02)', () => {
+    const state = makeState();
+    state.taskResults['T-01'] = {
+      taskId: 'T-01',
+      status: 'completed',
+      recordedAt: 'x'
+    };
+    repo.save(dir, state);
+
+    repo.recordTaskPrUrl(dir, state, 'T-01', 'https://github.com/o/r/pull/3');
+    expect(repo.load(dir, 'run-1')?.taskResults['T-01'].prUrl).toBe(
+      'https://github.com/o/r/pull/3'
+    );
+
+    repo.recordTaskPrUrl(dir, state, 'T-99', 'https://github.com/o/r/pull/4');
+    expect(repo.load(dir, 'run-1')?.taskResults['T-99']).toBeUndefined();
+  });
 });
 
 describe('SurfaceMapRepository', () => {

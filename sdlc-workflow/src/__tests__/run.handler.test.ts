@@ -9,6 +9,7 @@ import type { IChronicleCommitService } from '../services/chronicle-commit.servi
 import type { ICiGateService } from '../services/ci-gate.service';
 import type { IDigestService } from '../services/digest.service';
 import type { IEnvelopeGateService } from '../services/envelope-gate.service';
+import type { IPrLifecycleService } from '../services/pr-lifecycle.service';
 import type {
   ExecutorOutcome,
   IExecutorService,
@@ -84,7 +85,9 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
   let recordSandbox: jest.Mock;
   let recordCriteria: jest.Mock;
   let recordStep: jest.Mock;
+  let recordTaskPrUrl: jest.Mock;
   let stateLoad: jest.Mock;
+  let openTaskPr: jest.Mock;
 
   const taskOutcome = (
     overrides: Partial<ExecutorOutcome> = {}
@@ -190,7 +193,19 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
     recordStep = jest.fn().mockImplementation((_d, s: RunState, key, step) => {
       s.steps[key] = step;
     });
+    recordTaskPrUrl = jest
+      .fn()
+      .mockImplementation((_d, s: RunState, taskId: string, url: string) => {
+        if (s.taskResults[taskId] !== undefined) {
+          s.taskResults[taskId].prUrl = url;
+        }
+      });
     stateLoad = jest.fn();
+    openTaskPr = jest.fn().mockReturnValue({
+      url: 'https://github.com/org/repo/pull/7',
+      number: 7,
+      created: true
+    });
 
     const container = new Container();
     container
@@ -202,6 +217,9 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
     container
       .bind<IReviewerGateService>(WORKFLOW_TOKENS.ReviewerGateService)
       .toConstantValue({ review });
+    container
+      .bind<IPrLifecycleService>(WORKFLOW_TOKENS.PrLifecycleService)
+      .toConstantValue({ openTaskPr });
     container
       .bind<ISandboxDeployService>(WORKFLOW_TOKENS.SandboxDeployService)
       .toConstantValue({ deploy });
@@ -230,7 +248,8 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
         status: jest.fn(),
         addWorktree: jest.fn(),
         diffStat: jest.fn(),
-        diffText: jest.fn()
+        diffText: jest.fn(),
+        push: jest.fn()
       });
     container
       .bind<IRunStateRepository>(WORKFLOW_TOKENS.RunStateRepository)
@@ -242,6 +261,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
         recordStep,
         recordMergedSha: jest.fn(),
         recordTaskMerged: jest.fn(),
+        recordTaskPrUrl,
         load: stateLoad,
         save: jest.fn(),
         recordTaskResult: jest.fn()
@@ -458,6 +478,74 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
     expect(aggregate).toHaveBeenCalledTimes(2);
     // 6 verdicts per task.
     expect(appendVerdict).toHaveBeenCalledTimes(12);
+  });
+
+  it('pushes the task branch and opens its PR before the gates, recording the URL (P3 T-02)', async () => {
+    await handler.runTask(INPUT);
+
+    expect(openTaskPr).toHaveBeenCalledWith({
+      worktreePath: '/runs/run-1/worktrees/T-01',
+      branch: 'sdlc/run-1/T-01',
+      runId: 'run-1',
+      spec: SPEC,
+      task: SPEC.tasks[0],
+      verdicts: []
+    });
+    // The PR exists before any gate is evaluated (it is their subject).
+    expect(openTaskPr.mock.invocationCallOrder[0]).toBeLessThan(
+      evaluate.mock.invocationCallOrder[0]
+    );
+    expect(recordTaskPrUrl).toHaveBeenCalledWith(
+      '/runs',
+      expect.anything(),
+      'T-01',
+      'https://github.com/org/repo/pull/7'
+    );
+    expect(recordStep).toHaveBeenCalledWith(
+      '/runs',
+      expect.anything(),
+      expect.stringMatching(/^pr:T-01:/),
+      expect.objectContaining({
+        name: 'pr',
+        detail: 'https://github.com/org/repo/pull/7'
+      })
+    );
+  });
+
+  it('resume reuses the recorded PR without reopening it (P3 T-02)', async () => {
+    await handler.runTask(INPUT);
+    await handler.runTask(INPUT);
+
+    expect(openTaskPr).toHaveBeenCalledTimes(1);
+  });
+
+  it('records a blocked pr verdict on push/PR failure, keeps state intact, and retries on the next run (P3 T-02)', async () => {
+    openTaskPr.mockImplementationOnce(() => {
+      throw new WorkflowError('gh pr failed', 'GH_FAILED', ['boom']);
+    });
+
+    const result = await handler.runTask(INPUT);
+
+    // The failure is recorded honestly and the pipeline continues.
+    expect(result.outcome).toBe('executed');
+    expect(state.verdicts).toContainEqual(
+      expect.objectContaining({
+        gate: 'pr',
+        outcome: 'blocked',
+        taskId: 'T-01',
+        reasons: [expect.stringContaining('boom')]
+      })
+    );
+    expect(recordTaskPrUrl).not.toHaveBeenCalled();
+    // No 'pr' step was cached, so the next invocation retries.
+    expect(Object.keys(state.steps).some(key => key.startsWith('pr:'))).toBe(
+      false
+    );
+    expect(evaluate).toHaveBeenCalledTimes(1); // gates still ran
+
+    await handler.runTask(INPUT);
+    expect(openTaskPr).toHaveBeenCalledTimes(2);
+    expect(recordTaskPrUrl).toHaveBeenCalledTimes(1);
   });
 
   it('skips digest and chronicle steps without --chronicle-repo', async () => {

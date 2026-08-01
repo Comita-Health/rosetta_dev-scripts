@@ -44,9 +44,9 @@ Push each task branch and open a real PR (gh, operator auth) with a deterministi
 
 ### Acceptance criteria
 
-- [ ] test: a completed implementation step pushes the task branch and opens a PR whose title and body derive deterministically from the spec task, recording the PR URL in the task result
-- [ ] test: re-running the step with an existing PR for the branch reuses it — no duplicate PR, same recorded URL
-- [ ] test: push or PR-creation failure records a failed step with the tool output as detail and does not corrupt run state
+- [x] test: a completed implementation step pushes the task branch and opens a PR whose title and body derive deterministically from the spec task, recording the PR URL in the task result
+- [x] test: re-running the step with an existing PR for the branch reuses it — no duplicate PR, same recorded URL
+- [x] test: push or PR-creation failure records a failed step with the tool output as detail and does not corrupt run state
 
 ## Task T-03: Live CI monitoring with a bounded fix cycle
 

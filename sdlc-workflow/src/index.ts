@@ -47,6 +47,10 @@ import {
 import { OpenAiRepository } from './repositories/openai.repository';
 import { PrdRepository, IPrdRepository } from './repositories/prd.repository';
 import {
+  PullRequestRepository,
+  IPullRequestRepository
+} from './repositories/pull-request.repository';
+import {
   RunStateRepository,
   IRunStateRepository
 } from './repositories/run-state.repository';
@@ -101,6 +105,10 @@ import {
   GatePolicyQueryService,
   IGatePolicyQueryService
 } from './services/gate-policy-query.service';
+import {
+  PrLifecycleService,
+  IPrLifecycleService
+} from './services/pr-lifecycle.service';
 import { WORKFLOW_TOKENS } from './tokens';
 import { WorkflowError } from './types';
 import { resolveInferenceBackend } from './utils/backend-select';
@@ -192,6 +200,12 @@ container
 container
   .bind<IGatePolicyQueryService>(WORKFLOW_TOKENS.GatePolicyQueryService)
   .to(GatePolicyQueryService);
+container
+  .bind<IPullRequestRepository>(WORKFLOW_TOKENS.PullRequestRepository)
+  .to(PullRequestRepository);
+container
+  .bind<IPrLifecycleService>(WORKFLOW_TOKENS.PrLifecycleService)
+  .to(PrLifecycleService);
 container.bind<IRunHandler>(WORKFLOW_TOKENS.RunHandler).to(RunHandler);
 
 yargs(hideBin(process.argv))

@@ -15,7 +15,9 @@ PRD-0011 (Full-Loop SDLC Automation):
   progress): parallel fan-out across ready tasks, real PR lifecycle with a
   bounded CI fix cycle, gate enforcement with auto-merge on green,
   post-merge sandbox deploy + PRD-0007 digest with veto-triggered revert.
-  Landed so far: the T-01 dependency-ordered task pool.
+  Landed so far: the T-01 dependency-ordered task pool and the T-02 PR
+  lifecycle — each completed task branch is pushed and gets a real PR
+  (idempotent on resume), which is the reviewer- and CI-gate subject.
 
 ## Usage
 
@@ -159,6 +161,8 @@ Handler / Service / Repository with InversifyJS (workspace rule):
   fan-out, one worktree per task.
 - `services/envelope-gate.service.ts` — diff vs blast-radius envelope,
   shadow-mode verdict (T-02).
+- `services/pr-lifecycle.service.ts` — P3 T-02: push the task branch,
+  find-or-create its PR with deterministic title/body (`utils/pr-content`).
 - `services/sandbox-deploy.service.ts` — task-branch build → sandbox via the
   repo-owned contract; idempotent per SHA, health must report the deployed
   SHA, structurally unable to reach any other environment (T-03).
