@@ -1,0 +1,8 @@
+---
+description: "Start or resume an `sdlc-workflow` run using the **background supervise** default: OS `nohup`, `--heartbeat 30`, smoke-check PID/heartbeat, then end the turn and check in on wakes — do **not** block the chat on sandbox/CI waits. Follow the `sdlc-run-supervise` skill (`.claude/skills/sdlc-run-supervise/SKILL.md` or `.cursor/skills/sdlc-run-supervise/SKILL.md`). For scorecards use `/sdlc-status`."
+alwaysApply: false
+---
+
+# /sdlc-run (Cursor)
+
+Start or resume an `sdlc-workflow` run using the **background supervise** default: OS `nohup`, `--heartbeat 30`, smoke-check PID/heartbeat, then end the turn and check in on wakes — do **not** block the chat on sandbox/CI waits. Follow the `sdlc-run-supervise` skill (`.claude/skills/sdlc-run-supervise/SKILL.md` or `.cursor/skills/sdlc-run-supervise/SKILL.md`). For scorecards use `/sdlc-status`.

@@ -40,7 +40,9 @@ const mirrorClaudeRulesToCursor = (
           ? 'Mandatory Handler / Service / Repository + InversifyJS architecture'
           : stem === 'code-style'
             ? 'TypeScript and Prettier code style for Rosetta'
-            : `Rosetta rule: ${stem}`;
+            : stem === 'sdlc-run-supervise'
+              ? 'Default: background-supervise sdlc-workflow runs (nohup + heartbeat)'
+              : `Rosetta rule: ${stem}`;
       const contents = [
         '---',
         `description: ${yamlDoubleQuoted(description)}`,

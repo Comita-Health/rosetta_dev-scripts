@@ -12,17 +12,17 @@ description: >-
 
 Two modes:
 
-| Mode | When | Goal |
-| ---- | ---- | ---- |
-| **A — Scorecard** | User names a PRD/SPEC/run | Deep dive: tasks, merges, gates, ETA |
-| **B — Portfolio** | "What's in flight?", parked/idle PRDs | Inventory across the workspace |
+| Mode              | When                                  | Goal                                 |
+| ----------------- | ------------------------------------- | ------------------------------------ |
+| **A — Scorecard** | User names a PRD/SPEC/run             | Deep dive: tasks, merges, gates, ETA |
+| **B — Portfolio** | "What's in flight?", parked/idle PRDs | Inventory across the workspace       |
 
 ## Two status fields (do not confuse them)
 
-| Artifact | Typical path | Meaning |
-| -------- | ------------ | ------- |
-| **PRD** | `*/docs/product/PRD-NNNN-*.md` or `rosetta_docs/product/` | Product intent. `Draft` → `Proposed` → `Accepted` → `Shipped` (then `Superseded`/`Deprecated`). |
-| **Implementation spec** | `<app-repo>/specs/PRD-NNNN/phase-N-spec.md` | Execution plan (ADR-0008). `Draft` → human flip → `Approved` → `run` → `Done`. |
+| Artifact                | Typical path                                              | Meaning                                                                                         |
+| ----------------------- | --------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| **PRD**                 | `*/docs/product/PRD-NNNN-*.md` or `rosetta_docs/product/` | Product intent. `Draft` → `Proposed` → `Accepted` → `Shipped` (then `Superseded`/`Deprecated`). |
+| **Implementation spec** | `<app-repo>/specs/PRD-NNNN/phase-N-spec.md`               | Execution plan (ADR-0008). `Draft` → human flip → `Approved` → `run` → `Done`.                  |
 
 A PRD can still say `Draft` while the spec is `Approved` and tasks are merging.
 Prefer **spec + `sdlc-workflow status`** for "how much longer?"
@@ -48,11 +48,11 @@ are Draft/Proposed or have specs/runs but **are not actively being worked**.
 
    Useful env vars:
 
-   | Var | Default | Effect |
-   | --- | ------- | ------ |
-   | `PRD_PORTFOLIO_SCOPE` | `all` | `comita` \| `rosetta` \| `all` |
-   | `PRD_PORTFOLIO_STALE_HOURS` | `48` | Younger runs → `warm` |
-   | `PRD_PORTFOLIO_ALL` | `0` | `1` includes Shipped/Deprecated/Superseded |
+   | Var                         | Default | Effect                                     |
+   | --------------------------- | ------- | ------------------------------------------ |
+   | `PRD_PORTFOLIO_SCOPE`       | `all`   | `comita` \| `rosetta` \| `all`             |
+   | `PRD_PORTFOLIO_STALE_HOURS` | `48`    | Younger runs → `warm`                      |
+   | `PRD_PORTFOLIO_ALL`         | `0`     | `1` includes Shipped/Deprecated/Superseded |
 
 2. Supplement with open docs PRs that **add** PRDs not yet on the default
    branch (the script lists `gh pr list` for `comita_docs` / `rosetta_docs`
@@ -63,13 +63,13 @@ are Draft/Proposed or have specs/runs but **are not actively being worked**.
 
 ### Bucket meanings
 
-| Bucket | Meaning |
-| ------ | ------- |
-| `active` | Live `sdlc-workflow` process for a matching run |
-| `warm` | Run `updatedAt` within stale threshold |
-| `parked` | Spec and/or run exists, but idle / no recent activity |
-| `backlog` | Draft/Proposed/Accepted product PRD, no spec/run yet |
-| `other` | Unusual product status without run activity |
+| Bucket    | Meaning                                               |
+| --------- | ----------------------------------------------------- |
+| `active`  | Live `sdlc-workflow` process for a matching run       |
+| `warm`    | Run `updatedAt` within stale threshold                |
+| `parked`  | Spec and/or run exists, but idle / no recent activity |
+| `backlog` | Draft/Proposed/Accepted product PRD, no spec/run yet  |
+| `other`   | Unusual product status without run activity           |
 
 ### Output format (keep it short)
 
@@ -77,16 +77,20 @@ are Draft/Proposed or have specs/runs but **are not actively being worked**.
 ### PRD portfolio (in-flight)
 
 **Active / warm**
+
 - …
 
 **Parked** (spec or run, not actively worked)
+
 - Comita PRD-0006 — Draft · no spec · backlog→parked if you treat open intent
 - …
 
 **Backlog** (Draft/Proposed/Accepted, no execution yet)
+
 - …
 
 **Open docs PRs** (PRD not on default branch yet)
+
 - comita_docs#12 — PRD-0008 Draft …
 ```
 
@@ -129,12 +133,12 @@ workspace equivalent of that dashboard.
 ```markdown
 ### PRD-NNNN — shadow progress
 
-| Layer | Status |
-| ----- | ------ |
-| PRD product status | Draft / Proposed / Accepted / Shipped / … |
-| Spec | SPEC-… status + path |
-| Run | `<run-id>` · tip merge SHA |
-| Tasks | T-01 ✅ merged · T-02 ✅ · … · T-0N 🔲 PR #… / in gates / blocked |
+| Layer              | Status                                                            |
+| ------------------ | ----------------------------------------------------------------- |
+| PRD product status | Draft / Proposed / Accepted / Shipped / …                         |
+| Spec               | SPEC-… status + path                                              |
+| Run                | `<run-id>` · tip merge SHA                                        |
+| Tasks              | T-01 ✅ merged · T-02 ✅ · … · T-0N 🔲 PR #… / in gates / blocked |
 
 **Gates (shadow):** note pass/breach per latest task — breaches against frozen
 `baseSha` after merges are often false positives (see rosetta_dev-scripts#42/#43).
@@ -148,23 +152,24 @@ flip spec `Draft → Approved`.
 
 ## Heartbeat (while `run` is in flight)
 
-Spawn with OS `nohup` (not IDE background) — see rosetta_dev-scripts#38:
+**Default:** follow the **`sdlc-run-supervise`** skill — OS `nohup`,
+`--heartbeat`, end the agent turn, check in on wakes. Do **not** block the
+chat with multi-minute `sleep`/poll loops (sandbox alone is often 7+ min).
+See `sdlc-workflow/docs/operator-background-supervise.md` and `/sdlc-run`.
 
 ```bash
-nohup bunx tsx src/index.ts run … > /tmp/sdlc-run.log 2>&1 &
+nohup bunx tsx src/index.ts run … --heartbeat 30 > /tmp/sdlc-run.log 2>&1 &
 echo $! > /tmp/sdlc-run.pid
 ```
 
-Poll ~30s:
+On each wake (e.g. `/loop` 2–5m), cheap pulse only:
 
 ```bash
 PID=$(cat /tmp/sdlc-run.pid)
 ps -p "$PID" -o etime=,command=
-pgrep -lf 'cursor-agent' | head -5
 bunx tsx src/index.ts status --run-id <run-id> | head -40
 tail -20 /tmp/sdlc-run.log
-git -C ~/.rosetta/sdlc-runs/<run-id>/worktrees/<taskId> log -1 --oneline
-git -C ~/.rosetta/sdlc-runs/<run-id>/worktrees/<taskId> status --porcelain | head
+tail -3 ~/.rosetta/sdlc-runs/<run-id>/heartbeat.jsonl
 gh pr list --head "sdlc/<run-id>/<taskId>" --json number,url,state
 ```
 
