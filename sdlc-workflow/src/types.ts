@@ -135,7 +135,9 @@ export type ExceptionTrigger =
   | 'reviewer-disagreement'
   | 'ci-fix-attempts-exhausted'
   | 'envelope-breach'
-  | 'budget-exhaustion';
+  | 'budget-exhaustion'
+  /** P3 T-04: a red phase gate blocked an enforced merge. */
+  | 'merge-blocked';
 
 /**
  * An exception-ledger entry (SPEC-PRD-0011-P2 T-06): a would-escalate

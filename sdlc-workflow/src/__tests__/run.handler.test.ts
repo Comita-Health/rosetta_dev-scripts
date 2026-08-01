@@ -9,6 +9,7 @@ import type { IChronicleCommitService } from '../services/chronicle-commit.servi
 import type { ICiGateService } from '../services/ci-gate.service';
 import type { IDigestService } from '../services/digest.service';
 import type { IEnvelopeGateService } from '../services/envelope-gate.service';
+import type { IPullRequestRepository } from '../repositories/pull-request.repository';
 import type { IPrLifecycleService } from '../services/pr-lifecycle.service';
 import type {
   ExecutorOutcome,
@@ -88,6 +89,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
   let recordTaskPrUrl: jest.Mock;
   let stateLoad: jest.Mock;
   let openTaskPr: jest.Mock;
+  let prMerge: jest.Mock;
 
   const taskOutcome = (
     overrides: Partial<ExecutorOutcome> = {}
@@ -128,6 +130,13 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
 
   beforeEach(() => {
     state = makeState();
+    // The real executor records a task result before the handler pipeline.
+    state.taskResults['T-01'] = {
+      taskId: 'T-01',
+      status: 'completed',
+      branch: 'sdlc/run-1/T-01',
+      recordedAt: 'x'
+    };
     breachVerdict = verdictOf('envelope', 'breach', [
       'outside allowedPaths: infra/x.yml'
     ]);
@@ -206,6 +215,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
       number: 7,
       created: true
     });
+    prMerge = jest.fn().mockReturnValue('merged-sha-abc');
 
     const container = new Container();
     container
@@ -220,6 +230,13 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
     container
       .bind<IPrLifecycleService>(WORKFLOW_TOKENS.PrLifecycleService)
       .toConstantValue({ openTaskPr });
+    container
+      .bind<IPullRequestRepository>(WORKFLOW_TOKENS.PullRequestRepository)
+      .toConstantValue({
+        findByBranch: jest.fn(),
+        create: jest.fn(),
+        merge: prMerge
+      });
     container
       .bind<ISandboxDeployService>(WORKFLOW_TOKENS.SandboxDeployService)
       .toConstantValue({ deploy });
@@ -259,8 +276,20 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
         recordSandbox,
         recordCriteria,
         recordStep,
-        recordMergedSha: jest.fn(),
-        recordTaskMerged: jest.fn(),
+        recordMergedSha: jest
+          .fn()
+          .mockImplementation((_d, s: RunState, sha: string) => {
+            s.mergedSha = sha;
+          }),
+        recordTaskMerged: jest
+          .fn()
+          .mockImplementation(
+            (_d, s: RunState, taskId: string, sha: string) => {
+              if (s.taskResults[taskId] !== undefined) {
+                s.taskResults[taskId].mergedSha = sha;
+              }
+            }
+          ),
         recordTaskPrUrl,
         recordCiFixAttempt: jest.fn(),
         load: stateLoad,
@@ -554,6 +583,118 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
     expect(recordTaskPrUrl).toHaveBeenCalledTimes(1);
   });
 
+  describe('P3 T-04 gate enforcement', () => {
+    const greenGates = () => {
+      evaluate.mockResolvedValue(verdictOf('envelope', 'pass'));
+      review.mockResolvedValue(verdictOf('reviewer', 'pass'));
+      verify.mockResolvedValue({
+        verdict: verdictOf('verification', 'pass'),
+        criteria: criterionVerdicts
+      });
+      ciEvaluate.mockResolvedValue(verdictOf('ci', 'pass'));
+      aggregate.mockReturnValue({
+        verdict: verdictOf('phase', 'pass'),
+        exceptions: []
+      });
+    };
+
+    it('auto-merges the PR when all four gates are green, recording the SHA in state and Chronicle', async () => {
+      greenGates();
+
+      await handler.runTask({ ...INPUT, chronicleRepo: '/chronicle' });
+
+      expect(prMerge).toHaveBeenCalledWith('/repo', 7);
+      expect(state.taskResults['T-01'].mergedSha).toBe('merged-sha-abc');
+      expect(state.mergedSha).toBe('merged-sha-abc');
+      // sdlc.merge.v1 artifact, attributed to the machine gates.
+      expect(recordMerge).toHaveBeenCalledWith(
+        expect.objectContaining({
+          mergedSha: 'merged-sha-abc',
+          taskId: 'T-01',
+          approvedBy: 'machine-gates'
+        })
+      );
+      // Cached: resume does not merge twice.
+      await handler.runTask({ ...INPUT, chronicleRepo: '/chronicle' });
+      expect(prMerge).toHaveBeenCalledTimes(1);
+    });
+
+    it.each(['envelope', 'reviewer', 'verification', 'ci'] as const)(
+      'a red %s gate blocks the merge and records the escalation — no merge call',
+      async gate => {
+        greenGates();
+        const red = verdictOf(gate, 'breach', [`${gate} went red`]);
+        if (gate === 'envelope') evaluate.mockResolvedValue(red);
+        if (gate === 'reviewer') review.mockResolvedValue(red);
+        if (gate === 'verification')
+          verify.mockResolvedValue({ verdict: red, criteria: [] });
+        if (gate === 'ci') ciEvaluate.mockResolvedValue(red);
+        aggregate.mockReturnValue({
+          verdict: verdictOf('phase', 'breach', [`failing gates: ${gate}`]),
+          exceptions: []
+        });
+
+        await handler.runTask(INPUT);
+
+        expect(prMerge).not.toHaveBeenCalled();
+        expect(recordMerge).not.toHaveBeenCalled();
+        expect(state.exceptions).toContainEqual(
+          expect.objectContaining({
+            trigger: 'merge-blocked',
+            taskId: 'T-01',
+            context: [`failing gates: ${gate}`]
+          })
+        );
+      }
+    );
+
+    it('with the shadow flag set, verdicts are recorded but no merge call is ever issued', async () => {
+      greenGates();
+
+      await handler.runTask({ ...INPUT, shadow: true });
+
+      expect(prMerge).not.toHaveBeenCalled();
+      // Verdicts still recorded (envelope, reviewer, sandbox, verification,
+      // ci, phase).
+      expect(appendVerdict).toHaveBeenCalledTimes(6);
+      expect(state.exceptions).toEqual([]);
+    });
+
+    it('green gates without a recorded PR block with an escalation instead of merging', async () => {
+      greenGates();
+      openTaskPr.mockImplementation(() => {
+        throw new WorkflowError('gh unavailable', 'GH_FAILED');
+      });
+
+      await handler.runTask(INPUT);
+
+      expect(prMerge).not.toHaveBeenCalled();
+      expect(state.exceptions).toContainEqual(
+        expect.objectContaining({
+          trigger: 'merge-blocked',
+          context: ['all gates green but no PR is recorded for the task']
+        })
+      );
+    });
+
+    it('a failed merge call records the escalation without crashing the run', async () => {
+      greenGates();
+      prMerge.mockImplementation(() => {
+        throw new WorkflowError('merge conflict', 'GH_FAILED', ['dirty']);
+      });
+
+      const result = await handler.runTask(INPUT);
+
+      expect(result.outcome).toBe('executed');
+      expect(state.exceptions).toContainEqual(
+        expect.objectContaining({
+          trigger: 'merge-blocked',
+          context: [expect.stringContaining('merge conflict')]
+        })
+      );
+    });
+  });
+
   it('skips digest and chronicle steps without --chronicle-repo', async () => {
     await handler.runTask(INPUT);
 
@@ -575,8 +716,10 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
     expect(posted.taskId).toBe('T-01');
     expect(posted.phaseVerdict).toBe(phaseVerdict);
     expect(posted.verdicts).toHaveLength(6); // all gate verdicts for the task
+    // Enforcing mode adds the merge-blocked escalation for the red phase.
     expect(posted.exceptions).toEqual([
-      expect.objectContaining({ trigger: 'envelope-breach' })
+      expect.objectContaining({ trigger: 'envelope-breach' }),
+      expect.objectContaining({ trigger: 'merge-blocked' })
     ]);
   });
 

@@ -17,10 +17,14 @@ PRD-0011 (Full-Loop SDLC Automation):
   post-merge sandbox deploy + PRD-0007 digest with veto-triggered revert.
   Landed so far: the T-01 dependency-ordered task pool; the T-02 PR
   lifecycle — each completed task branch is pushed and gets a real PR
-  (idempotent on resume), which is the reviewer- and CI-gate subject; and
+  (idempotent on resume), which is the reviewer- and CI-gate subject;
   the T-03 live CI monitor — checks are polled to terminal and failures
   dispatch a fix agent (at most 3 attempts, persisted across resume)
-  before the post-cycle verdict reaches the aggregator.
+  before the post-cycle verdict reaches the aggregator; and T-04 gate
+  enforcement — all four gates green auto-merges the task PR (merge SHA
+  recorded in run state and the `sdlc.merge.v1` artifact, attributed to
+  `machine-gates`), any red gate blocks with a `merge-blocked`
+  escalation, and `--shadow` restores the record-only calibration mode.
 
 ## Usage
 
@@ -47,6 +51,7 @@ bun run dev -- run --spec ../specs/PRD-0011/phase-3-spec.md --repo .. \
 #   --chronicle-repo  personal Chronicle ledger repo; enables the T-07 queue
 #                     digest and T-08 artifact commits (skipped when absent)
 #   --max-parallel    concurrent implementation agents per wave (default: 3)
+#   --shadow          record gate verdicts but never merge (calibration mode)
 
 # Record a human-approved merge in the run's Chronicle artifact (T-08);
 # --task marks that task merged, which unblocks its dependents (P3 T-01)
@@ -62,8 +67,10 @@ bun run dev -- status --run-id <run-id>
 `run` refuses anything but an Approved spec, records the refusal as a
 blocked verdict, and executes at most one task per invocation. The envelope
 gate evaluates the task branch diff against the spec's blast-radius envelope
-(forbidden-surface labels resolve via `<repo>/.sdlc/surfaces.json`); in this
-phase every gate verdict is shadow-mode only.
+(forbidden-surface labels resolve via `<repo>/.sdlc/surfaces.json`). Since
+P3 T-04 the gates enforce by default: green across the board merges the
+task PR automatically; any red gate blocks and escalates (`--shadow`
+disables enforcement for calibration).
 
 ## Repo-owned `.sdlc/` contracts
 
@@ -154,8 +161,9 @@ Handler / Service / Repository with InversifyJS (workspace rule):
 
 - `handlers/workflow.handler.ts` — Phase 1 pipeline, prints the gate.
 - `handlers/run.handler.ts` — pooled task loop: parallel executor wave +
-  per-task shadow gates + digest/Chronicle steps, all through the T-09
-  step cache.
+  per-task gates + P3 T-04 enforcement (auto-merge on green, escalate on
+  red, `--shadow` to record only) + digest/Chronicle steps, all through
+  the T-09 step cache.
 - `services/decompose.service.ts` — PRD → `ProductStory[]` (right-sizing prompt).
 - `services/spec-synthesis.service.ts` — stories → tasks + envelope → validated
   ADR-0008 Markdown.

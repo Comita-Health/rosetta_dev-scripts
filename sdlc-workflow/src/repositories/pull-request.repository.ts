@@ -19,6 +19,11 @@ export interface IPullRequestRepository {
     repoPath: string,
     input: { branch: string; title: string; body: string }
   ): PrRef;
+  /**
+   * Merge the PR (merge commit, P3 T-04) and return the merge commit SHA.
+   * Only ever called by the enforcement path when every gate is green.
+   */
+  merge(repoPath: string, number: number): string;
 }
 
 const gh = (repoPath: string, command: string, stdin?: string): string => {
@@ -76,5 +81,21 @@ export class PullRequestRepository implements IPullRequestRepository {
       );
     }
     return { url, number: Number(match[1]) };
+  }
+
+  merge(repoPath: string, number: number): string {
+    gh(repoPath, `gh pr merge ${number} --merge`);
+    const sha = gh(
+      repoPath,
+      `gh pr view ${number} --json mergeCommit --jq ".mergeCommit.oid"`
+    ).trim();
+    if (!/^[0-9a-f]{7,40}$/.test(sha)) {
+      throw new WorkflowError(
+        `merged PR #${number} but could not resolve its merge commit`,
+        'GH_FAILED',
+        [sha.slice(0, 200)]
+      );
+    }
+    return sha;
   }
 }
