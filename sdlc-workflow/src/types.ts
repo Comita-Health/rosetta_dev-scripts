@@ -88,7 +88,7 @@ export interface TaskRunResult {
   recordedAt: string; // ISO timestamp
 }
 
-export type GateOutcome = 'pass' | 'breach' | 'blocked';
+export type GateOutcome = 'pass' | 'breach' | 'blocked' | 'human-required';
 
 /**
  * A machine-gate verdict. Phase 2 runs every gate in shadow mode: the
@@ -130,6 +130,50 @@ export interface ExceptionEntry {
   recordedAt: string; // ISO timestamp
 }
 
+/**
+ * The repo-owned sandbox contract (SPEC-PRD-0011-P2 T-03): the `sandbox`
+ * entry of `.sdlc/environments.json`. The engine never owns deployment
+ * mechanics — the repo declares what "deploy" and "healthy" mean (for a
+ * CDK app that might be a branch push plus a workflow watch; for a CLI
+ * repo, a build). Commands receive the deployed SHA as
+ * `SDLC_SANDBOX_SHA`; the health command's output must echo that SHA.
+ */
+export interface SandboxContract {
+  deployCommand: string;
+  healthCommand: string;
+  timeoutMinutes: number;
+}
+
+/** The repo-owned verification contract: `.sdlc/verification.json`. */
+export interface VerificationContract {
+  testCommand: string;
+}
+
+export interface SandboxRecord {
+  sha: string;
+  status: 'healthy' | 'failed';
+  recordedAt: string; // ISO timestamp
+}
+
+export type CriterionTier = 'test' | 'agent' | 'manual';
+
+export type CriterionOutcome = 'pass' | 'fail' | 'human-required';
+
+/**
+ * Per-criterion verification verdict (SPEC-PRD-0011-P2 T-04). Evidence is
+ * first-class: `evidenceId` names the artifact (test output, verifier
+ * transcript) persisted under the run directory so T-08 can commit it to
+ * the Chronicle.
+ */
+export interface CriterionVerdict {
+  taskId: string;
+  criterion: string;
+  tier: CriterionTier;
+  outcome: CriterionOutcome;
+  evidenceId?: string;
+  recordedAt: string; // ISO timestamp
+}
+
 export interface RunState {
   runId: string;
   specId: string;
@@ -138,6 +182,8 @@ export interface RunState {
   taskResults: Record<string, TaskRunResult>;
   verdicts: GateVerdict[];
   exceptions: ExceptionEntry[];
+  criterionVerdicts: CriterionVerdict[];
+  sandbox?: SandboxRecord;
   /** Cumulative model-token spend in thousands, metered where available. */
   tokenSpendK: number;
   /** Per-task count of failing CI fix attempts (Phase-3 machinery records). */
@@ -161,6 +207,7 @@ export type WorkflowErrorCode =
   | 'MISSING_API_KEY'
   | 'INVALID_BACKEND'
   | 'SPEC_MALFORMED'
+  | 'CONTRACT_MALFORMED'
   | 'GIT_FAILED';
 
 export class WorkflowError extends Error {

@@ -53,7 +53,9 @@ describe('ExecutorService (T-01)', () => {
       save: jest.fn(),
       appendVerdict: jest.fn(),
       recordTaskResult: jest.fn(),
-      recordExceptions: jest.fn()
+      recordExceptions: jest.fn(),
+      recordSandbox: jest.fn(),
+      recordCriteria: jest.fn()
     };
 
     const container = new Container();
@@ -119,6 +121,7 @@ describe('ExecutorService (T-01)', () => {
       },
       verdicts: [],
       exceptions: [],
+      criterionVerdicts: [],
       tokenSpendK: 0,
       ciFixAttempts: {},
       updatedAt: 'x'
@@ -140,6 +143,7 @@ describe('ExecutorService (T-01)', () => {
       },
       verdicts: [],
       exceptions: [],
+      criterionVerdicts: [],
       tokenSpendK: 0,
       ciFixAttempts: {},
       updatedAt: 'x'

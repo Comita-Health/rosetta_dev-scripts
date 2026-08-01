@@ -8,9 +8,12 @@ import type {
   ExecutorOutcome,
   IExecutorService
 } from '../services/executor.service';
+import type { IGitRepository } from '../repositories/git.repository';
 import type { IReviewerGateService } from '../services/reviewer-gate.service';
+import type { ISandboxDeployService } from '../services/sandbox-deploy.service';
+import type { IVerificationService } from '../services/verification.service';
 import { WORKFLOW_TOKENS } from '../tokens';
-import { GateVerdict, RunState, SpecDocument } from '../types';
+import { GateVerdict, RunState, SpecDocument, WorkflowError } from '../types';
 import { makeEnvelope, makeTask } from './fixtures';
 
 const SPEC: SpecDocument = {
@@ -30,6 +33,7 @@ const STATE: RunState = {
   taskResults: {},
   verdicts: [],
   exceptions: [],
+  criterionVerdicts: [],
   tokenSpendK: 0,
   ciFixAttempts: {},
   updatedAt: 'x'
@@ -59,9 +63,13 @@ describe('RunHandler (shadow-mode single-task loop)', () => {
   let executeNext: jest.Mock;
   let evaluate: jest.Mock;
   let review: jest.Mock;
+  let deploy: jest.Mock;
+  let verify: jest.Mock;
   let aggregate: jest.Mock;
   let appendVerdict: jest.Mock;
   let recordExceptions: jest.Mock;
+  let recordSandbox: jest.Mock;
+  let recordCriteria: jest.Mock;
 
   const completedOutcome = (): ExecutorOutcome => ({
     kind: 'completed',
@@ -75,14 +83,37 @@ describe('RunHandler (shadow-mode single-task loop)', () => {
     'outside allowedPaths: infra/x.yml'
   ]);
   const reviewerVerdict = verdictOf('reviewer', 'pass', ['looks solid']);
+  const sandboxVerdict = verdictOf('sandbox', 'pass', [
+    'deployed and healthy at head-sha'
+  ]);
+  const verificationVerdict = verdictOf('verification', 'pass');
+  const criterionVerdicts = [
+    {
+      taskId: 'T-01',
+      criterion: 'test: it works',
+      tier: 'test' as const,
+      outcome: 'pass' as const,
+      evidenceId: 'T-01-test-output',
+      recordedAt: 'x'
+    }
+  ];
   const phaseVerdict = verdictOf('phase', 'breach', [
-    'failing gates: ci, verification, envelope'
+    'failing gates: ci, envelope'
   ]);
 
   beforeEach(() => {
     executeNext = jest.fn().mockResolvedValue(completedOutcome());
     evaluate = jest.fn().mockResolvedValue(breachVerdict);
     review = jest.fn().mockResolvedValue(reviewerVerdict);
+    deploy = jest.fn().mockResolvedValue({
+      verdict: sandboxVerdict,
+      record: { sha: 'head-sha', status: 'healthy', recordedAt: 'x' },
+      healthReport: 'sha=head-sha ok'
+    });
+    verify = jest.fn().mockResolvedValue({
+      verdict: verificationVerdict,
+      criteria: criterionVerdicts
+    });
     aggregate = jest.fn().mockReturnValue({
       verdict: phaseVerdict,
       exceptions: [
@@ -96,6 +127,8 @@ describe('RunHandler (shadow-mode single-task loop)', () => {
     });
     appendVerdict = jest.fn();
     recordExceptions = jest.fn();
+    recordSandbox = jest.fn();
+    recordCriteria = jest.fn();
 
     const container = new Container();
     container
@@ -108,13 +141,30 @@ describe('RunHandler (shadow-mode single-task loop)', () => {
       .bind<IReviewerGateService>(WORKFLOW_TOKENS.ReviewerGateService)
       .toConstantValue({ review });
     container
+      .bind<ISandboxDeployService>(WORKFLOW_TOKENS.SandboxDeployService)
+      .toConstantValue({ deploy });
+    container
+      .bind<IVerificationService>(WORKFLOW_TOKENS.VerificationService)
+      .toConstantValue({ verify });
+    container
       .bind<IAggregatorService>(WORKFLOW_TOKENS.AggregatorService)
       .toConstantValue({ aggregate });
+    container
+      .bind<IGitRepository>(WORKFLOW_TOKENS.GitRepository)
+      .toConstantValue({
+        headSha: jest.fn().mockReturnValue('head-sha'),
+        status: jest.fn(),
+        addWorktree: jest.fn(),
+        diffStat: jest.fn(),
+        diffText: jest.fn()
+      });
     container
       .bind<IRunStateRepository>(WORKFLOW_TOKENS.RunStateRepository)
       .toConstantValue({
         appendVerdict,
         recordExceptions,
+        recordSandbox,
+        recordCriteria,
         load: jest.fn(),
         save: jest.fn(),
         recordTaskResult: jest.fn()
@@ -137,21 +187,30 @@ describe('RunHandler (shadow-mode single-task loop)', () => {
       taskId: 'T-01',
       branch: 'sdlc/run-1/T-01'
     });
-    expect(appendVerdict).toHaveBeenCalledTimes(3); // envelope, reviewer, phase
-    expect(appendVerdict).toHaveBeenCalledWith(
-      '/runs',
-      expect.anything(),
-      breachVerdict
-    );
-    expect(appendVerdict).toHaveBeenCalledWith(
-      '/runs',
-      expect.anything(),
-      reviewerVerdict
-    );
-    expect(appendVerdict).toHaveBeenCalledWith(
-      '/runs',
-      expect.anything(),
+    // envelope, reviewer, sandbox, verification, phase
+    expect(appendVerdict).toHaveBeenCalledTimes(5);
+    for (const verdict of [
+      breachVerdict,
+      reviewerVerdict,
+      sandboxVerdict,
+      verificationVerdict,
       phaseVerdict
+    ]) {
+      expect(appendVerdict).toHaveBeenCalledWith(
+        '/runs',
+        expect.anything(),
+        verdict
+      );
+    }
+    expect(recordSandbox).toHaveBeenCalledWith(
+      '/runs',
+      expect.anything(),
+      expect.objectContaining({ sha: 'head-sha', status: 'healthy' })
+    );
+    expect(recordCriteria).toHaveBeenCalledWith(
+      '/runs',
+      expect.anything(),
+      criterionVerdicts
     );
     expect(recordExceptions).toHaveBeenCalledWith(
       '/runs',
@@ -162,14 +221,51 @@ describe('RunHandler (shadow-mode single-task loop)', () => {
     );
   });
 
-  it('feeds the reviewer and envelope verdicts to the aggregator with pending ci/verification', async () => {
+  it('deploys the task branch head to the sandbox and hands the health report to verification', async () => {
+    await handler.runTask(INPUT);
+
+    expect(deploy).toHaveBeenCalledWith({
+      worktreePath: '/runs/run-1/worktrees/T-01',
+      sha: 'head-sha',
+      previous: undefined
+    });
+    expect(verify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        worktreePath: '/runs/run-1/worktrees/T-01',
+        task: SPEC.tasks[0],
+        healthReport: 'sha=head-sha ok'
+      })
+    );
+  });
+
+  it('records a blocked verification verdict when criterion validation fails, without crashing the run', async () => {
+    verify.mockRejectedValue(
+      new WorkflowError('bad criterion prefix', 'SPEC_MALFORMED')
+    );
+
+    const result = await handler.runTask(INPUT);
+
+    expect(result.outcome).toBe('completed');
+    const call = aggregate.mock.calls[0][0];
+    expect(call.gates.verification.outcome).toBe('blocked');
+    expect(call.gates.verification.reasons).toEqual(['bad criterion prefix']);
+    expect(recordCriteria).toHaveBeenCalledWith('/runs', expect.anything(), []);
+  });
+
+  it('rethrows unexpected verification errors', async () => {
+    verify.mockRejectedValue(new Error('disk on fire'));
+
+    await expect(handler.runTask(INPUT)).rejects.toThrow('disk on fire');
+  });
+
+  it('feeds real envelope/reviewer/verification verdicts to the aggregator with pending ci', async () => {
     await handler.runTask(INPUT);
 
     const call = aggregate.mock.calls[0][0];
     expect(call.gates.envelope).toBe(breachVerdict);
     expect(call.gates.reviewer).toBe(reviewerVerdict);
+    expect(call.gates.verification).toBe(verificationVerdict);
     expect(call.gates.ci.outcome).toBe('blocked');
-    expect(call.gates.verification.outcome).toBe('blocked');
     expect(call.taskId).toBe('T-01');
     expect(call.budgetK).toBe(SPEC.envelope.budgetK);
   });
@@ -228,6 +324,7 @@ describe('RunHandler (shadow-mode single-task loop)', () => {
     expect(result.outcome).toBe('failed');
     expect(evaluate).toHaveBeenCalledTimes(1);
     expect(review).toHaveBeenCalledTimes(1);
-    expect(appendVerdict).toHaveBeenCalledTimes(3);
+    expect(deploy).toHaveBeenCalledTimes(1);
+    expect(appendVerdict).toHaveBeenCalledTimes(5);
   });
 });

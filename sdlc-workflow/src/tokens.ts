@@ -12,8 +12,13 @@ export const WORKFLOW_TOKENS = {
   AgentRunnerRepository: Symbol.for('AgentRunnerRepository'),
   RunStateRepository: Symbol.for('RunStateRepository'),
   SurfaceMapRepository: Symbol.for('SurfaceMapRepository'),
+  ContractRepository: Symbol.for('ContractRepository'),
+  ShellCommandRepository: Symbol.for('ShellCommandRepository'),
+  EvidenceRepository: Symbol.for('EvidenceRepository'),
   ExecutorService: Symbol.for('ExecutorService'),
   EnvelopeGateService: Symbol.for('EnvelopeGateService'),
+  SandboxDeployService: Symbol.for('SandboxDeployService'),
+  VerificationService: Symbol.for('VerificationService'),
   ReviewerGateService: Symbol.for('ReviewerGateService'),
   AggregatorService: Symbol.for('AggregatorService'),
   RunHandler: Symbol.for('RunHandler')

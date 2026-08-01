@@ -144,6 +144,7 @@ export class ExecutorService implements IExecutorService {
       taskResults: {},
       verdicts: [],
       exceptions: [],
+      criterionVerdicts: [],
       tokenSpendK: 0,
       ciFixAttempts: {},
       updatedAt: new Date().toISOString()

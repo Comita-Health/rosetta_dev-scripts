@@ -1,5 +1,7 @@
 import { inject, injectable } from 'inversify';
 import chalk from 'chalk';
+import path from 'path';
+import type { IGitRepository } from '../repositories/git.repository';
 import type { IRunStateRepository } from '../repositories/run-state.repository';
 import type { IAggregatorService } from '../services/aggregator.service';
 import type { IEnvelopeGateService } from '../services/envelope-gate.service';
@@ -9,8 +11,13 @@ import type {
   IExecutorService
 } from '../services/executor.service';
 import type { IReviewerGateService } from '../services/reviewer-gate.service';
+import type { ISandboxDeployService } from '../services/sandbox-deploy.service';
+import type {
+  IVerificationService,
+  VerificationOutcome
+} from '../services/verification.service';
 import { WORKFLOW_TOKENS } from '../tokens';
-import { GateVerdict } from '../types';
+import { GateVerdict, WorkflowError } from '../types';
 
 export interface RunTaskInput extends ExecutorInput {}
 
@@ -22,10 +29,12 @@ export interface RunTaskResult {
 
 /**
  * SPEC-PRD-0011-P2 single-task loop: execute one ready task in an isolated
- * worktree (T-01), run the envelope (T-02) and reviewer (T-05) gates in
- * shadow mode, aggregate the phase verdict and exception ledger (T-06),
- * persist everything, and halt — human approval remains the only advance
- * mechanism this phase. CI and verification gates join in T-03/T-04.
+ * worktree (T-01), deploy its build to the sandbox via the repo-owned
+ * contract (T-03), then run the shadow gates — envelope (T-02), reviewer
+ * (T-05), tiered acceptance-criteria verification (T-04) — aggregate the
+ * phase verdict and exception ledger (T-06), persist everything, and halt.
+ * Human approval remains the only advance mechanism this phase; the CI
+ * gate joins in a later slice.
  */
 export interface IRunHandler {
   runTask(input: RunTaskInput): Promise<RunTaskResult>;
@@ -40,8 +49,14 @@ export class RunHandler implements IRunHandler {
     private readonly _envelopeGate: IEnvelopeGateService,
     @inject(WORKFLOW_TOKENS.ReviewerGateService)
     private readonly _reviewerGate: IReviewerGateService,
+    @inject(WORKFLOW_TOKENS.SandboxDeployService)
+    private readonly _sandboxDeploy: ISandboxDeployService,
+    @inject(WORKFLOW_TOKENS.VerificationService)
+    private readonly _verification: IVerificationService,
     @inject(WORKFLOW_TOKENS.AggregatorService)
     private readonly _aggregator: IAggregatorService,
+    @inject(WORKFLOW_TOKENS.GitRepository)
+    private readonly _gitRepo: IGitRepository,
     @inject(WORKFLOW_TOKENS.RunStateRepository)
     private readonly _runStateRepo: IRunStateRepository
   ) {}
@@ -103,20 +118,58 @@ export class RunHandler implements IRunHandler {
     this._runStateRepo.appendVerdict(input.runsDir, state, reviewerVerdict);
     this.printVerdict(reviewerVerdict);
 
-    // CI and the verification runner are not wired yet (T-03/T-04); the
-    // aggregator sees them as blocked so the phase verdict stays honest.
+    // T-03: deploy the task branch build to the sandbox via the repo-owned
+    // contract, idempotent per SHA.
+    const worktreePath = path.join(
+      input.runsDir,
+      input.runId,
+      'worktrees',
+      task.id
+    );
+    const sandbox = await this._sandboxDeploy.deploy({
+      worktreePath,
+      sha: this._gitRepo.headSha(worktreePath),
+      previous: state.sandbox
+    });
+    this._runStateRepo.appendVerdict(input.runsDir, state, sandbox.verdict);
+    if (sandbox.record !== undefined) {
+      this._runStateRepo.recordSandbox(input.runsDir, state, sandbox.record);
+    }
+    this.printVerdict(sandbox.verdict);
+
+    // T-04: tiered acceptance-criteria verification with attached evidence.
+    const verification = await this.runVerification(
+      input,
+      worktreePath,
+      outcome,
+      sandbox.healthReport
+    );
+    this._runStateRepo.appendVerdict(
+      input.runsDir,
+      state,
+      verification.verdict
+    );
+    this._runStateRepo.recordCriteria(
+      input.runsDir,
+      state,
+      verification.criteria
+    );
+    this.printVerdict(verification.verdict);
+
+    // The CI gate is not wired yet; the aggregator sees it as blocked so
+    // the phase verdict stays honest.
     const pendingGate = (gate: string): GateVerdict => ({
       gate,
       outcome: 'blocked',
       wouldEscalate: false,
-      reasons: ['not wired this slice (T-03/T-04)'],
+      reasons: ['not wired this phase'],
       recordedAt: new Date().toISOString()
     });
 
     const { verdict: phaseVerdict, exceptions } = this._aggregator.aggregate({
       gates: {
         ci: pendingGate('ci'),
-        verification: pendingGate('verification'),
+        verification: verification.verdict,
         reviewer: reviewerVerdict,
         envelope: envelopeVerdict
       },
@@ -140,6 +193,43 @@ export class RunHandler implements IRunHandler {
     );
 
     return { outcome: outcome.kind, taskId: task.id, branch: outcome.branch };
+  }
+
+  private async runVerification(
+    input: RunTaskInput,
+    worktreePath: string,
+    outcome: ExecutorOutcome,
+    healthReport: string | undefined
+  ): Promise<VerificationOutcome> {
+    const task = outcome.task;
+    if (task === undefined) {
+      throw new Error('executor returned an incomplete outcome');
+    }
+    try {
+      return await this._verification.verify({
+        worktreePath,
+        runsDir: input.runsDir,
+        runId: input.runId,
+        task,
+        healthReport
+      });
+    } catch (err) {
+      if (err instanceof WorkflowError && err.code === 'SPEC_MALFORMED') {
+        // T-04: an invalid criterion prefix fails validation before any
+        // execution — recorded as a blocked verdict, not a crashed run.
+        return {
+          verdict: {
+            gate: 'verification',
+            outcome: 'blocked',
+            wouldEscalate: true,
+            reasons: [err.message],
+            recordedAt: new Date().toISOString()
+          },
+          criteria: []
+        };
+      }
+      throw err;
+    }
   }
 
   private printVerdict(verdict: GateVerdict): void {

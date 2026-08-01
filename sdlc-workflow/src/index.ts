@@ -13,7 +13,19 @@ import {
   IAgentRunnerRepository
 } from './repositories/agent-runner.repository';
 import { AnthropicRepository } from './repositories/anthropic.repository';
+import {
+  ContractRepository,
+  IContractRepository
+} from './repositories/contract.repository';
+import {
+  EvidenceRepository,
+  IEvidenceRepository
+} from './repositories/evidence.repository';
 import { GitRepository, IGitRepository } from './repositories/git.repository';
+import {
+  ShellCommandRepository,
+  IShellCommandRepository
+} from './repositories/shell-command.repository';
 import { CursorCliRepository } from './repositories/cursor-cli.repository';
 import { IModelRepository } from './repositories/model.repository';
 import {
@@ -55,6 +67,14 @@ import {
   IReviewerGateService
 } from './services/reviewer-gate.service';
 import { ExecutorService, IExecutorService } from './services/executor.service';
+import {
+  SandboxDeployService,
+  ISandboxDeployService
+} from './services/sandbox-deploy.service';
+import {
+  VerificationService,
+  IVerificationService
+} from './services/verification.service';
 import {
   SpecSynthesisService,
   ISpecSynthesisService
@@ -110,6 +130,21 @@ container
 container
   .bind<IEnvelopeGateService>(WORKFLOW_TOKENS.EnvelopeGateService)
   .to(EnvelopeGateService);
+container
+  .bind<IContractRepository>(WORKFLOW_TOKENS.ContractRepository)
+  .to(ContractRepository);
+container
+  .bind<IShellCommandRepository>(WORKFLOW_TOKENS.ShellCommandRepository)
+  .to(ShellCommandRepository);
+container
+  .bind<IEvidenceRepository>(WORKFLOW_TOKENS.EvidenceRepository)
+  .to(EvidenceRepository);
+container
+  .bind<ISandboxDeployService>(WORKFLOW_TOKENS.SandboxDeployService)
+  .to(SandboxDeployService);
+container
+  .bind<IVerificationService>(WORKFLOW_TOKENS.VerificationService)
+  .to(VerificationService);
 container
   .bind<IReviewerGateService>(WORKFLOW_TOKENS.ReviewerGateService)
   .to(ReviewerGateService);
