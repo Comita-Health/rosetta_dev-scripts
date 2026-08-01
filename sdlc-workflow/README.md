@@ -45,20 +45,24 @@ phase every gate verdict is shadow-mode only.
 
 ## Environment
 
-Inference runs over one of two transports, selected automatically:
-`ANTHROPIC_API_KEY` present → Anthropic API (PRD-0011 §5 default); otherwise
-the operator's logged-in Cursor Agent CLI session (`cursor-agent -p`, the
-same operator-auth pattern as `gh`).
+Inference runs over one of three transports, selected automatically:
+`ANTHROPIC_API_KEY` present → Anthropic API (PRD-0011 §5 default); else
+`OPENAI_API_KEY` present → OpenAI Responses API; otherwise the operator's
+logged-in Cursor Agent CLI session (`cursor-agent -p`, the same
+operator-auth pattern as `gh`).
 
 | Variable                 | Required | Purpose                                                        |
 | ------------------------ | -------- | -------------------------------------------------------------- |
 | `ANTHROPIC_API_KEY`      | no\*     | Anthropic API model calls (ADR-0003 / PRD-0011 §5)             |
-| `ANTHROPIC_MODEL`        | no       | Override the API backend's default model (`claude-sonnet-4-5`) |
-| `SDLC_INFERENCE_BACKEND` | no       | Force a backend: `anthropic` or `cursor-cli`                   |
+| `ANTHROPIC_MODEL`        | no       | Override the Anthropic default model (`claude-sonnet-4-5`)     |
+| `OPENAI_API_KEY`         | no\*     | OpenAI Responses API model calls                               |
+| `OPENAI_MODEL`           | no       | Override the OpenAI default model (`gpt-5.6`)                  |
+| `OPENAI_BASE_URL`        | no       | OpenAI-compatible gateway base URL (default: `api.openai.com`) |
+| `SDLC_INFERENCE_BACKEND` | no       | Force a backend: `anthropic`, `openai`, or `cursor-cli`        |
 | `CURSOR_AGENT_BIN`       | no       | Cursor Agent CLI binary (default: `cursor-agent`)              |
 | `CURSOR_MODEL`           | no       | Model passed to the Cursor Agent CLI                           |
 
-\* Without it, a logged-in `cursor-agent` session is required instead.
+\* With neither key set, a logged-in `cursor-agent` session is required.
 
 ## Architecture
 
@@ -75,7 +79,8 @@ Handler / Service / Repository with InversifyJS (workspace rule):
 - `services/envelope-gate.service.ts` — diff vs blast-radius envelope,
   shadow-mode verdict (T-02).
 - `repositories/` — PRD parsing (`prd`), model transports (`anthropic`,
-  `cursor-cli` behind the shared `IModelRepository` contract in `model`),
+  `openai`, `cursor-cli` behind the shared `IModelRepository` contract in
+  `model`),
   schema-constrained inference with one retry (`inference`), spec file writes
   (`spec-file`), spec reads (`spec-doc`), git worktrees/diffs (`git`),
   workspace-mutating agent runs (`agent-runner`), resumable run state
