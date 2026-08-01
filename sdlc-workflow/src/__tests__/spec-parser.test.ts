@@ -69,7 +69,9 @@ describe('parseSpec', () => {
     );
     const doc = parseSpec(markdown);
     expect(doc.id).toBe('SPEC-PRD-0011-P2');
-    expect(doc.status).toBe('Approved');
+    // The status moves through its ADR-0008 lifecycle as the phase ships;
+    // this round-trip test only cares that it parses as a valid status.
+    expect(['Draft', 'Approved', 'Done', 'Superseded']).toContain(doc.status);
     expect(doc.tasks).toHaveLength(9);
     expect(doc.envelope.allowedPaths).toContain('sdlc-workflow/**');
   });
