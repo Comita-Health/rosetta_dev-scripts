@@ -11,12 +11,13 @@ truth for workflow, git conventions, and architecture pointers.
 
 ## Tool-specific layout
 
-| Concern              | Claude Code                                  | Cursor Agent / CLI                                                    |
-| -------------------- | -------------------------------------------- | --------------------------------------------------------------------- |
-| Project brief        | `CLAUDE.md`                                  | `CLAUDE.md` + this `AGENTS.md`                                        |
-| Architecture / style | `.claude/rules/`                             | `.cursor/rules/*.mdc` (mirrored on setup)                             |
-| Permissions          | `.claude/settings.json`                      | `.cursor/cli.json`                                                    |
-| Slash-style prompts  | `.claude/commands/` (`/review`, `/add-repo`) | Matching `.cursor/rules/command-*.mdc` — ask the agent to follow them |
+| Concern              | Claude Code                                                  | Cursor Agent / CLI                                                     |
+| -------------------- | ------------------------------------------------------------ | ---------------------------------------------------------------------- |
+| Project brief        | `CLAUDE.md`                                                  | `CLAUDE.md` + this `AGENTS.md`                                         |
+| Architecture / style | `.claude/rules/`                                             | `.cursor/rules/*.mdc` (mirrored on setup)                              |
+| Permissions          | `.claude/settings.json`                                      | `.cursor/cli.json`                                                     |
+| Slash-style prompts  | `.claude/commands/` (`/review`, `/add-repo`, `/sdlc-status`, `/prd-portfolio`) | Matching `.cursor/rules/command-*.mdc` — ask the agent to follow them  |
+| Agent skills         | `.claude/skills/`                                            | `.cursor/skills/` (e.g. `sdlc-prd-progress` for scorecards + in-flight portfolio) |
 
 ## Quick start
 

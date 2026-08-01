@@ -41,11 +41,11 @@ describe('layDownRootConfig', () => {
   it('copies Claude + Cursor root config when all sources exist', () => {
     mockExistsSync.mockReturnValue(true);
     mockReaddirSync.mockImplementation((p: string) => {
-      if (p.endsWith('.cursor')) return ['cli.json'];
+      if (p.endsWith('.cursor')) return ['cli.json', 'skills'];
       if (p.endsWith(`${path.sep}rules`))
         return ['architecture-hsr.md', 'code-style.md'];
       if (p.endsWith(`${path.sep}commands`))
-        return ['review.md', 'add-repo.md'];
+        return ['review.md', 'add-repo.md', 'sdlc-status.md'];
       return [];
     });
     mockReadFileSync.mockReturnValue('# rule body\n');
@@ -65,12 +65,21 @@ describe('layDownRootConfig', () => {
       path.join('/base', '.claude'),
       { recursive: true }
     );
+    expect(mockCpSync).toHaveBeenCalledWith(
+      expect.stringContaining(`${path.sep}skills`),
+      path.join('/base', '.cursor', 'skills'),
+      { recursive: true }
+    );
     expect(mockWriteFileSync).toHaveBeenCalledWith(
       path.join('/base', '.cursor', 'rules', 'architecture-hsr.mdc'),
       expect.stringContaining('alwaysApply: true')
     );
     expect(mockWriteFileSync).toHaveBeenCalledWith(
       path.join('/base', '.cursor', 'rules', 'command-review.mdc'),
+      expect.stringContaining('alwaysApply: false')
+    );
+    expect(mockWriteFileSync).toHaveBeenCalledWith(
+      path.join('/base', '.cursor', 'rules', 'command-sdlc-status.mdc'),
       expect.stringContaining('alwaysApply: false')
     );
   });

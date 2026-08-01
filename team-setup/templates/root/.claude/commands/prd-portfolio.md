@@ -1,0 +1,1 @@
+List in-flight and parked PRDs across the workspace (Draft/Proposed, specs without active runs, open docs PRs). Follow Mode B of the `sdlc-prd-progress` skill — run `scripts/prd-portfolio.sh` from the workspace root with `ROSETTA_WORKSPACE` set.
