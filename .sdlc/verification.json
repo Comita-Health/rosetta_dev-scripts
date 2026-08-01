@@ -1,0 +1,3 @@
+{
+  "testCommand": "bun install --frozen-lockfile && cd sdlc-workflow && bun run build && bunx jest --coverage=false"
+}

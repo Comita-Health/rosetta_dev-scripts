@@ -82,6 +82,7 @@ describe('RunHandler (shadow-mode single-task loop)', () => {
   let recordSandbox: jest.Mock;
   let recordCriteria: jest.Mock;
   let recordStep: jest.Mock;
+  let stateLoad: jest.Mock;
 
   const completedOutcome = (): ExecutorOutcome => ({
     kind: 'completed',
@@ -176,6 +177,7 @@ describe('RunHandler (shadow-mode single-task loop)', () => {
     recordStep = jest.fn().mockImplementation((_d, s: RunState, key, step) => {
       s.steps[key] = step;
     });
+    stateLoad = jest.fn();
 
     const container = new Container();
     container
@@ -226,7 +228,7 @@ describe('RunHandler (shadow-mode single-task loop)', () => {
         recordCriteria,
         recordStep,
         recordMergedSha: jest.fn(),
-        load: jest.fn(),
+        load: stateLoad,
         save: jest.fn(),
         recordTaskResult: jest.fn()
       });
@@ -490,6 +492,69 @@ describe('RunHandler (shadow-mode single-task loop)', () => {
     expect(deploy).toHaveBeenCalledTimes(2); // first call was the kill
     expect(verify).toHaveBeenCalledTimes(1);
     expect(aggregate).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows run status: tasks, cached steps, verdicts, exceptions (T-09)', async () => {
+    const loaded = makeState();
+    loaded.taskResults['T-01'] = {
+      taskId: 'T-01',
+      status: 'completed',
+      branch: 'sdlc/run-1/T-01',
+      inputsDigest: 'impl-digest',
+      recordedAt: 'x'
+    };
+    loaded.steps['implementation:T-01:impl-digest'] = {
+      name: 'implementation',
+      taskId: 'T-01',
+      inputsDigest: 'impl-digest',
+      completedAt: '2026-08-01T00:00:00Z'
+    };
+    loaded.steps['envelope:T-01:env-digest'] = {
+      name: 'envelope',
+      taskId: 'T-01',
+      inputsDigest: 'env-digest',
+      verdict: verdictOf('envelope', 'pass'),
+      completedAt: '2026-08-01T00:01:00Z'
+    };
+    loaded.verdicts.push(verdictOf('envelope', 'pass'));
+    loaded.exceptions.push({
+      trigger: 'reviewer-disagreement',
+      taskId: 'T-01',
+      context: ['disagree'],
+      recordedAt: 'x'
+    });
+    loaded.sandbox = { sha: 'head-sha', status: 'healthy', recordedAt: 'x' };
+    loaded.mergedSha = 'abc123';
+    stateLoad.mockReturnValue(loaded);
+
+    handler.showStatus({ runsDir: '/runs', runId: 'run-1' });
+
+    const output = (console.log as jest.Mock).mock.calls
+      .map(call => String(call[0]))
+      .join('\n');
+    expect(output).toContain('Run run-1');
+    expect(output).toContain('T-01 completed on sdlc/run-1/T-01');
+    expect(output).toContain('T-01 implementation');
+    expect(output).toContain('T-01 envelope → pass');
+    expect(output).toContain('reviewer-disagreement');
+    expect(output).toContain('head-sha healthy');
+    expect(output).toContain('merged: abc123');
+  });
+
+  it('shows placeholders for a fresh run and throws for an unknown one', () => {
+    stateLoad.mockReturnValue(makeState());
+    handler.showStatus({ runsDir: '/runs', runId: 'run-1' });
+    const output = (console.log as jest.Mock).mock.calls
+      .map(call => String(call[0]))
+      .join('\n');
+    expect(output).toContain('(none attempted)');
+    expect(output).toContain('(none completed)');
+    expect(output).toContain('(none recorded)');
+
+    stateLoad.mockReturnValue(null);
+    expect(() =>
+      handler.showStatus({ runsDir: '/runs', runId: 'run-x' })
+    ).toThrow(WorkflowError);
   });
 
   it('dispatches record-merge to the chronicle service', async () => {

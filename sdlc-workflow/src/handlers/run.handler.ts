@@ -66,10 +66,20 @@ export interface RecordMergeCliInput {
   mergedSha: string;
 }
 
+export interface StatusCliInput {
+  runsDir: string;
+  runId: string;
+}
+
 export interface IRunHandler {
   runTask(input: RunTaskInput): Promise<RunTaskResult>;
   /** T-08: record a human-approved merge in the run's Chronicle artifact. */
   recordMerge(input: RecordMergeCliInput): Promise<void>;
+  /**
+   * T-09 run-status interface: print the run's task results, step graph
+   * (what is cached vs would re-execute), verdicts, and exceptions.
+   */
+  showStatus(input: StatusCliInput): void;
 }
 
 @injectable()
@@ -288,6 +298,74 @@ export class RunHandler implements IRunHandler {
     );
 
     return { outcome: outcome.kind, taskId: task.id, branch: outcome.branch };
+  }
+
+  showStatus(input: StatusCliInput): void {
+    const state = this._runStateRepo.load(input.runsDir, input.runId);
+    if (state === null) {
+      throw new WorkflowError(
+        `run ${input.runId} has no recorded state`,
+        'RUN_NOT_FOUND'
+      );
+    }
+
+    console.log(chalk.bold(`\nRun ${state.runId} — ${state.specId}`));
+    console.log(
+      `  spec: ${state.specPath}\n  base: ${state.baseSha}\n  updated: ${state.updatedAt}`
+    );
+    if (state.mergedSha !== undefined) {
+      console.log(chalk.green(`  merged: ${state.mergedSha}`));
+    }
+
+    console.log(chalk.bold('\nTasks'));
+    const results = Object.values(state.taskResults);
+    if (results.length === 0) console.log('  (none attempted)');
+    for (const result of results) {
+      const icon =
+        result.status === 'completed' ? chalk.green('✓') : chalk.red('✗');
+      console.log(
+        `  ${icon} ${result.taskId} ${result.status}` +
+          (result.branch !== undefined ? ` on ${result.branch}` : '')
+      );
+    }
+
+    console.log(chalk.bold('\nSteps (cached — reused on resume)'));
+    const steps = Object.values(state.steps).sort((a, b) =>
+      a.completedAt < b.completedAt ? -1 : 1
+    );
+    if (steps.length === 0) console.log('  (none completed)');
+    for (const step of steps) {
+      const outcome =
+        step.verdict !== undefined ? ` → ${step.verdict.outcome}` : '';
+      console.log(
+        `  ${step.taskId} ${step.name}${outcome}` +
+          chalk.gray(` [${step.inputsDigest.slice(0, 12)}] ${step.completedAt}`)
+      );
+    }
+
+    console.log(chalk.bold('\nVerdicts'));
+    if (state.verdicts.length === 0) console.log('  (none recorded)');
+    for (const verdict of state.verdicts) {
+      this.printVerdict(verdict);
+    }
+
+    if (state.sandbox !== undefined) {
+      console.log(chalk.bold('\nSandbox'));
+      console.log(
+        `  ${state.sandbox.sha} ${state.sandbox.status} at ${state.sandbox.recordedAt}`
+      );
+    }
+
+    if (state.exceptions.length > 0) {
+      console.log(chalk.bold('\nException ledger'));
+      for (const entry of state.exceptions) {
+        console.log(
+          chalk.yellow(
+            `  ${entry.taskId} ${entry.trigger}: ${entry.context.join('; ')}`
+          )
+        );
+      }
+    }
   }
 
   async recordMerge(input: RecordMergeCliInput): Promise<void> {
