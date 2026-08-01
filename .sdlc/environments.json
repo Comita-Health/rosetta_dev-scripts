@@ -1,0 +1,7 @@
+{
+  "sandbox": {
+    "deployCommand": "bash scripts/sandbox-deploy.sh",
+    "healthCommand": "bash scripts/sandbox-health.sh",
+    "timeoutMinutes": 15
+  }
+}

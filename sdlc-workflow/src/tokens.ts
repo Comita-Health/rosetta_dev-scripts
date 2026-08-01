@@ -5,5 +5,31 @@ export const WORKFLOW_TOKENS = {
   SpecFileRepository: Symbol.for('SpecFileRepository'),
   DecomposeService: Symbol.for('DecomposeService'),
   SpecSynthesisService: Symbol.for('SpecSynthesisService'),
-  WorkflowHandler: Symbol.for('WorkflowHandler')
+  WorkflowHandler: Symbol.for('WorkflowHandler'),
+  // SPEC-PRD-0011-P2
+  SpecDocRepository: Symbol.for('SpecDocRepository'),
+  GitRepository: Symbol.for('GitRepository'),
+  AgentRunnerRepository: Symbol.for('AgentRunnerRepository'),
+  RunStateRepository: Symbol.for('RunStateRepository'),
+  SurfaceMapRepository: Symbol.for('SurfaceMapRepository'),
+  ContractRepository: Symbol.for('ContractRepository'),
+  ShellCommandRepository: Symbol.for('ShellCommandRepository'),
+  EvidenceRepository: Symbol.for('EvidenceRepository'),
+  QueueRepository: Symbol.for('QueueRepository'),
+  ChronicleArtifactRepository: Symbol.for('ChronicleArtifactRepository'),
+  CiStatusRepository: Symbol.for('CiStatusRepository'),
+  ExecutorService: Symbol.for('ExecutorService'),
+  EnvelopeGateService: Symbol.for('EnvelopeGateService'),
+  SandboxDeployService: Symbol.for('SandboxDeployService'),
+  VerificationService: Symbol.for('VerificationService'),
+  ReviewerGateService: Symbol.for('ReviewerGateService'),
+  AggregatorService: Symbol.for('AggregatorService'),
+  CiGateService: Symbol.for('CiGateService'),
+  DigestService: Symbol.for('DigestService'),
+  ChronicleCommitService: Symbol.for('ChronicleCommitService'),
+  GatePolicyQueryService: Symbol.for('GatePolicyQueryService'),
+  RunHandler: Symbol.for('RunHandler'),
+  // SPEC-PRD-0011-P3
+  PullRequestRepository: Symbol.for('PullRequestRepository'),
+  PrLifecycleService: Symbol.for('PrLifecycleService')
 } as const;

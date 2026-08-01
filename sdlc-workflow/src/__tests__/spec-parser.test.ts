@@ -1,0 +1,175 @@
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import os from 'os';
+import path from 'path';
+import { SpecDocRepository } from '../repositories/spec-doc.repository';
+import { renderSpec } from '../utils/spec-render';
+import { parseSpec } from '../utils/spec-parser';
+import { makeEnvelope, makeTask } from './fixtures';
+
+const renderFixture = () =>
+  renderSpec({
+    specId: 'SPEC-PRD-0099-P1',
+    prdId: 'PRD-0099',
+    phase: 1,
+    owner: 'Russ Watson',
+    date: '2026-07-31',
+    summary: 'A test spec.',
+    context: 'Some context.',
+    tasks: [
+      makeTask(),
+      makeTask({
+        id: 'T-02',
+        title: 'Extend the thing',
+        dependsOn: ['T-01'],
+        acceptanceCriteria: ['test: it extends', 'agent: it demos']
+      })
+    ],
+    envelope: makeEnvelope()
+  });
+
+describe('parseSpec', () => {
+  it('round-trips a rendered spec with no data loss', () => {
+    const doc = parseSpec(renderFixture());
+
+    expect(doc.id).toBe('SPEC-PRD-0099-P1');
+    expect(doc.prdId).toBe('PRD-0099');
+    expect(doc.phase).toBe(1);
+    expect(doc.status).toBe('Draft');
+    expect(doc.envelope).toEqual(makeEnvelope());
+    expect(doc.tasks).toHaveLength(2);
+    expect(doc.tasks[0]).toMatchObject({
+      id: 'T-01',
+      storyId: 'S-01',
+      title: 'Build the thing',
+      engineeringNotes: 'Keep it simple.',
+      complexity: 'M',
+      dependsOn: [],
+      acceptanceCriteria: ['test: the thing builds']
+    });
+    expect(doc.tasks[1]).toMatchObject({
+      id: 'T-02',
+      dependsOn: ['T-01'],
+      acceptanceCriteria: ['test: it extends', 'agent: it demos']
+    });
+  });
+
+  it('parses an Approved status flip and checked criteria', () => {
+    const markdown = renderFixture()
+      .replace('status: Draft', 'status: Approved')
+      .replace('- [ ] test: the thing builds', '- [x] test: the thing builds');
+    const doc = parseSpec(markdown);
+    expect(doc.status).toBe('Approved');
+    expect(doc.tasks[0].acceptanceCriteria).toEqual(['test: the thing builds']);
+  });
+
+  it('parses the real SPEC-PRD-0011-P2 file', () => {
+    const markdown = readFileSync(
+      path.join(__dirname, '..', '..', '..', 'specs/PRD-0011/phase-2-spec.md'),
+      'utf-8'
+    );
+    const doc = parseSpec(markdown);
+    expect(doc.id).toBe('SPEC-PRD-0011-P2');
+    // The status moves through its ADR-0008 lifecycle as the phase ships;
+    // this round-trip test only cares that it parses as a valid status.
+    expect(['Draft', 'Approved', 'Done', 'Superseded']).toContain(doc.status);
+    expect(doc.tasks).toHaveLength(9);
+    expect(doc.envelope.allowedPaths).toContain('sdlc-workflow/**');
+  });
+
+  it('rejects a spec without frontmatter', () => {
+    expect(() => parseSpec('# no frontmatter')).toThrow(
+      expect.objectContaining({ code: 'SPEC_MALFORMED' })
+    );
+  });
+
+  it('rejects an unknown status', () => {
+    expect(() =>
+      parseSpec(renderFixture().replace('status: Draft', 'status: Shipped'))
+    ).toThrow(expect.objectContaining({ code: 'SPEC_MALFORMED' }));
+  });
+
+  it('rejects a spec with a missing envelope field', () => {
+    const markdown = renderFixture().replace(/ {2}maxDiffLines: \d+\n/, '');
+    expect(() => parseSpec(markdown)).toThrow(
+      expect.objectContaining({ code: 'SPEC_MALFORMED' })
+    );
+  });
+
+  it('tolerates sparse task metadata and wrapped criteria', () => {
+    const markdown = [
+      '---',
+      'id: SPEC-X-P1',
+      'prd: PRD-X',
+      'phase: 1',
+      'status: Draft',
+      'envelope:',
+      '  allowedPaths: []',
+      '  forbiddenSurfaces: []',
+      '  maxDiffLines: 100',
+      '  budgetK: 10',
+      '---',
+      '',
+      '# SPEC-X-P1: Sparse.',
+      '',
+      '## Task T-01: Bare task',
+      '',
+      '- **Complexity:** XL',
+      '',
+      '### Acceptance criteria',
+      '',
+      '- [ ] test: a criterion that',
+      '      wraps onto a second line',
+      'not a bullet',
+      '- [ ] agent: another one'
+    ].join('\n');
+
+    const doc = parseSpec(markdown);
+    expect(doc.envelope.allowedPaths).toEqual([]);
+    expect(doc.tasks[0]).toMatchObject({
+      storyId: '',
+      complexity: 'M', // unknown value falls back
+      dependsOn: [],
+      engineeringNotes: ''
+    });
+    expect(doc.tasks[0].acceptanceCriteria).toEqual([
+      'test: a criterion that wraps onto a second line',
+      'agent: another one'
+    ]);
+  });
+
+  it('rejects frontmatter with an empty required field', () => {
+    const markdown = renderFixture().replace('id: SPEC-PRD-0099-P1', 'id:');
+    expect(() => parseSpec(markdown)).toThrow(
+      expect.objectContaining({ code: 'SPEC_MALFORMED' })
+    );
+  });
+
+  it('rejects a spec with no tasks', () => {
+    const markdown = renderFixture().split('## Task')[0];
+    expect(() => parseSpec(markdown)).toThrow(
+      expect.objectContaining({ code: 'SPEC_MALFORMED' })
+    );
+  });
+});
+
+describe('SpecDocRepository', () => {
+  const repo = new SpecDocRepository();
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(path.join(os.tmpdir(), 'sdlc-spec-'));
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it('reads and parses a spec file', () => {
+    const file = path.join(dir, 'spec.md');
+    writeFileSync(file, renderFixture());
+    expect(repo.read(file).id).toBe('SPEC-PRD-0099-P1');
+  });
+
+  it('fails typed when the file does not exist', () => {
+    expect(() => repo.read(path.join(dir, 'missing.md'))).toThrow(
+      expect.objectContaining({ code: 'SPEC_MALFORMED' })
+    );
+  });
+});
