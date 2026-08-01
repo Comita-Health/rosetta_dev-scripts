@@ -81,8 +81,8 @@ const resolveSharedWithPersonalChronicle = (
   };
 };
 
-const GOTO_ALIAS = `alias gotor="cd ~/projects/rosetta && cd \\$({ echo '. (workspace root)'; echo '..'; find . -maxdepth 3 -name '.git' -type d | sed 's|/\\.git||;s|^\\./||'; } | sort -u | fzf | sed 's/ (workspace root)\$//') && clear"`;
-const GOTO_MARKER = '# rosetta goto alias';
+const GOTO_ALIAS = `alias gotoc="cd ~/projects/comita && cd \\$({ echo '. (workspace root)'; echo '..'; find . -maxdepth 3 -name '.git' -type d | sed 's|/\\.git||;s|^\\./||'; } | sort -u | fzf | sed 's/ (workspace root)\$//') && clear"`;
+const GOTO_MARKER = '# comita goto alias';
 
 const installGotoAlias = (): void => {
   const zshrc = path.join(process.env.HOME || '~', '.zshrc');
@@ -94,13 +94,13 @@ const installGotoAlias = (): void => {
       `${GOTO_MARKER}\n${GOTO_ALIAS}\n`
     );
     writeFileSync(zshrc, updated);
-    console.log(chalk.green('  ✓ gotor alias updated in ~/.zshrc'));
+    console.log(chalk.green('  ✓ gotoc alias updated in ~/.zshrc'));
   } else {
     writeFileSync(
       zshrc,
       content.trimEnd() + `\n\n${GOTO_MARKER}\n${GOTO_ALIAS}\n`
     );
-    console.log(chalk.green('  ✓ gotor alias added to ~/.zshrc'));
+    console.log(chalk.green('  ✓ gotoc alias added to ~/.zshrc'));
   }
 };
 
@@ -139,7 +139,9 @@ yargs(hideBin(process.argv))
       const baseDir = resolveBaseDir(argv['base-dir'] || shared.baseDir);
 
       console.log(
-        chalk.bold.blue(`\n🧭  Rosetta Workspace Setup: Track ${track.track}\n`)
+        chalk.bold.blue(
+          `\n🧭  Comita Health Workspace Setup: Track ${track.track}\n`
+        )
       );
       console.log(chalk.gray(`Base directory: ${baseDir}`));
       console.log(chalk.gray(`Track: ${track.track} — ${track.description}\n`));
@@ -199,7 +201,7 @@ yargs(hideBin(process.argv))
       console.log(chalk.bold.green('\n✓ Setup complete!'));
       console.log(
         chalk.gray(
-          '\nRun `source ~/.zshrc` or open a new terminal to use `gotor`.'
+          '\nRun `source ~/.zshrc` or open a new terminal to use `gotoc`.'
         )
       );
       console.log(chalk.gray('Run `bun run dev -- verify` to check health.'));
@@ -265,7 +267,7 @@ yargs(hideBin(process.argv))
   )
   .command(
     'shell-alias',
-    'Install gotor alias into ~/.zshrc',
+    'Install gotoc alias into ~/.zshrc',
     () => {},
     () => {
       installGotoAlias();

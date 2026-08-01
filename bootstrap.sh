@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ORG="${ROSETTA_GITHUB_ORG:-Rosetta-Foundation}"
+ORG="${ROSETTA_GITHUB_ORG:-Comita-Health}"
 REPO="rosetta_dev-scripts"
-DEST="${1:-$HOME/projects/rosetta}"
+DEST="${1:-$HOME/projects/comita}"
 
 # ── Colours ────────────────────────────────────────────────────────────────────
 red()  { printf '\033[0;31m%s\033[0m\n' "$*"; }
@@ -12,7 +12,7 @@ blu()  { printf '\033[0;34m%s\033[0m\n' "$*"; }
 bold() { printf '\033[1m%s\033[0m\n' "$*"; }
 
 bold ""
-bold "🧭  Rosetta Bootstrap"
+bold "🧭  Comita Health — Rosetta Bootstrap"
 bold "────────────────────────────────────────────"
 
 # ── Prerequisites ──────────────────────────────────────────────────────────────
