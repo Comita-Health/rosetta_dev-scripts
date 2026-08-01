@@ -24,9 +24,10 @@ same guardrails — whether they work in Claude Code, Cursor Agent, or the Curso
 
 **Dual agent support** — Workspace root gets:
 
-- `CLAUDE.md` + `.claude/` (settings, slash commands, rules) for Claude Code
-- `AGENTS.md` + `.cursor/cli.json` + `.cursor/rules/*.mdc` for Cursor Agent/CLI  
-  (rules/commands are mirrored from `.claude/` so content does not drift)
+- `CLAUDE.md` + `.claude/` (settings, slash commands, rules, skills) for Claude Code
+- `AGENTS.md` + `.cursor/cli.json` + `.cursor/rules/*.mdc` + `.cursor/skills/` for
+  Cursor Agent/CLI (rules/commands are mirrored from `.claude/` so content does
+  not drift; skills ship under both `.claude/skills/` and `.cursor/skills/`)
 
 **Enforced architecture** — Handler / Service / Repository + InversifyJS for all TypeScript, via
 `.claude/rules/architecture-hsr.md` and the mirrored `.cursor/rules/architecture-hsr.mdc`.
@@ -57,8 +58,11 @@ and Cursor CLI (`.cursor/cli.json`) so agents can:
 
 **Slash commands / agent prompts out of the box:**
 
-- Claude Code: `/review`, `/add-repo` under `.claude/commands/`
-- Cursor: matching `command-review` / `command-add-repo` rules under `.cursor/rules/` — ask the agent to follow them
+- Claude Code: `/review`, `/add-repo`, `/sdlc-status` under `.claude/commands/`
+- Cursor: matching `command-review` / `command-add-repo` / `command-sdlc-status`
+  rules under `.cursor/rules/` — ask the agent to follow them
+- Skills: `sdlc-prd-progress` (PRD/spec shadow-run scorecard — where a PRD is in
+  `sdlc-workflow` implementation) under `.cursor/skills/` and `.claude/skills/`
 
 **Multi-repo workspace** — One bootstrap gives you:
 
@@ -201,8 +205,8 @@ bun run dev -- shell-alias
 ~/projects/rosetta/
 ├── CLAUDE.md                    (shared agent brief — Claude Code + Cursor)
 ├── AGENTS.md                    (Cursor-oriented map; points at CLAUDE.md)
-├── .claude/                     (Claude settings, commands, rules)
-├── .cursor/                     (Cursor cli.json + mirrored rules)
+├── .claude/                     (Claude settings, commands, rules, skills)
+├── .cursor/                     (Cursor cli.json, skills/, mirrored rules)
 ├── all.code-workspace           (generated — open in VS Code or Cursor)
 ├── rosetta_dev-scripts/         (this repo)
 ├── rosetta_docs/                (cloned — PRDs, ADRs, docs, shared assets)

@@ -1,0 +1,1 @@
+Show where a PRD stands in sdlc-workflow shadow implementation (spec status, run scorecard, task merges, gate verdicts, open PRs, ETA). Follow the `sdlc-prd-progress` skill (`.cursor/skills/sdlc-prd-progress/SKILL.md`).

@@ -116,13 +116,13 @@ export const layDownRootConfig = (baseDir: string): void => {
   const cursorDir = path.join(rootTemplateDir, '.cursor');
   if (existsSync(cursorDir)) {
     mkdirSync(path.join(baseDir, '.cursor'), { recursive: true });
-    // Copy static Cursor files (e.g. cli.json); rules are generated below.
+    // Copy static Cursor files (cli.json, skills/, …); rules are generated below.
     for (const entry of readdirSync(cursorDir)) {
       if (entry === 'rules') continue;
       const src = path.join(cursorDir, entry);
       cpSync(src, path.join(baseDir, '.cursor', entry), { recursive: true });
     }
-    console.log(chalk.green('  ✓ .cursor/cli.json'));
+    console.log(chalk.green('  ✓ .cursor/ (cli.json, skills/, …)'));
   }
 
   if (existsSync(claudeDir)) {
