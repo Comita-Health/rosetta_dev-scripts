@@ -27,8 +27,10 @@ export const buildCiFixPrompt = (
     '',
     'Diagnose the root cause from the log output, fix it, verify locally',
     '(build and tests), then COMMIT the fix (git commit -s, Conventional',
-    'Commits, e.g. fix(scope): correct type error caught by CI) before',
-    'stopping. An uncommitted worktree is recorded as a failed attempt.',
+    `Commits — use the task ID as the required scope, e.g. \`fix(${task.id}):`,
+    'correct type error caught by CI` — repo commit-msg hooks derive that',
+    'scope from the branch name and reject other formats) before stopping.',
+    'An uncommitted worktree is recorded as a failed attempt.',
     'Do not push, do not open PRs, do not touch anything outside the',
     'worktree.'
   ].join('\n');
