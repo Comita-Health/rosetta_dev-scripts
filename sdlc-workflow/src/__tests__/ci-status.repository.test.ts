@@ -58,4 +58,37 @@ describe('CiStatusRepository', () => {
 
     expect(repo.checkRuns('/repo', 'abc')).toBeNull();
   });
+
+  it('fetches failed-step logs for the failing runs at a SHA (P3 T-03)', () => {
+    execMock
+      .mockReturnValueOnce('101\n102\n')
+      .mockReturnValueOnce('run 101: TS2304 error\n')
+      .mockReturnValueOnce('run 102: jest failed\n');
+
+    const logs = repo.failedLogs('/repo', 'abc123');
+
+    expect(execMock.mock.calls[0][0]).toContain(
+      'gh run list --commit abc123 --status failure'
+    );
+    expect(execMock.mock.calls[1][0]).toContain('gh run view 101 --log-failed');
+    expect(execMock.mock.calls[2][0]).toContain('gh run view 102 --log-failed');
+    expect(logs).toContain('TS2304 error');
+    expect(logs).toContain('jest failed');
+  });
+
+  it('failedLogs is best effort: empty string on failure, partial on one bad run', () => {
+    execMock.mockImplementation(() => {
+      throw new Error('gh down');
+    });
+    expect(repo.failedLogs('/repo', 'abc')).toBe('');
+
+    execMock.mockReset();
+    execMock
+      .mockReturnValueOnce('201\n202\n')
+      .mockImplementationOnce(() => {
+        throw new Error('log expired');
+      })
+      .mockReturnValueOnce('run 202: useful log\n');
+    expect(repo.failedLogs('/repo', 'abc')).toContain('useful log');
+  });
 });

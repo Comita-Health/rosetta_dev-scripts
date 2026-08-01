@@ -15,9 +15,12 @@ PRD-0011 (Full-Loop SDLC Automation):
   progress): parallel fan-out across ready tasks, real PR lifecycle with a
   bounded CI fix cycle, gate enforcement with auto-merge on green,
   post-merge sandbox deploy + PRD-0007 digest with veto-triggered revert.
-  Landed so far: the T-01 dependency-ordered task pool and the T-02 PR
+  Landed so far: the T-01 dependency-ordered task pool; the T-02 PR
   lifecycle — each completed task branch is pushed and gets a real PR
-  (idempotent on resume), which is the reviewer- and CI-gate subject.
+  (idempotent on resume), which is the reviewer- and CI-gate subject; and
+  the T-03 live CI monitor — checks are polled to terminal and failures
+  dispatch a fix agent (at most 3 attempts, persisted across resume)
+  before the post-cycle verdict reaches the aggregator.
 
 ## Usage
 
@@ -177,9 +180,12 @@ Handler / Service / Repository with InversifyJS (workspace rule):
   envelope into one phase verdict and derives exception-ledger entries
   (reviewer disagreement, third CI fix attempt, envelope breach, budget
   exhaustion) (T-06).
-- `services/ci-gate.service.ts` — the real CI gate: GitHub check runs for
-  the task branch head SHA via the operator's `gh` session; honest
-  `blocked` when the branch is not pushed (shadow mode).
+- `services/ci-gate.service.ts` — the live CI gate (P3 T-03): polls the
+  pushed branch's check runs to terminal, dispatches a fix agent on
+  failure (failing logs in the prompt, ≤3 attempts persisted in
+  `ciFixAttempts`), pushes fixes, and returns the post-cycle verdict with
+  the cycle transcript as evidence; honest `blocked` when the branch is
+  not pushed.
 - `services/digest.service.ts` — phase-boundary digest to the PRD-0007
   personal queue; append-only, no veto path (T-07).
 - `services/chronicle-commit.service.ts` — versioned run artifacts +

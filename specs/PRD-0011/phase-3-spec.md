@@ -58,9 +58,9 @@ Poll the pushed branch's check runs until terminal (bounded timeout). On failure
 
 ### Acceptance criteria
 
-- [ ] test: a failing check dispatches the fix agent with the failing output in its prompt, increments ciFixAttempts, and re-evaluates after the fix is pushed
-- [ ] test: the third failing attempt stops the cycle, records the escalation, and no fourth agent dispatch occurs
-- [ ] test: a green check run within the attempt budget yields a pass CI verdict carrying the check-run evidence
+- [x] test: a failing check dispatches the fix agent with the failing output in its prompt, increments ciFixAttempts, and re-evaluates after the fix is pushed
+- [x] test: the third failing attempt stops the cycle, records the escalation, and no fourth agent dispatch occurs
+- [x] test: a green check run within the attempt budget yields a pass CI verdict carrying the check-run evidence
 
 ## Task T-04: Gate enforcement and auto-merge on green
 
