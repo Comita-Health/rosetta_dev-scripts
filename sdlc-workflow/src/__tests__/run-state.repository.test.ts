@@ -20,6 +20,7 @@ const makeState = (): RunState => ({
   verdicts: [],
   exceptions: [],
   criterionVerdicts: [],
+  steps: {},
   tokenSpendK: 0,
   ciFixAttempts: {},
   updatedAt: 'x'
@@ -95,6 +96,7 @@ describe('RunStateRepository', () => {
     delete legacy.exceptions;
     delete legacy.tokenSpendK;
     delete legacy.ciFixAttempts;
+    delete legacy.steps;
     mkdirSync(path.join(dir, 'run-1'), { recursive: true });
     writeFileSync(
       path.join(dir, 'run-1', 'state.json'),
@@ -105,6 +107,30 @@ describe('RunStateRepository', () => {
     expect(loaded?.exceptions).toEqual([]);
     expect(loaded?.tokenSpendK).toBe(0);
     expect(loaded?.ciFixAttempts).toEqual({});
+    expect(loaded?.steps).toEqual({});
+  });
+
+  it('records step results under their cache key (T-09)', () => {
+    const state = makeState();
+    repo.recordStep(dir, state, 'envelope:T-01:abc', {
+      name: 'envelope',
+      taskId: 'T-01',
+      inputsDigest: 'abc',
+      completedAt: 'x'
+    });
+
+    const loaded = repo.load(dir, 'run-1');
+    expect(loaded?.steps['envelope:T-01:abc']).toEqual(
+      expect.objectContaining({ name: 'envelope', inputsDigest: 'abc' })
+    );
+  });
+
+  it('records the human-approved merged SHA (T-08)', () => {
+    const state = makeState();
+    repo.recordMergedSha(dir, state, 'abc123');
+
+    const loaded = repo.load(dir, 'run-1');
+    expect(loaded?.mergedSha).toBe('abc123');
   });
 });
 

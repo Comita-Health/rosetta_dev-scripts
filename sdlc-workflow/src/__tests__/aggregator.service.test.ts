@@ -30,6 +30,7 @@ const makeState = (overrides: Partial<RunState> = {}): RunState => ({
   verdicts: [],
   exceptions: [],
   criterionVerdicts: [],
+  steps: {},
   tokenSpendK: 0,
   ciFixAttempts: {},
   updatedAt: 'x',

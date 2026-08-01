@@ -27,12 +27,19 @@ bun run dev -- decompose --prd PRD-0011 --repo ../../rosetta_chronicle
 #   --budget-k   token budget in thousands, recorded in the envelope (default: 200)
 
 # Phase 2: execute one ready task from an Approved spec
-bun run dev -- run --spec ../specs/PRD-0011/phase-2-spec.md --repo ..
+bun run dev -- run --spec ../specs/PRD-0011/phase-2-spec.md --repo .. \
+  --chronicle-repo ../../rosetta_chronicle_roustalski
 
 # Options
-#   --run-id     stable run identifier; branches are sdlc/<run-id>/<task-id>
-#                (default: <spec-file>-<date>)
-#   --runs-dir   run state + worktrees location (default: ~/.rosetta/sdlc-runs)
+#   --run-id          stable run identifier; branches are sdlc/<run-id>/<task-id>
+#                     (default: <spec-file>-<date>)
+#   --runs-dir        run state + worktrees location (default: ~/.rosetta/sdlc-runs)
+#   --chronicle-repo  personal Chronicle ledger repo; enables the T-07 queue
+#                     digest and T-08 artifact commits (skipped when absent)
+
+# Record a human-approved merge in the run's Chronicle artifact (T-08)
+bun run dev -- record-merge --run-id <run-id> --sha <merged-sha> \
+  --chronicle-repo ../../rosetta_chronicle_roustalski
 ```
 
 `decompose` hard-stops after writing the Draft spec. Approval is a
@@ -71,6 +78,33 @@ A missing contract never fails the run: the corresponding gate records
 itself `blocked` (sandbox) or degrades the criteria to `human-required`
 (verification), keeping the shadow-mode phase verdict honest.
 
+## Resumable step graph (T-09)
+
+Every pipeline step — implementation, each gate, the digest post, the
+Chronicle commit — is cached in run state under a key derived from a
+SHA-256 **inputs digest** rooted at `{task content, base SHA}` and chained
+through the worktree head SHA. Kill the run at any boundary and rerun the
+same command: cache hits are replayed (agents are not re-invoked, the
+sandbox is not redeployed, digests are not re-posted), and only steps whose
+inputs changed or never completed execute. Editing a task's spec content
+changes its digest and invalidates exactly that task's chain.
+
+## Chronicle integration (T-07 / T-08)
+
+With `--chronicle-repo` set, the phase boundary:
+
+- commits versioned JSON artifacts (`sdlc.spec.v1`, `sdlc.task-result.v1`,
+  `sdlc.verdict.v1`, `sdlc.exceptions.v1`, `sdlc.digest.v1`,
+  `sdlc.merge.v1`) under `chronicles/sdlc/<run-id>/`, and
+- posts one informational digest item to the PRD-0007 personal queue
+  (`chronicles/queue.md`, Inbox) — no veto or revert semantics this phase.
+
+Ledger commits follow ADR-0007: `chronicle(sdlc): ...` /
+`chronicle(queue): ...` with `Chronicle-Window:` and `Generated-By:`
+trailers. Verdict artifacts carry gate identity, inputs digest, outcome,
+and resolvable evidence refs, and read back through
+`GatePolicyQueryService` so future gate policy can learn from track record.
+
 ## Environment
 
 Inference runs over one of three transports, selected automatically:
@@ -98,7 +132,7 @@ Handler / Service / Repository with InversifyJS (workspace rule):
 
 - `handlers/workflow.handler.ts` — Phase 1 pipeline, prints the gate.
 - `handlers/run.handler.ts` — Phase 2 single-task loop: executor + shadow
-  gates + persistence.
+  gates + digest/Chronicle steps, all through the T-09 step cache.
 - `services/decompose.service.ts` — PRD → `ProductStory[]` (right-sizing prompt).
 - `services/spec-synthesis.service.ts` — stories → tasks + envelope → validated
   ADR-0008 Markdown.
@@ -120,19 +154,30 @@ Handler / Service / Repository with InversifyJS (workspace rule):
   envelope into one phase verdict and derives exception-ledger entries
   (reviewer disagreement, third CI fix attempt, envelope breach, budget
   exhaustion) (T-06).
+- `services/ci-gate.service.ts` — the real CI gate: GitHub check runs for
+  the task branch head SHA via the operator's `gh` session; honest
+  `blocked` when the branch is not pushed (shadow mode).
+- `services/digest.service.ts` — phase-boundary digest to the PRD-0007
+  personal queue; append-only, no veto path (T-07).
+- `services/chronicle-commit.service.ts` — versioned run artifacts +
+  merged-SHA recording, committed per ADR-0007 (T-08).
+- `services/gate-policy-query.service.ts` — reads verdict artifacts back
+  for gate-policy consumption (T-08).
 - `repositories/` — PRD parsing (`prd`), model transports (`anthropic`,
   `openai`, `cursor-cli` behind the shared `IModelRepository` contract in
   `model`),
   schema-constrained inference with one retry (`inference`), spec file writes
   (`spec-file`), spec reads (`spec-doc`), git worktrees/diffs (`git`),
-  workspace-mutating agent runs (`agent-runner`), resumable run state
-  (`run-state`), protected-surface map (`surface-map`), `.sdlc/` contracts
-  (`contract`), contract command execution (`shell-command`), evidence
-  artifacts (`evidence`).
+  workspace-mutating agent runs (`agent-runner`), resumable run state with
+  the step graph (`run-state`), protected-surface map (`surface-map`),
+  `.sdlc/` contracts (`contract`), contract command execution
+  (`shell-command`), evidence artifacts (`evidence`), PRD-0007 queue
+  appends (`queue`), Chronicle ledger artifacts + ADR-0007 commits
+  (`chronicle-artifact`), GitHub check-run status (`ci-status`).
 - `utils/` — pure functions: PRD parser, JSON-schema validator, spec renderer,
   ADR-0008 format validator, spec parser (round-trip of the renderer), glob
-  matcher, criterion-tier parser, and the implementation / reviewer /
-  verifier agent prompt builders.
+  matcher, criterion-tier parser, inputs digest (`digest`), and the
+  implementation / reviewer / verifier agent prompt builders.
 
 ## Testing
 

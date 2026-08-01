@@ -7,6 +7,7 @@ import {
   GateVerdict,
   RunState,
   SandboxRecord,
+  StepResult,
   TaskRunResult
 } from '../types';
 
@@ -35,6 +36,15 @@ export interface IRunStateRepository {
     state: RunState,
     verdicts: CriterionVerdict[]
   ): void;
+  /** T-09: record a completed step under its cache key and persist. */
+  recordStep(
+    runsDir: string,
+    state: RunState,
+    key: string,
+    step: StepResult
+  ): void;
+  /** T-08: record the human-approved merged SHA and persist. */
+  recordMergedSha(runsDir: string, state: RunState, sha: string): void;
 }
 
 const stateFile = (runsDir: string, runId: string): string =>
@@ -49,6 +59,7 @@ export class RunStateRepository implements IRunStateRepository {
     // Fill fields introduced after older state files were written.
     state.exceptions = state.exceptions ?? [];
     state.criterionVerdicts = state.criterionVerdicts ?? [];
+    state.steps = state.steps ?? {};
     state.tokenSpendK = state.tokenSpendK ?? 0;
     state.ciFixAttempts = state.ciFixAttempts ?? {};
     return state;
@@ -98,6 +109,21 @@ export class RunStateRepository implements IRunStateRepository {
   ): void {
     if (verdicts.length === 0) return;
     state.criterionVerdicts.push(...verdicts);
+    this.save(runsDir, state);
+  }
+
+  recordStep(
+    runsDir: string,
+    state: RunState,
+    key: string,
+    step: StepResult
+  ): void {
+    state.steps[key] = step;
+    this.save(runsDir, state);
+  }
+
+  recordMergedSha(runsDir: string, state: RunState, sha: string): void {
+    state.mergedSha = sha;
     this.save(runsDir, state);
   }
 }

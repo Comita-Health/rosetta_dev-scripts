@@ -5,7 +5,8 @@ import type { IGitRepository } from '../repositories/git.repository';
 import type { IRunStateRepository } from '../repositories/run-state.repository';
 import type { ISpecDocRepository } from '../repositories/spec-doc.repository';
 import { WORKFLOW_TOKENS } from '../tokens';
-import { RunState, SpecDocument, SpecTask } from '../types';
+import { RunState, SpecDocument, SpecTask, stepKey } from '../types';
+import { inputsDigest } from '../utils/digest';
 import { buildImplementationPrompt } from '../utils/implementation-prompt';
 
 export interface ExecutorInput {
@@ -22,14 +23,20 @@ export interface ExecutorOutcome {
   task?: SpecTask;
   branch?: string;
   detail?: string;
+  /** True when the implementation step was reused from the T-09 cache. */
+  cached?: boolean;
+  /** Digest of {task content, baseSha} — root of this task's step chain. */
+  implDigest?: string;
 }
 
 /**
- * SPEC-PRD-0011-P2 T-01: consume an approved spec, select exactly one ready
- * task (no parallelism this phase), execute the implementation agent in an
- * isolated worktree on a deterministic branch, and record a resumable
- * result. Refuses to run without an approval record — the S-01
- * no-code-before-approval invariant enforced at the execution boundary.
+ * SPEC-PRD-0011-P2 T-01 + T-09: consume an approved spec, select exactly one
+ * task whose pipeline is incomplete (no parallelism this phase), and execute
+ * the implementation agent in an isolated worktree — unless the T-09 step
+ * cache already holds a result for this exact task content and base SHA, in
+ * which case the cached branch is reused without re-invoking the agent.
+ * Editing a task's spec content changes its digest and invalidates only that
+ * task's chain. Refuses to run without an approval record (S-01).
  */
 export interface IExecutorService {
   executeNext(input: ExecutorInput): Promise<ExecutorOutcome>;
@@ -38,20 +45,46 @@ export interface IExecutorService {
 export const taskBranch = (runId: string, taskId: string): string =>
   `sdlc/${runId}/${taskId}`;
 
+/** Digest rooting a task's step chain: task content + the base commit. */
+export const implementationDigest = (task: SpecTask, baseSha: string): string =>
+  inputsDigest({ task, baseSha });
+
+const hasStep = (state: RunState, name: string, taskId: string): boolean =>
+  Object.values(state.steps).some(
+    step => step.name === name && step.taskId === taskId
+  );
+
 const selectReadyTask = (
   spec: SpecDocument,
   state: RunState
-): SpecTask | undefined => {
+): { task: SpecTask; implDigest: string } | undefined => {
   const completed = new Set(
     Object.values(state.taskResults)
       .filter(result => result.status === 'completed')
       .map(result => result.taskId)
   );
-  return spec.tasks.find(
-    task =>
-      !(task.id in state.taskResults) &&
-      task.dependsOn.every(dep => completed.has(dep))
-  );
+  for (const task of spec.tasks) {
+    if (!task.dependsOn.every(dep => completed.has(dep))) continue;
+    const digest = implementationDigest(task, state.baseSha);
+    const result = state.taskResults[task.id];
+    if (result !== undefined) {
+      // A digest-less result predates the step graph: keep the pre-T-09
+      // semantics (attempted once, never re-selected).
+      if (result.inputsDigest === undefined) continue;
+      if (result.status === 'failed') {
+        // A failed attempt at the same content is not retried; a content
+        // edit (different digest) makes the task eligible again.
+        if (result.inputsDigest === digest) continue;
+      } else if (result.inputsDigest === digest) {
+        // Completed at the current content: done once the phase verdict
+        // landed; otherwise resume the gate pipeline with the cached
+        // implementation. A content edit reopens the task (invalidation).
+        if (hasStep(state, 'phase', task.id)) continue;
+      }
+    }
+    return { task, implDigest: digest };
+  }
+  return undefined;
 };
 
 @injectable()
@@ -85,13 +118,32 @@ export class ExecutorService implements IExecutorService {
 
     const existing = this._runStateRepo.load(input.runsDir, input.runId);
     const state: RunState = existing ?? this.initState(input, spec);
-    const task = selectReadyTask(spec, state);
-    if (task === undefined) {
+    const selected = selectReadyTask(spec, state);
+    if (selected === undefined) {
       // No side effects: nothing is persisted for a no-op invocation.
       return { kind: 'no-ready-task', spec, state: existing };
     }
+    const { task, implDigest } = selected;
 
     const branch = taskBranch(input.runId, task.id);
+    const implKey = stepKey('implementation', task.id, implDigest);
+    if (
+      state.steps[implKey] !== undefined &&
+      state.taskResults[task.id]?.status === 'completed'
+    ) {
+      // T-09: implementation cached — reuse the branch, skip the agent.
+      return {
+        kind: 'completed',
+        spec,
+        state,
+        task,
+        branch: state.taskResults[task.id].branch,
+        detail: 'implementation reused from step cache',
+        cached: true,
+        implDigest
+      };
+    }
+
     const worktreePath = path.join(
       input.runsDir,
       input.runId,
@@ -121,9 +173,18 @@ export class ExecutorService implements IExecutorService {
       status: ok ? 'completed' : 'failed',
       branch,
       worktreePath,
+      inputsDigest: implDigest,
       detail: detail.length > 0 ? detail : undefined,
       recordedAt: new Date().toISOString()
     });
+    if (ok) {
+      this._runStateRepo.recordStep(input.runsDir, state, implKey, {
+        name: 'implementation',
+        taskId: task.id,
+        inputsDigest: implDigest,
+        completedAt: new Date().toISOString()
+      });
+    }
 
     return {
       kind: ok ? 'completed' : 'failed',
@@ -131,7 +192,9 @@ export class ExecutorService implements IExecutorService {
       state,
       task,
       branch,
-      detail: detail.length > 0 ? detail : undefined
+      detail: detail.length > 0 ? detail : undefined,
+      cached: false,
+      implDigest
     };
   }
 
@@ -145,6 +208,7 @@ export class ExecutorService implements IExecutorService {
       verdicts: [],
       exceptions: [],
       criterionVerdicts: [],
+      steps: {},
       tokenSpendK: 0,
       ciFixAttempts: {},
       updatedAt: new Date().toISOString()
