@@ -21,7 +21,7 @@ Two modes:
 
 | Artifact | Typical path | Meaning |
 | -------- | ------------ | ------- |
-| **PRD** | `*/docs/product/PRD-NNNN-*.md` or `rosetta_docs/product/` | Product intent. `Draft`/`Accepted` is **product** lifecycle. |
+| **PRD** | `*/docs/product/PRD-NNNN-*.md` or `rosetta_docs/product/` | Product intent. `Draft` → `Proposed` → `Accepted` → `Shipped` (then `Superseded`/`Deprecated`). |
 | **Implementation spec** | `<app-repo>/specs/PRD-NNNN/phase-N-spec.md` | Execution plan (ADR-0008). `Draft` → human flip → `Approved` → `run` → `Done`. |
 
 A PRD can still say `Draft` while the spec is `Approved` and tasks are merging.
@@ -52,7 +52,7 @@ are Draft/Proposed or have specs/runs but **are not actively being worked**.
    | --- | ------- | ------ |
    | `PRD_PORTFOLIO_SCOPE` | `all` | `comita` \| `rosetta` \| `all` |
    | `PRD_PORTFOLIO_STALE_HOURS` | `48` | Younger runs → `warm` |
-   | `PRD_PORTFOLIO_ALL` | `0` | `1` includes Accepted/Deprecated/Superseded |
+   | `PRD_PORTFOLIO_ALL` | `0` | `1` includes Shipped/Deprecated/Superseded |
 
 2. Supplement with open docs PRs that **add** PRDs not yet on the default
    branch (the script lists `gh pr list` for `comita_docs` / `rosetta_docs`
@@ -68,7 +68,7 @@ are Draft/Proposed or have specs/runs but **are not actively being worked**.
 | `active` | Live `sdlc-workflow` process for a matching run |
 | `warm` | Run `updatedAt` within stale threshold |
 | `parked` | Spec and/or run exists, but idle / no recent activity |
-| `backlog` | Draft/Proposed product PRD, no spec/run yet |
+| `backlog` | Draft/Proposed/Accepted product PRD, no spec/run yet |
 | `other` | Unusual product status without run activity |
 
 ### Output format (keep it short)
@@ -83,7 +83,7 @@ are Draft/Proposed or have specs/runs but **are not actively being worked**.
 - Comita PRD-0006 — Draft · no spec · backlog→parked if you treat open intent
 - …
 
-**Backlog** (Draft/Proposed, no execution yet)
+**Backlog** (Draft/Proposed/Accepted, no execution yet)
 - …
 
 **Open docs PRs** (PRD not on default branch yet)
@@ -131,7 +131,7 @@ workspace equivalent of that dashboard.
 
 | Layer | Status |
 | ----- | ------ |
-| PRD product status | Draft / Accepted / … |
+| PRD product status | Draft / Proposed / Accepted / Shipped / … |
 | Spec | SPEC-… status + path |
 | Run | `<run-id>` · tip merge SHA |
 | Tasks | T-01 ✅ merged · T-02 ✅ · … · T-0N 🔲 PR #… / in gates / blocked |
@@ -172,7 +172,7 @@ gh pr list --head "sdlc/<run-id>/<taskId>" --json number,url,state
 
 1. Every task has `merged@` in `status` (`record-merge --task … --sha …`).
 2. Spec frontmatter `status: Done`.
-3. PRD acceptance criteria ticked; PRD `status: Accepted` when product agrees.
+3. PRD acceptance criteria ticked; PRD `status: Accepted` while phases remain, then `Shipped` when planned phases are complete.
 4. Chronicle digests already posted by the run; optional human note in personal
    chronicle queue.
 
