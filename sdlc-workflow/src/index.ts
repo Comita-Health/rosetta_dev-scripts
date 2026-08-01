@@ -5,8 +5,15 @@ import path from 'path';
 import chalk from 'chalk';
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
+import os from 'os';
+import { RunHandler, IRunHandler } from './handlers/run.handler';
 import { WorkflowHandler, IWorkflowHandler } from './handlers/workflow.handler';
+import {
+  AgentRunnerRepository,
+  IAgentRunnerRepository
+} from './repositories/agent-runner.repository';
 import { AnthropicRepository } from './repositories/anthropic.repository';
+import { GitRepository, IGitRepository } from './repositories/git.repository';
 import { CursorCliRepository } from './repositories/cursor-cli.repository';
 import { IModelRepository } from './repositories/model.repository';
 import {
@@ -15,13 +22,30 @@ import {
 } from './repositories/inference.repository';
 import { PrdRepository, IPrdRepository } from './repositories/prd.repository';
 import {
+  RunStateRepository,
+  IRunStateRepository
+} from './repositories/run-state.repository';
+import {
+  SpecDocRepository,
+  ISpecDocRepository
+} from './repositories/spec-doc.repository';
+import {
   SpecFileRepository,
   ISpecFileRepository
 } from './repositories/spec-file.repository';
 import {
+  SurfaceMapRepository,
+  ISurfaceMapRepository
+} from './repositories/surface-map.repository';
+import {
   DecomposeService,
   IDecomposeService
 } from './services/decompose.service';
+import {
+  EnvelopeGateService,
+  IEnvelopeGateService
+} from './services/envelope-gate.service';
+import { ExecutorService, IExecutorService } from './services/executor.service';
 import {
   SpecSynthesisService,
   ISpecSynthesisService
@@ -55,6 +79,26 @@ container
 container
   .bind<IWorkflowHandler>(WORKFLOW_TOKENS.WorkflowHandler)
   .to(WorkflowHandler);
+container
+  .bind<ISpecDocRepository>(WORKFLOW_TOKENS.SpecDocRepository)
+  .to(SpecDocRepository);
+container.bind<IGitRepository>(WORKFLOW_TOKENS.GitRepository).to(GitRepository);
+container
+  .bind<IAgentRunnerRepository>(WORKFLOW_TOKENS.AgentRunnerRepository)
+  .to(AgentRunnerRepository);
+container
+  .bind<IRunStateRepository>(WORKFLOW_TOKENS.RunStateRepository)
+  .to(RunStateRepository);
+container
+  .bind<ISurfaceMapRepository>(WORKFLOW_TOKENS.SurfaceMapRepository)
+  .to(SurfaceMapRepository);
+container
+  .bind<IExecutorService>(WORKFLOW_TOKENS.ExecutorService)
+  .to(ExecutorService);
+container
+  .bind<IEnvelopeGateService>(WORKFLOW_TOKENS.EnvelopeGateService)
+  .to(EnvelopeGateService);
+container.bind<IRunHandler>(WORKFLOW_TOKENS.RunHandler).to(RunHandler);
 
 yargs(hideBin(process.argv))
   .command(
@@ -99,6 +143,61 @@ yargs(hideBin(process.argv))
           phase: argv.phase,
           budgetK: argv['budget-k']
         });
+      } catch (err) {
+        if (err instanceof WorkflowError) {
+          console.error(chalk.red(`\n✗ ${err.code}: ${err.message}`));
+          for (const detail of err.details) {
+            console.error(chalk.red(`  - ${detail}`));
+          }
+        } else {
+          console.error(chalk.red(`\n✗ ${err}`));
+        }
+        process.exit(1);
+      }
+    }
+  )
+  .command(
+    'run',
+    'Execute one ready task from an Approved spec (shadow-mode gates, halts for human review)',
+    y =>
+      y
+        .option('spec', {
+          type: 'string',
+          demandOption: true,
+          describe: 'Path to the Approved implementation spec'
+        })
+        .option('repo', {
+          type: 'string',
+          demandOption: true,
+          describe: 'Path to the target repo the task is implemented in'
+        })
+        .option('run-id', {
+          type: 'string',
+          describe:
+            'Stable run identifier (deterministic branch names derive from it); defaults to <spec-id>-<date>'
+        })
+        .option('runs-dir', {
+          type: 'string',
+          default: path.join(os.homedir(), '.rosetta', 'sdlc-runs'),
+          describe: 'Directory holding run state and task worktrees'
+        }),
+    async argv => {
+      const handler = container.get<IRunHandler>(WORKFLOW_TOKENS.RunHandler);
+      const runId =
+        argv['run-id'] ??
+        `${path
+          .basename(argv.spec)
+          .replace(/\.md$/, '')}-${new Date().toISOString().slice(0, 10)}`;
+      try {
+        const result = await handler.runTask({
+          specPath: argv.spec,
+          repoPath: argv.repo,
+          runId,
+          runsDir: argv['runs-dir']
+        });
+        if (result.outcome === 'blocked' || result.outcome === 'failed') {
+          process.exit(1);
+        }
       } catch (err) {
         if (err instanceof WorkflowError) {
           console.error(chalk.red(`\n✗ ${err.code}: ${err.message}`));
