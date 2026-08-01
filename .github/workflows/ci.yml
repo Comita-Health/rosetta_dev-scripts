@@ -1,8 +1,9 @@
 name: CI
 
+# No base-branch filter: stacked PRs target feature branches (f/*), and a
+# filter of [main] would leave them without CI until they retarget.
 on:
   pull_request:
-    branches: [main]
 
 jobs:
   test:
