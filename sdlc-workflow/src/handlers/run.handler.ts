@@ -14,6 +14,7 @@ import type {
   IExecutorService,
   PoolInput
 } from '../services/executor.service';
+import type { IPrLifecycleService } from '../services/pr-lifecycle.service';
 import type { IReviewerGateService } from '../services/reviewer-gate.service';
 import type { ISandboxDeployService } from '../services/sandbox-deploy.service';
 import type {
@@ -93,6 +94,8 @@ export class RunHandler implements IRunHandler {
     private readonly _envelopeGate: IEnvelopeGateService,
     @inject(WORKFLOW_TOKENS.ReviewerGateService)
     private readonly _reviewerGate: IReviewerGateService,
+    @inject(WORKFLOW_TOKENS.PrLifecycleService)
+    private readonly _prLifecycle: IPrLifecycleService,
     @inject(WORKFLOW_TOKENS.SandboxDeployService)
     private readonly _sandboxDeploy: ISandboxDeployService,
     @inject(WORKFLOW_TOKENS.VerificationService)
@@ -200,6 +203,10 @@ export class RunHandler implements IRunHandler {
     // Every downstream step chains off the implementation digest, so a spec
     // content edit invalidates exactly this task's steps (T-09).
     const chain = { implDigest: outcome.implDigest, headSha };
+
+    // P3 T-02: push the branch and open (or rediscover) the task PR before
+    // the gates — the PR is the reviewer-gate and CI-gate subject.
+    this.prStep(input, state, task, spec, outcome.branch, worktreePath, chain);
 
     const envelopeVerdict = await this.gateStep(
       input,
@@ -351,6 +358,7 @@ export class RunHandler implements IRunHandler {
       console.log(
         `  ${icon} ${result.taskId} ${result.status}` +
           (result.branch !== undefined ? ` on ${result.branch}` : '') +
+          (result.prUrl !== undefined ? ` pr:${result.prUrl}` : '') +
           (result.mergedSha !== undefined
             ? chalk.green(` merged@${result.mergedSha.slice(0, 12)}`)
             : '')
@@ -403,6 +411,77 @@ export class RunHandler implements IRunHandler {
         `✓ merge ${input.mergedSha.slice(0, 12)} recorded for ${input.runId} (${artifactPath})`
       )
     );
+  }
+
+  /**
+   * P3 T-02: push the task branch and open its PR through the step cache.
+   * Success records the step (resume reuses the PR URL); failure records a
+   * blocked `pr` verdict with the tool output and leaves the step
+   * unrecorded so the next invocation retries — run state stays intact
+   * either way, and the pipeline continues so the remaining gates still
+   * report honestly (CI will be blocked without a pushed branch).
+   */
+  private prStep(
+    input: RunTaskInput,
+    state: RunState,
+    task: SpecTask,
+    spec: SpecDocument,
+    branch: string,
+    worktreePath: string,
+    chain: { implDigest?: string; headSha: string }
+  ): void {
+    const digest = inputsDigest({ ...chain, step: 'pr' });
+    const key = stepKey('pr', task.id, digest);
+    const cached = state.steps[key];
+    if (cached !== undefined) {
+      console.log(
+        chalk.gray(`  [cached] PR already open (${cached.detail ?? 'no URL'})`)
+      );
+      return;
+    }
+
+    try {
+      const pr = this._prLifecycle.openTaskPr({
+        worktreePath,
+        branch,
+        runId: input.runId,
+        spec,
+        task,
+        verdicts: state.verdicts.filter(verdict => verdict.taskId === task.id)
+      });
+      this._runStateRepo.recordTaskPrUrl(input.runsDir, state, task.id, pr.url);
+      this._runStateRepo.recordStep(input.runsDir, state, key, {
+        name: 'pr',
+        taskId: task.id,
+        inputsDigest: digest,
+        detail: pr.url,
+        completedAt: new Date().toISOString()
+      });
+      console.log(
+        chalk.green(
+          `  [pr] ${pr.created ? 'opened' : 'reusing'} ${pr.url} for ${branch}`
+        )
+      );
+    } catch (err) {
+      const detail =
+        err instanceof WorkflowError
+          ? [err.message, ...err.details].join(': ')
+          : String(err);
+      this._runStateRepo.appendVerdict(input.runsDir, state, {
+        gate: 'pr',
+        outcome: 'blocked',
+        wouldEscalate: true,
+        reasons: [detail.slice(0, 500)],
+        recordedAt: new Date().toISOString(),
+        taskId: task.id,
+        inputsDigest: digest
+      });
+      console.log(
+        chalk.red(
+          `  [pr] push/PR failed for ${branch}: ${detail.slice(0, 300)}`
+        )
+      );
+    }
   }
 
   /**

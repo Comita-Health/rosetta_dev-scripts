@@ -40,7 +40,8 @@ describe('EnvelopeGateService (T-02)', () => {
         diffText: jest.fn(),
         headSha: jest.fn(),
         status: jest.fn(),
-        addWorktree: jest.fn()
+        addWorktree: jest.fn(),
+        push: jest.fn()
       });
     container
       .bind<ISurfaceMapRepository>(WORKFLOW_TOKENS.SurfaceMapRepository)

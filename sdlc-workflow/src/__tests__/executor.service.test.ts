@@ -68,7 +68,8 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
       status: jest.fn().mockReturnValue(''),
       addWorktree: jest.fn(),
       diffStat: jest.fn(),
-      diffText: jest.fn()
+      diffText: jest.fn(),
+      push: jest.fn()
     };
     agentRun = jest.fn().mockResolvedValue({ ok: true, output: 'done' });
     stateMock = {
@@ -85,7 +86,8 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
       recordCriteria: jest.fn(),
       recordStep: jest.fn(),
       recordMergedSha: jest.fn(),
-      recordTaskMerged: jest.fn()
+      recordTaskMerged: jest.fn(),
+      recordTaskPrUrl: jest.fn()
     };
 
     const container = new Container();

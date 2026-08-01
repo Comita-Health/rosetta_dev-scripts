@@ -22,6 +22,11 @@ export interface IGitRepository {
   diffStat(repoPath: string, baseRef: string, headRef: string): DiffStat;
   /** Full unified diff text between two refs. */
   diffText(repoPath: string, baseRef: string, headRef: string): string;
+  /**
+   * Push `branch` to origin from the given checkout (P3 T-02). Idempotent:
+   * pushing an already-pushed branch at the same head is a no-op for git.
+   */
+  push(repoPath: string, branch: string): void;
 }
 
 const git = (repoPath: string, args: string): string => {
@@ -62,6 +67,10 @@ export class GitRepository implements IGitRepository {
 
   diffText(repoPath: string, baseRef: string, headRef: string): string {
     return git(repoPath, `diff "${baseRef}".."${headRef}"`);
+  }
+
+  push(repoPath: string, branch: string): void {
+    git(repoPath, `push -u origin "${branch}"`);
   }
 
   diffStat(repoPath: string, baseRef: string, headRef: string): DiffStat {

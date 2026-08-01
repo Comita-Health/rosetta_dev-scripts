@@ -28,5 +28,8 @@ export const WORKFLOW_TOKENS = {
   DigestService: Symbol.for('DigestService'),
   ChronicleCommitService: Symbol.for('ChronicleCommitService'),
   GatePolicyQueryService: Symbol.for('GatePolicyQueryService'),
-  RunHandler: Symbol.for('RunHandler')
+  RunHandler: Symbol.for('RunHandler'),
+  // SPEC-PRD-0011-P3
+  PullRequestRepository: Symbol.for('PullRequestRepository'),
+  PrLifecycleService: Symbol.for('PrLifecycleService')
 } as const;
