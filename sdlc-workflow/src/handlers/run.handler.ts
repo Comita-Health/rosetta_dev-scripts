@@ -5,11 +5,13 @@ import type { IEvidenceRepository } from '../repositories/evidence.repository';
 import type { IGitRepository } from '../repositories/git.repository';
 import type { IQueueRepository } from '../repositories/queue.repository';
 import type { IRunStateRepository } from '../repositories/run-state.repository';
+import type { ISpecDocRepository } from '../repositories/spec-doc.repository';
 import type { IAggregatorService } from '../services/aggregator.service';
 import type { IChronicleCommitService } from '../services/chronicle-commit.service';
 import type { ICiGateService } from '../services/ci-gate.service';
 import type { IDigestService } from '../services/digest.service';
 import type { IEnvelopeGateService } from '../services/envelope-gate.service';
+import type { IEscalationService } from '../services/escalation.service';
 import type {
   ExecutorOutcome,
   IExecutorService,
@@ -25,6 +27,7 @@ import type {
 } from '../services/verification.service';
 import { WORKFLOW_TOKENS } from '../tokens';
 import {
+  ExceptionEntry,
   GateVerdict,
   RunState,
   SpecDocument,
@@ -33,6 +36,7 @@ import {
   WorkflowError
 } from '../types';
 import { inputsDigest } from '../utils/digest';
+import { categorizeTasks } from '../utils/run-summary';
 
 export interface RunTaskInput extends PoolInput {
   /**
@@ -142,8 +146,12 @@ export class RunHandler implements IRunHandler {
     private readonly _evidenceRepo: IEvidenceRepository,
     @inject(WORKFLOW_TOKENS.QueueRepository)
     private readonly _queueRepo: IQueueRepository,
+    @inject(WORKFLOW_TOKENS.EscalationService)
+    private readonly _escalation: IEscalationService,
     @inject(WORKFLOW_TOKENS.RunStateRepository)
-    private readonly _runStateRepo: IRunStateRepository
+    private readonly _runStateRepo: IRunStateRepository,
+    @inject(WORKFLOW_TOKENS.SpecDocRepository)
+    private readonly _specDocRepo: ISpecDocRepository
   ) {}
 
   async runTask(input: RunTaskInput): Promise<RunTaskResult> {
@@ -198,6 +206,14 @@ export class RunHandler implements IRunHandler {
       }
       if (outcome.kind === 'completed') {
         await this.taskPipeline(input, state, pool.spec, outcome);
+      } else {
+        // P3 T-06: a failed task (e.g. budget exhaustion) may have written
+        // exception entries without entering the gate pipeline — escalate
+        // those so the queue still surfaces them.
+        const entries = state.exceptions.filter(
+          entry => entry.taskId === outcome.task.id
+        );
+        this.postEscalations(input, state, outcome.task.id, entries);
       }
     }
 
@@ -335,7 +351,8 @@ export class RunHandler implements IRunHandler {
           sha: this._gitRepo.headSha(worktreePath),
           task,
           runsDir: input.runsDir,
-          state
+          state,
+          budgetK: spec.envelope.budgetK
         });
         if (verdict.transcript !== undefined) {
           const evidenceId = `${task.id}-ci-monitor`;
@@ -393,6 +410,9 @@ export class RunHandler implements IRunHandler {
           )
         );
       }
+      // P3 T-06: escalate — action-required queue items, then halt this
+      // task (staying unmerged blocks dependents; other tasks continue).
+      this.postEscalations(input, state, task.id, aggregate.exceptions);
     }
 
     // P3 T-04: enforcement. Green across the board auto-merges; any red
@@ -424,14 +444,16 @@ export class RunHandler implements IRunHandler {
     }
 
     if (phaseVerdict.outcome !== 'pass') {
-      this._runStateRepo.recordExceptions(input.runsDir, state, [
+      const entries = [
         {
-          trigger: 'merge-blocked',
+          trigger: 'merge-blocked' as const,
           taskId: task.id,
           context: phaseVerdict.reasons,
           recordedAt: new Date().toISOString()
         }
-      ]);
+      ];
+      this._runStateRepo.recordExceptions(input.runsDir, state, entries);
+      this.postEscalations(input, state, task.id, entries);
       console.log(
         chalk.red(
           `  [enforce] merge blocked for ${task.id}: ${phaseVerdict.reasons.join('; ')}`
@@ -453,14 +475,16 @@ export class RunHandler implements IRunHandler {
     const prUrl = state.taskResults[task.id]?.prUrl;
     const prNumber = prUrl?.match(/\/pull\/(\d+)$/)?.[1];
     if (prUrl === undefined || prNumber === undefined) {
-      this._runStateRepo.recordExceptions(input.runsDir, state, [
+      const entries = [
         {
-          trigger: 'merge-blocked',
+          trigger: 'merge-blocked' as const,
           taskId: task.id,
           context: ['all gates green but no PR is recorded for the task'],
           recordedAt: new Date().toISOString()
         }
-      ]);
+      ];
+      this._runStateRepo.recordExceptions(input.runsDir, state, entries);
+      this.postEscalations(input, state, task.id, entries);
       console.log(
         chalk.red(`  [enforce] ${task.id} green but has no PR — cannot merge`)
       );
@@ -504,19 +528,47 @@ export class RunHandler implements IRunHandler {
         err instanceof WorkflowError
           ? [err.message, ...err.details].join(': ')
           : String(err);
-      this._runStateRepo.recordExceptions(input.runsDir, state, [
+      const entries = [
         {
-          trigger: 'merge-blocked',
+          trigger: 'merge-blocked' as const,
           taskId: task.id,
           context: [`merge call failed: ${detail.slice(0, 500)}`],
           recordedAt: new Date().toISOString()
         }
-      ]);
+      ];
+      this._runStateRepo.recordExceptions(input.runsDir, state, entries);
+      this.postEscalations(input, state, task.id, entries);
       console.log(
         chalk.red(
           `  [enforce] merge failed for ${task.id}: ${detail.slice(0, 300)}`
         )
       );
+    }
+  }
+
+  /**
+   * P3 T-06: post action-required queue items for every exception entry.
+   * Evidence IDs are gathered from the task's recorded verdicts so the
+   * queue item alone is enough to triage.
+   */
+  private postEscalations(
+    input: RunTaskInput,
+    state: RunState,
+    taskId: string,
+    entries: ExceptionEntry[]
+  ): void {
+    if (entries.length === 0) return;
+    const evidenceIds = state.verdicts
+      .filter(verdict => verdict.taskId === taskId)
+      .flatMap(verdict => verdict.evidenceIds ?? []);
+    const outcome = this._escalation.post({
+      chronicleRepo: input.chronicleRepo,
+      runId: input.runId,
+      entries,
+      evidenceIds
+    });
+    for (const title of outcome.posted) {
+      console.log(chalk.yellow(`  [escalate] ${title}`));
     }
   }
 
@@ -783,21 +835,55 @@ export class RunHandler implements IRunHandler {
       console.log(chalk.green(`  merged: ${state.mergedSha}`));
     }
 
+    // P3 T-06: categorize every task so a partially-failed run surfaces
+    // exactly what needs human attention (merged / halted-escalated /
+    // blocked-by-dependency / …).
+    const categorized = (() => {
+      try {
+        return categorizeTasks(this._specDocRepo.read(state.specPath), state);
+      } catch {
+        // Spec file moved — fall back to the recorded task results alone.
+        return Object.values(state.taskResults).map(result => ({
+          taskId: result.taskId,
+          title: result.taskId,
+          category: (result.mergedSha !== undefined
+            ? 'merged'
+            : result.status === 'failed'
+              ? 'failed'
+              : 'completed-unmerged') as
+            'merged' | 'failed' | 'completed-unmerged',
+          detail: result.mergedSha ?? result.detail
+        }));
+      }
+    })();
+
     console.log(chalk.bold('\nTasks'));
-    const results = Object.values(state.taskResults);
-    if (results.length === 0) console.log('  (none attempted)');
-    for (const result of results) {
-      const icon =
-        result.status === 'completed' ? chalk.green('✓') : chalk.red('✗');
+    if (categorized.length === 0) console.log('  (none)');
+    for (const entry of categorized) {
+      const colour =
+        entry.category === 'merged'
+          ? chalk.green
+          : entry.category === 'halted-escalated' || entry.category === 'failed'
+            ? chalk.red
+            : entry.category === 'blocked-by-dependency'
+              ? chalk.yellow
+              : chalk.gray;
       console.log(
-        `  ${icon} ${result.taskId} ${result.status}` +
-          (result.branch !== undefined ? ` on ${result.branch}` : '') +
-          (result.prUrl !== undefined ? ` pr:${result.prUrl}` : '') +
-          (result.mergedSha !== undefined
-            ? chalk.green(` merged@${result.mergedSha.slice(0, 12)}`)
-            : '')
+        colour(
+          `  ${entry.taskId} ${entry.category}` +
+            (entry.detail !== undefined ? ` — ${entry.detail}` : '') +
+            ` (${entry.title})`
+        )
       );
     }
+    console.log(
+      chalk.gray(
+        `  spend: ${state.tokenSpendK}k tokens` +
+          (state.mergedSha !== undefined
+            ? ` · last merge ${state.mergedSha.slice(0, 12)}`
+            : '')
+      )
+    );
 
     console.log(chalk.bold('\nSteps (cached — reused on resume)'));
     const steps = Object.values(state.steps).sort((a, b) =>

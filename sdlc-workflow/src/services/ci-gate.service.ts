@@ -8,6 +8,7 @@ import type { IGitRepository } from '../repositories/git.repository';
 import type { IRunStateRepository } from '../repositories/run-state.repository';
 import { WORKFLOW_TOKENS } from '../tokens';
 import { GateVerdict, RunState, SpecTask } from '../types';
+import { agentSpendK } from '../utils/agent-spend';
 import { buildCiFixPrompt } from '../utils/ci-fix-prompt';
 import { inputsDigest } from '../utils/digest';
 
@@ -20,6 +21,8 @@ export interface CiMonitorInput {
   task: SpecTask;
   runsDir: string;
   state: RunState;
+  /** Envelope budget — fix agents are skipped once spend exceeds it. */
+  budgetK: number;
   /** Poll interval, default 30s. Injectable for tests. */
   pollIntervalMs?: number;
   /** Overall deadline for the monitor, default 15 minutes. */
@@ -127,7 +130,8 @@ export class CiGateService implements ICiGateService {
         };
       }
 
-      // Failing checks: dispatch a fix agent, bounded by the attempt budget.
+      // Failing checks: dispatch a fix agent, bounded by the attempt
+      // budget and the envelope token budget (P3 T-06).
       const attemptsSoFar = input.state.ciFixAttempts[taskId] ?? 0;
       if (attemptsSoFar >= CI_FIX_ATTEMPT_LIMIT) {
         log.push(
@@ -140,6 +144,21 @@ export class CiGateService implements ICiGateService {
           reasons: [
             ...summary.failed.map(name => `check failed: ${name}`),
             `ci-fix attempts exhausted (${attemptsSoFar}/${CI_FIX_ATTEMPT_LIMIT})`
+          ]
+        };
+      }
+
+      if (input.state.tokenSpendK > input.budgetK) {
+        log.push(
+          `token budget exhausted (${input.state.tokenSpendK}k > ${input.budgetK}k) — skipping fix agent`
+        );
+        return {
+          ...base(),
+          outcome: 'breach',
+          wouldEscalate: true,
+          reasons: [
+            ...summary.failed.map(name => `check failed: ${name}`),
+            `budget exhausted: spend ${input.state.tokenSpendK}k exceeds budget ${input.budgetK}k`
           ]
         };
       }
@@ -162,7 +181,17 @@ export class CiGateService implements ICiGateService {
       );
       try {
         await this._agentRepo.run(input.worktreePath, prompt);
+        this._runStateRepo.recordTokenSpend(
+          input.runsDir,
+          input.state,
+          agentSpendK()
+        );
       } catch (err) {
+        this._runStateRepo.recordTokenSpend(
+          input.runsDir,
+          input.state,
+          agentSpendK()
+        );
         log.push(
           `fix agent dispatch failed: ${err instanceof Error ? err.message : String(err)}`
         );

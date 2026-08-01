@@ -109,6 +109,10 @@ import {
   PrLifecycleService,
   IPrLifecycleService
 } from './services/pr-lifecycle.service';
+import {
+  EscalationService,
+  IEscalationService
+} from './services/escalation.service';
 import { WORKFLOW_TOKENS } from './tokens';
 import { WorkflowError } from './types';
 import { resolveInferenceBackend } from './utils/backend-select';
@@ -206,6 +210,9 @@ container
 container
   .bind<IPrLifecycleService>(WORKFLOW_TOKENS.PrLifecycleService)
   .to(PrLifecycleService);
+container
+  .bind<IEscalationService>(WORKFLOW_TOKENS.EscalationService)
+  .to(EscalationService);
 container.bind<IRunHandler>(WORKFLOW_TOKENS.RunHandler).to(RunHandler);
 
 yargs(hideBin(process.argv))
