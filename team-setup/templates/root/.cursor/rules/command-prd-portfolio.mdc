@@ -1,0 +1,8 @@
+---
+description: "List in-flight and parked PRDs across the workspace portfolio"
+alwaysApply: false
+---
+
+# /prd-portfolio (Cursor)
+
+List in-flight and parked PRDs (Draft/Proposed, specs/runs that are idle, open docs PRs that add PRDs not yet on the default branch). Follow Mode B of the `sdlc-prd-progress` skill (`.cursor/skills/sdlc-prd-progress/SKILL.md`) and run `scripts/prd-portfolio.sh`.

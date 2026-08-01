@@ -1,1 +1,1 @@
-Show where a PRD stands in sdlc-workflow shadow implementation (spec status, run scorecard, task merges, gate verdicts, open PRs, ETA). Follow the `sdlc-prd-progress` skill (`.cursor/skills/sdlc-prd-progress/SKILL.md`).
+Show where a PRD stands in sdlc-workflow shadow implementation (spec status, run scorecard, task merges, gate verdicts, open PRs, ETA), **or** — if the user asks what's in flight / parked without naming a PRD — run Mode B portfolio inventory (`/prd-portfolio`). Follow the `sdlc-prd-progress` skill (`.cursor/skills/sdlc-prd-progress/SKILL.md`).
