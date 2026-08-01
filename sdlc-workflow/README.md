@@ -30,7 +30,12 @@ PRD-0011 (Full-Loop SDLC Automation):
   and the phase digest posts to the PRD-0007 queue with merge links; a
   `[veto]` tag on that item (`check-veto`) reverts the phase merges
   through a PR, redeploys the sandbox at the reverted SHA, and records
-  an `sdlc.revert.v1` Chronicle artifact.
+  an `sdlc.revert.v1` Chronicle artifact; and T-06 escalation surface —
+  each exception trigger posts an `action-required` queue item (task,
+  trigger, evidence refs), token spend against `budgetK` halts new agent
+  dispatches pool-wide, and `status` categorizes tasks as merged /
+  halted-escalated / blocked-by-dependency so a partial failure is
+  triageable without opening state files.
 
 ## Usage
 
@@ -198,7 +203,9 @@ Handler / Service / Repository with InversifyJS (workspace rule):
 - `services/aggregator.service.ts` — combines ci / verification / reviewer /
   envelope into one phase verdict and derives exception-ledger entries
   (reviewer disagreement, third CI fix attempt, envelope breach, budget
-  exhaustion) (T-06).
+  exhaustion) (P2 T-06).
+- `services/escalation.service.ts` — P3 T-06: turns exception entries into
+  interrupting `action-required` queue items (idempotent by title).
 - `services/ci-gate.service.ts` — the live CI gate (P3 T-03): polls the
   pushed branch's check runs to terminal, dispatches a fix agent on
   failure (failing logs in the prompt, ≤3 attempts persisted in

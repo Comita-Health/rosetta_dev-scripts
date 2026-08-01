@@ -101,7 +101,7 @@ Escalations stop being ledger entries and start interrupting: each escalation tr
 
 ### Acceptance criteria
 
-- [ ] test: each of the four escalation triggers posts an action-required queue item naming the task, trigger, and evidence refs, and halts only the affected task
-- [ ] test: cumulative token spend exceeding budgetK halts new agent dispatches across the pool, records the budget-exhaustion escalation, and in-flight non-agent steps complete
-- [ ] test: a run ending with a mix of merged, escalated, and dependency-blocked tasks reports each task in the correct category via the status interface
+- [x] test: each of the four escalation triggers posts an action-required queue item naming the task, trigger, and evidence refs, and halts only the affected task
+- [x] test: cumulative token spend exceeding budgetK halts new agent dispatches across the pool, records the budget-exhaustion escalation, and in-flight non-agent steps complete
+- [x] test: a run ending with a mix of merged, escalated, and dependency-blocked tasks reports each task in the correct category via the status interface
 - [ ] agent: an operator agent reviews a live partially-failed run via the status interface and confirms the escalated task's queue item contains everything needed to triage without consulting internal state files

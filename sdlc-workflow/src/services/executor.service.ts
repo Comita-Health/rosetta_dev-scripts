@@ -6,6 +6,7 @@ import type { IRunStateRepository } from '../repositories/run-state.repository';
 import type { ISpecDocRepository } from '../repositories/spec-doc.repository';
 import { WORKFLOW_TOKENS } from '../tokens';
 import { RunState, SpecDocument, SpecTask, stepKey } from '../types';
+import { agentSpendK } from '../utils/agent-spend';
 import { inputsDigest } from '../utils/digest';
 import { buildImplementationPrompt } from '../utils/implementation-prompt';
 
@@ -207,14 +208,57 @@ export class ExecutorService implements IExecutorService {
       };
     }
 
+    // P3 T-06: budget exhaustion halts new agent dispatches pool-wide.
+    // In-flight non-agent steps (worktree creation above, gates later)
+    // still complete — only the agent call is skipped.
+    if (state.tokenSpendK > spec.envelope.budgetK) {
+      const detail = `budget exhausted: spend ${state.tokenSpendK}k exceeds budget ${spec.envelope.budgetK}k`;
+      this._runStateRepo.recordTaskResult(input.runsDir, state, {
+        taskId: task.id,
+        status: 'failed',
+        branch,
+        worktreePath,
+        inputsDigest: implDigest,
+        detail,
+        recordedAt: new Date().toISOString()
+      });
+      if (
+        !state.exceptions.some(
+          entry =>
+            entry.trigger === 'budget-exhaustion' && entry.taskId === task.id
+        )
+      ) {
+        this._runStateRepo.recordExceptions(input.runsDir, state, [
+          {
+            trigger: 'budget-exhaustion',
+            taskId: task.id,
+            context: [detail],
+            recordedAt: new Date().toISOString()
+          }
+        ]);
+      }
+      return {
+        kind: 'failed',
+        task,
+        branch,
+        detail,
+        cached: false,
+        implDigest
+      };
+    }
+
     const prompt = buildImplementationPrompt(spec, task);
     let ok = false;
     let detail = '';
     try {
       const result = await this._agentRepo.run(worktreePath, prompt);
+      // Meter the dispatch whether it succeeded or failed — the tokens
+      // were spent either way.
+      this._runStateRepo.recordTokenSpend(input.runsDir, state, agentSpendK());
       ok = result.ok;
       detail = result.ok ? '' : result.output;
     } catch (err) {
+      this._runStateRepo.recordTokenSpend(input.runsDir, state, agentSpendK());
       detail = err instanceof Error ? err.message : String(err);
     }
 

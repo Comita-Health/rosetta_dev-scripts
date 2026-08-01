@@ -85,14 +85,24 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
         .mockImplementation((_d, state: RunState, result) => {
           state.taskResults[result.taskId] = result;
         }),
-      recordExceptions: jest.fn(),
+      recordExceptions: jest
+        .fn()
+        .mockImplementation((_d, state: RunState, entries) => {
+          state.exceptions.push(...entries);
+        }),
       recordSandbox: jest.fn(),
       recordCriteria: jest.fn(),
       recordStep: jest.fn(),
       recordMergedSha: jest.fn(),
       recordTaskMerged: jest.fn(),
       recordTaskPrUrl: jest.fn(),
-      recordCiFixAttempt: jest.fn()
+      recordCiFixAttempt: jest.fn(),
+      recordTokenSpend: jest
+        .fn()
+        .mockImplementation((_d, state: RunState, delta: number) => {
+          state.tokenSpendK = (state.tokenSpendK ?? 0) + delta;
+          return state.tokenSpendK;
+        })
     };
 
     const container = new Container();
@@ -498,6 +508,42 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
 
       expect(pool.outcomes[0].task.id).toBe('T-01');
       expect(agentRun).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('P3 T-06 budget enforcement', () => {
+    it('halts new agent dispatches when spend exceeds budgetK and records the escalation', async () => {
+      const state = baseState();
+      state.tokenSpendK = 250; // envelope default budgetK is 200
+      stateMock.load.mockReturnValue(state);
+
+      const pool = await executor.executeReady(INPUT);
+
+      expect(agentRun).not.toHaveBeenCalled();
+      expect(pool.outcomes[0]).toEqual(
+        expect.objectContaining({
+          kind: 'failed',
+          detail: expect.stringContaining('budget exhausted')
+        })
+      );
+      expect(state.exceptions).toContainEqual(
+        expect.objectContaining({
+          trigger: 'budget-exhaustion',
+          taskId: 'T-01'
+        })
+      );
+      // Worktree creation (non-agent) still happened before the dispatch check.
+      expect(gitMock.addWorktree).toHaveBeenCalled();
+    });
+
+    it('meters token spend after each agent dispatch', async () => {
+      await executor.executeReady(INPUT);
+
+      expect(stateMock.recordTokenSpend).toHaveBeenCalledWith(
+        '/runs',
+        expect.anything(),
+        5
+      );
     });
   });
 });

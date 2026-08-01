@@ -49,6 +49,7 @@ describe('CiGateService (P3 T-03 live monitor + bounded fix cycle)', () => {
     task: makeTask(),
     runsDir: '/runs',
     state,
+    budgetK: 200,
     pollIntervalMs: 1,
     timeoutMs: 5_000
   });
@@ -104,7 +105,13 @@ describe('CiGateService (P3 T-03 live monitor + bounded fix cycle)', () => {
         recordStep: jest.fn(),
         recordMergedSha: jest.fn(),
         recordTaskMerged: jest.fn(),
-        recordTaskPrUrl: jest.fn()
+        recordTaskPrUrl: jest.fn(),
+        recordTokenSpend: jest
+          .fn()
+          .mockImplementation((_d, s: RunState, delta: number) => {
+            s.tokenSpendK = (s.tokenSpendK ?? 0) + delta;
+            return s.tokenSpendK;
+          })
       });
     container
       .bind<ICiGateService>(WORKFLOW_TOKENS.CiGateService)
@@ -203,6 +210,18 @@ describe('CiGateService (P3 T-03 live monitor + bounded fix cycle)', () => {
     expect(verdict.reasons).toContainEqual(
       expect.stringContaining('ci-fix attempts exhausted (3/3)')
     );
+  });
+
+  it('skips the fix agent when the token budget is exhausted (P3 T-06)', async () => {
+    state.tokenSpendK = 250;
+    checkRuns.mockReturnValue(red);
+
+    const verdict = await gate.monitor(input());
+
+    expect(verdict.outcome).toBe('breach');
+    expect(verdict.reasons.join(' ')).toContain('budget exhausted');
+    expect(agentRun).not.toHaveBeenCalled();
+    expect(recordCiFixAttempt).not.toHaveBeenCalled();
   });
 
   it('resume honours previously spent attempts (persisted budget)', async () => {

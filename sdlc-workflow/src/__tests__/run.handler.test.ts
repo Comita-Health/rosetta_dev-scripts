@@ -5,6 +5,8 @@ import type { IEvidenceRepository } from '../repositories/evidence.repository';
 import type { IGitRepository } from '../repositories/git.repository';
 import type { IQueueRepository } from '../repositories/queue.repository';
 import type { IRunStateRepository } from '../repositories/run-state.repository';
+import type { ISpecDocRepository } from '../repositories/spec-doc.repository';
+import type { IEscalationService } from '../services/escalation.service';
 import type { IAggregatorService } from '../services/aggregator.service';
 import type { IChronicleCommitService } from '../services/chronicle-commit.service';
 import type { ICiGateService } from '../services/ci-gate.service';
@@ -96,6 +98,8 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
   let revertMerge: jest.Mock;
   let prCreate: jest.Mock;
   let gitPush: jest.Mock;
+  let specRead: jest.Mock;
+  let escalationPost: jest.Mock;
 
   const taskOutcome = (
     overrides: Partial<ExecutorOutcome> = {}
@@ -230,6 +234,8 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
       url: 'https://github.com/org/repo/pull/99',
       number: 99
     });
+    specRead = jest.fn().mockReturnValue(SPEC);
+    escalationPost = jest.fn().mockReturnValue({ posted: [] });
 
     const container = new Container();
     container
@@ -254,6 +260,12 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
     container
       .bind<IQueueRepository>(WORKFLOW_TOKENS.QueueRepository)
       .toConstantValue({ appendItem: jest.fn(), itemTags });
+    container
+      .bind<IEscalationService>(WORKFLOW_TOKENS.EscalationService)
+      .toConstantValue({ post: escalationPost });
+    container
+      .bind<ISpecDocRepository>(WORKFLOW_TOKENS.SpecDocRepository)
+      .toConstantValue({ read: specRead });
     container
       .bind<ISandboxDeployService>(WORKFLOW_TOKENS.SandboxDeployService)
       .toConstantValue({ deploy });
@@ -313,6 +325,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
           ),
         recordTaskPrUrl,
         recordCiFixAttempt: jest.fn(),
+        recordTokenSpend: jest.fn(),
         load: stateLoad,
         save: jest.fn(),
         recordTaskResult: jest.fn()
@@ -1040,12 +1053,14 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
       .map(call => String(call[0]))
       .join('\n');
     expect(output).toContain('Run run-1');
-    expect(output).toContain('T-01 completed on sdlc/run-1/T-01');
+    // P3 T-06 categories: escalated takes precedence over completed-unmerged.
+    expect(output).toContain('T-01 halted-escalated');
     expect(output).toContain('T-01 implementation');
     expect(output).toContain('T-01 envelope → pass');
     expect(output).toContain('reviewer-disagreement');
     expect(output).toContain('head-sha healthy');
     expect(output).toContain('merged: abc123');
+    expect(output).toContain('spend:');
   });
 
   it('shows placeholders for a fresh run and throws for an unknown one', () => {
@@ -1054,7 +1069,8 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
     const output = (console.log as jest.Mock).mock.calls
       .map(call => String(call[0]))
       .join('\n');
-    expect(output).toContain('(none attempted)');
+    // Spec tasks surface as not-started when nothing has been attempted.
+    expect(output).toContain('T-01 not-started');
     expect(output).toContain('(none completed)');
     expect(output).toContain('(none recorded)');
 
@@ -1062,6 +1078,75 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
     expect(() =>
       handler.showStatus({ runsDir: '/runs', runId: 'run-x' })
     ).toThrow(WorkflowError);
+  });
+
+  it('status falls back to recorded results when the spec file is gone', () => {
+    specRead.mockImplementation(() => {
+      throw new Error('ENOENT');
+    });
+    const loaded = makeState();
+    loaded.taskResults['T-01'] = {
+      taskId: 'T-01',
+      status: 'completed',
+      mergedSha: 'm1',
+      recordedAt: 'x'
+    };
+    stateLoad.mockReturnValue(loaded);
+
+    handler.showStatus({ runsDir: '/runs', runId: 'run-1' });
+    const output = (console.log as jest.Mock).mock.calls
+      .map(call => String(call[0]))
+      .join('\n');
+    expect(output).toContain('T-01 merged');
+  });
+
+  it('status categorizes a mixed run into merged / escalated / blocked-by-dependency (P3 T-06)', () => {
+    const loaded = makeState();
+    loaded.specPath = '/specs/spec.md';
+    loaded.taskResults['T-01'] = {
+      taskId: 'T-01',
+      status: 'completed',
+      mergedSha: 'merged-1',
+      recordedAt: 'x'
+    };
+    loaded.taskResults['T-02'] = {
+      taskId: 'T-02',
+      status: 'completed',
+      recordedAt: 'x'
+    };
+    loaded.exceptions.push({
+      trigger: 'envelope-breach',
+      taskId: 'T-02',
+      context: ['outside'],
+      recordedAt: 'x'
+    });
+    specRead.mockReturnValue({
+      ...SPEC,
+      tasks: [
+        SPEC.tasks[0],
+        {
+          ...SPEC.tasks[0],
+          id: 'T-02',
+          title: 'second',
+          dependsOn: [] as string[]
+        },
+        {
+          ...SPEC.tasks[0],
+          id: 'T-03',
+          title: 'blocked',
+          dependsOn: ['T-02']
+        }
+      ]
+    });
+    stateLoad.mockReturnValue(loaded);
+
+    handler.showStatus({ runsDir: '/runs', runId: 'run-1' });
+    const output = (console.log as jest.Mock).mock.calls
+      .map(call => String(call[0]))
+      .join('\n');
+    expect(output).toContain('T-01 merged');
+    expect(output).toContain('T-02 halted-escalated');
+    expect(output).toContain('T-03 blocked-by-dependency');
   });
 
   it('dispatches record-merge to the chronicle service, task ID included', async () => {

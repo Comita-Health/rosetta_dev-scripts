@@ -179,6 +179,15 @@ describe('RunStateRepository', () => {
     // Persisted: a resumed run never resets the budget.
     expect(repo.load(dir, 'run-1')?.ciFixAttempts['T-01']).toBe(2);
   });
+
+  it('accumulates and persists token spend (P3 T-06)', () => {
+    const state = makeState();
+    repo.save(dir, state);
+
+    expect(repo.recordTokenSpend(dir, state, 5)).toBe(5);
+    expect(repo.recordTokenSpend(dir, state, 3)).toBe(8);
+    expect(repo.load(dir, 'run-1')?.tokenSpendK).toBe(8);
+  });
 });
 
 describe('SurfaceMapRepository', () => {
