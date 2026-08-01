@@ -11,11 +11,13 @@ PRD-0011 (Full-Loop SDLC Automation):
   done): execute one ready task from an Approved spec in an isolated
   worktree, run machine gates in **shadow mode** (verdicts recorded, never
   enforced), and halt — human approval is the only advance mechanism.
-- **Phase 3** ([SPEC-PRD-0011-P3](../specs/PRD-0011/phase-3-spec.md), in
-  progress): parallel fan-out across ready tasks, real PR lifecycle with a
+- **Phase 3** ([SPEC-PRD-0011-P3](../specs/PRD-0011/phase-3-spec.md),
+  done — live-validated 2026-08-01, run `p3-live-val` auto-merged
+  [PR #32](https://github.com/Rosetta-Foundation/rosetta_dev-scripts/pull/32)):
+  parallel fan-out across ready tasks, real PR lifecycle with a
   bounded CI fix cycle, gate enforcement with auto-merge on green,
   post-merge sandbox deploy + PRD-0007 digest with veto-triggered revert.
-  Landed so far: the T-01 dependency-ordered task pool; the T-02 PR
+  Landed: the T-01 dependency-ordered task pool; the T-02 PR
   lifecycle — each completed task branch is pushed and gets a real PR
   (idempotent on resume), which is the reviewer- and CI-gate subject;
   the T-03 live CI monitor — checks are polled to terminal and failures
