@@ -2,7 +2,7 @@
 id: SPEC-LIVE-VALIDATION-P1
 prd: PRD-0011
 phase: 2
-status: Approved # Draft | Approved | Done | Superseded
+status: Done # Draft | Approved | Done | Superseded
 date: 2026-08-01
 owner: Russ Watson
 envelope:
