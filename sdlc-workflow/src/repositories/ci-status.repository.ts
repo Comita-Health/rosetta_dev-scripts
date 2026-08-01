@@ -15,7 +15,14 @@ export interface CheckRunSummary {
  */
 export interface ICiStatusRepository {
   checkRuns(repoPath: string, sha: string): CheckRunSummary | null;
+  /**
+   * Failed-step logs for the workflow runs at `sha` (P3 T-03) — the fix
+   * agent's context. Best effort: returns '' when logs cannot be fetched.
+   */
+  failedLogs(repoPath: string, sha: string): string;
 }
+
+const MAX_LOG_CHARS = 20_000;
 
 @injectable()
 export class CiStatusRepository implements ICiStatusRepository {
@@ -56,5 +63,35 @@ export class CiStatusRepository implements ICiStatusRepository {
         .filter(run => run.status !== 'completed')
         .map(run => run.name)
     };
+  }
+
+  failedLogs(repoPath: string, sha: string): string {
+    try {
+      const raw = execSync(
+        `gh run list --commit ${sha} --status failure --json databaseId --jq ".[].databaseId"`,
+        { cwd: repoPath, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
+      );
+      const ids = raw
+        .split('\n')
+        .map(line => line.trim())
+        .filter(line => line.length > 0);
+      const logs: string[] = [];
+      for (const id of ids) {
+        try {
+          logs.push(
+            execSync(`gh run view ${id} --log-failed`, {
+              cwd: repoPath,
+              encoding: 'utf-8',
+              stdio: ['pipe', 'pipe', 'pipe']
+            })
+          );
+        } catch {
+          // A single unreadable run does not void the rest.
+        }
+      }
+      return logs.join('\n').slice(-MAX_LOG_CHARS);
+    } catch {
+      return '';
+    }
   }
 }

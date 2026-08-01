@@ -228,7 +228,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
       .toConstantValue({ verify });
     container
       .bind<ICiGateService>(WORKFLOW_TOKENS.CiGateService)
-      .toConstantValue({ evaluate: ciEvaluate });
+      .toConstantValue({ monitor: ciEvaluate });
     container
       .bind<IAggregatorService>(WORKFLOW_TOKENS.AggregatorService)
       .toConstantValue({ aggregate });
@@ -262,6 +262,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
         recordMergedSha: jest.fn(),
         recordTaskMerged: jest.fn(),
         recordTaskPrUrl,
+        recordCiFixAttempt: jest.fn(),
         load: stateLoad,
         save: jest.fn(),
         recordTaskResult: jest.fn()
@@ -368,11 +369,16 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
   it('feeds real envelope/reviewer/verification/ci verdicts to the aggregator', async () => {
     await handler.runTask(INPUT);
 
-    expect(ciEvaluate).toHaveBeenCalledWith({
-      repoPath: '/repo',
-      sha: 'head-sha',
-      taskId: 'T-01'
-    });
+    expect(ciEvaluate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repoPath: '/repo',
+        worktreePath: '/runs/run-1/worktrees/T-01',
+        branch: 'sdlc/run-1/T-01',
+        sha: 'head-sha',
+        task: SPEC.tasks[0],
+        runsDir: '/runs'
+      })
+    );
     const call = aggregate.mock.calls[0][0];
     expect(call.gates.envelope).toBe(breachVerdict);
     expect(call.gates.reviewer).toBe(reviewerVerdict);

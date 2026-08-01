@@ -270,19 +270,37 @@ export class RunHandler implements IRunHandler {
       inputsDigest({ ...chain, criteria: task.acceptanceCriteria })
     );
 
-    // The real CI gate: check runs for the task branch head SHA.
+    // P3 T-03: live CI gate — poll the pushed branch's checks to terminal,
+    // dispatch bounded fix agents on failure, and consume the post-cycle
+    // verdict. The cycle transcript is saved as resolvable evidence.
     const ciVerdict = await this.gateStep(
       input,
       state,
       'ci',
       task.id,
       inputsDigest({ ...chain, gate: 'ci' }),
-      () =>
-        this._ciGate.evaluate({
+      async () => {
+        const verdict = await this._ciGate.monitor({
           repoPath: input.repoPath,
-          sha: headSha,
-          taskId: task.id
-        })
+          worktreePath,
+          branch: outcome.branch,
+          sha: this._gitRepo.headSha(worktreePath),
+          task,
+          runsDir: input.runsDir,
+          state
+        });
+        if (verdict.transcript !== undefined) {
+          const evidenceId = `${task.id}-ci-monitor`;
+          this._evidenceRepo.save(
+            input.runsDir,
+            input.runId,
+            evidenceId,
+            verdict.transcript
+          );
+          verdict.evidenceIds = [evidenceId];
+        }
+        return verdict;
+      }
     );
 
     const phaseDigest = inputsDigest({ ...chain, step: 'phase' });

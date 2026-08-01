@@ -87,7 +87,8 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
       recordStep: jest.fn(),
       recordMergedSha: jest.fn(),
       recordTaskMerged: jest.fn(),
-      recordTaskPrUrl: jest.fn()
+      recordTaskPrUrl: jest.fn(),
+      recordCiFixAttempt: jest.fn()
     };
 
     const container = new Container();
