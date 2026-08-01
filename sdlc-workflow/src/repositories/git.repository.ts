@@ -3,6 +3,14 @@ import { existsSync } from 'fs';
 import { injectable } from 'inversify';
 import { DiffStat, WorkflowError } from '../types';
 
+export interface GitCommitOptions {
+  /** Bypass client hooks (husky). Required on `sdlc/*` branches when the
+   * target repo only allows `f/*` / `b/*` (#41). */
+  noVerify?: boolean;
+  /** Append a `Signed-off-by` trailer (DCO). */
+  signOff?: boolean;
+}
+
 export interface IGitRepository {
   headSha(repoPath: string): string;
   /** `git status --porcelain` output for the primary checkout. */
@@ -27,6 +35,25 @@ export interface IGitRepository {
    * pushing an already-pushed branch at the same head is a no-op for git.
    */
   push(repoPath: string, branch: string): void;
+  /** Fetch origin so remote-tracking refs are current (P3 T-05). */
+  fetch(repoPath: string): void;
+  /** Resolve any ref (e.g. `origin/main`) to a SHA. */
+  resolveSha(repoPath: string, ref: string): string;
+  /** The repo's default branch name, from origin/HEAD (fallback: main). */
+  defaultBranch(repoPath: string): string;
+  /**
+   * Revert a merge commit (first-parent mainline) with a signed-off commit
+   * in the given checkout (P3 T-05 veto path).
+   */
+  revertMerge(repoPath: string, sha: string): void;
+  /** Stage all changes in the checkout (`git add -A`). */
+  stageAll(repoPath: string): void;
+  /**
+   * Create a commit in the checkout. Engine-owned commits on `sdlc/*`
+   * branches pass `{ noVerify: true }` so target-repo husky branch checks
+   * cannot block the run (#41).
+   */
+  commit(repoPath: string, message: string, options?: GitCommitOptions): void;
 }
 
 const git = (repoPath: string, args: string): string => {
@@ -71,6 +98,41 @@ export class GitRepository implements IGitRepository {
 
   push(repoPath: string, branch: string): void {
     git(repoPath, `push -u origin "${branch}"`);
+  }
+
+  fetch(repoPath: string): void {
+    git(repoPath, 'fetch origin');
+  }
+
+  resolveSha(repoPath: string, ref: string): string {
+    return git(repoPath, `rev-parse "${ref}"`).trim();
+  }
+
+  defaultBranch(repoPath: string): string {
+    try {
+      const ref = git(repoPath, 'symbolic-ref refs/remotes/origin/HEAD').trim();
+      const name = ref.split('/').pop();
+      return name !== undefined && name.length > 0 ? name : 'main';
+    } catch {
+      return 'main';
+    }
+  }
+
+  revertMerge(repoPath: string, sha: string): void {
+    git(repoPath, `revert --no-edit --signoff -m 1 "${sha}"`);
+  }
+
+  stageAll(repoPath: string): void {
+    git(repoPath, 'add -A');
+  }
+
+  commit(repoPath: string, message: string, options?: GitCommitOptions): void {
+    const flags: string[] = [];
+    if (options?.noVerify === true) flags.push('--no-verify');
+    if (options?.signOff === true) flags.push('--signoff');
+    const escaped = message.replace(/"/g, '\\"');
+    const flagStr = flags.length > 0 ? `${flags.join(' ')} ` : '';
+    git(repoPath, `commit ${flagStr}-m "${escaped}"`);
   }
 
   diffStat(repoPath: string, baseRef: string, headRef: string): DiffStat {

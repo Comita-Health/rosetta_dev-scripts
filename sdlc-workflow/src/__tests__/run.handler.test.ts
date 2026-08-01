@@ -3,18 +3,23 @@ import { Container } from 'inversify';
 import { IRunHandler, RunHandler } from '../handlers/run.handler';
 import type { IEvidenceRepository } from '../repositories/evidence.repository';
 import type { IGitRepository } from '../repositories/git.repository';
+import type { IQueueRepository } from '../repositories/queue.repository';
 import type { IRunStateRepository } from '../repositories/run-state.repository';
+import type { ISpecDocRepository } from '../repositories/spec-doc.repository';
+import type { IEscalationService } from '../services/escalation.service';
 import type { IAggregatorService } from '../services/aggregator.service';
 import type { IChronicleCommitService } from '../services/chronicle-commit.service';
 import type { ICiGateService } from '../services/ci-gate.service';
 import type { IDigestService } from '../services/digest.service';
 import type { IEnvelopeGateService } from '../services/envelope-gate.service';
+import type { IPullRequestRepository } from '../repositories/pull-request.repository';
 import type { IPrLifecycleService } from '../services/pr-lifecycle.service';
 import type {
   ExecutorOutcome,
   IExecutorService,
   PoolOutcome
 } from '../services/executor.service';
+import type { IHeartbeatService } from '../services/heartbeat.service';
 import type { IReviewerGateService } from '../services/reviewer-gate.service';
 import type { ISandboxDeployService } from '../services/sandbox-deploy.service';
 import type { IVerificationService } from '../services/verification.service';
@@ -88,6 +93,14 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
   let recordTaskPrUrl: jest.Mock;
   let stateLoad: jest.Mock;
   let openTaskPr: jest.Mock;
+  let prMerge: jest.Mock;
+  let recordRevert: jest.Mock;
+  let itemTags: jest.Mock;
+  let revertMerge: jest.Mock;
+  let prCreate: jest.Mock;
+  let gitPush: jest.Mock;
+  let specRead: jest.Mock;
+  let escalationPost: jest.Mock;
 
   const taskOutcome = (
     overrides: Partial<ExecutorOutcome> = {}
@@ -97,6 +110,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
     branch: 'sdlc/run-1/T-01',
     cached: false,
     implDigest: 'impl-digest',
+    baseSha: 'base-sha',
     ...overrides
   });
 
@@ -128,6 +142,13 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
 
   beforeEach(() => {
     state = makeState();
+    // The real executor records a task result before the handler pipeline.
+    state.taskResults['T-01'] = {
+      taskId: 'T-01',
+      status: 'completed',
+      branch: 'sdlc/run-1/T-01',
+      recordedAt: 'x'
+    };
     breachVerdict = verdictOf('envelope', 'breach', [
       'outside allowedPaths: infra/x.yml'
     ]);
@@ -206,6 +227,17 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
       number: 7,
       created: true
     });
+    prMerge = jest.fn().mockReturnValue('merged-sha-abc');
+    recordRevert = jest.fn().mockResolvedValue('chronicles/sdlc/run-1/revert');
+    itemTags = jest.fn().mockReturnValue(null);
+    revertMerge = jest.fn();
+    gitPush = jest.fn();
+    prCreate = jest.fn().mockReturnValue({
+      url: 'https://github.com/org/repo/pull/99',
+      number: 99
+    });
+    specRead = jest.fn().mockReturnValue(SPEC);
+    escalationPost = jest.fn().mockReturnValue({ posted: [] });
 
     const container = new Container();
     container
@@ -221,6 +253,22 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
       .bind<IPrLifecycleService>(WORKFLOW_TOKENS.PrLifecycleService)
       .toConstantValue({ openTaskPr });
     container
+      .bind<IPullRequestRepository>(WORKFLOW_TOKENS.PullRequestRepository)
+      .toConstantValue({
+        findByBranch: jest.fn().mockReturnValue(null),
+        create: prCreate,
+        merge: prMerge
+      });
+    container
+      .bind<IQueueRepository>(WORKFLOW_TOKENS.QueueRepository)
+      .toConstantValue({ appendItem: jest.fn(), itemTags });
+    container
+      .bind<IEscalationService>(WORKFLOW_TOKENS.EscalationService)
+      .toConstantValue({ post: escalationPost });
+    container
+      .bind<ISpecDocRepository>(WORKFLOW_TOKENS.SpecDocRepository)
+      .toConstantValue({ read: specRead });
+    container
       .bind<ISandboxDeployService>(WORKFLOW_TOKENS.SandboxDeployService)
       .toConstantValue({ deploy });
     container
@@ -228,7 +276,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
       .toConstantValue({ verify });
     container
       .bind<ICiGateService>(WORKFLOW_TOKENS.CiGateService)
-      .toConstantValue({ evaluate: ciEvaluate });
+      .toConstantValue({ monitor: ciEvaluate });
     container
       .bind<IAggregatorService>(WORKFLOW_TOKENS.AggregatorService)
       .toConstantValue({ aggregate });
@@ -237,7 +285,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
       .toConstantValue({ post: digestPost });
     container
       .bind<IChronicleCommitService>(WORKFLOW_TOKENS.ChronicleCommitService)
-      .toConstantValue({ record: chronicleRecord, recordMerge });
+      .toConstantValue({ record: chronicleRecord, recordMerge, recordRevert });
     container
       .bind<IEvidenceRepository>(WORKFLOW_TOKENS.EvidenceRepository)
       .toConstantValue({ save: evidenceSave, load: jest.fn() });
@@ -249,7 +297,21 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
         addWorktree: jest.fn(),
         diffStat: jest.fn(),
         diffText: jest.fn(),
-        push: jest.fn()
+        push: gitPush,
+        fetch: jest.fn(),
+        resolveSha: jest.fn().mockReturnValue('main-sha'),
+        defaultBranch: jest.fn().mockReturnValue('main'),
+        revertMerge,
+        stageAll: jest.fn(),
+        commit: jest.fn()
+      });
+    container
+      .bind<IHeartbeatService>(WORKFLOW_TOKENS.HeartbeatService)
+      .toConstantValue({
+        start: jest.fn(),
+        setContext: jest.fn(),
+        tick: jest.fn(),
+        stop: jest.fn()
       });
     container
       .bind<IRunStateRepository>(WORKFLOW_TOKENS.RunStateRepository)
@@ -259,9 +321,23 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
         recordSandbox,
         recordCriteria,
         recordStep,
-        recordMergedSha: jest.fn(),
-        recordTaskMerged: jest.fn(),
+        recordMergedSha: jest
+          .fn()
+          .mockImplementation((_d, s: RunState, sha: string) => {
+            s.mergedSha = sha;
+          }),
+        recordTaskMerged: jest
+          .fn()
+          .mockImplementation(
+            (_d, s: RunState, taskId: string, sha: string) => {
+              if (s.taskResults[taskId] !== undefined) {
+                s.taskResults[taskId].mergedSha = sha;
+              }
+            }
+          ),
         recordTaskPrUrl,
+        recordCiFixAttempt: jest.fn(),
+        recordTokenSpend: jest.fn(),
         load: stateLoad,
         save: jest.fn(),
         recordTaskResult: jest.fn()
@@ -368,11 +444,16 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
   it('feeds real envelope/reviewer/verification/ci verdicts to the aggregator', async () => {
     await handler.runTask(INPUT);
 
-    expect(ciEvaluate).toHaveBeenCalledWith({
-      repoPath: '/repo',
-      sha: 'head-sha',
-      taskId: 'T-01'
-    });
+    expect(ciEvaluate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repoPath: '/repo',
+        worktreePath: '/runs/run-1/worktrees/T-01',
+        branch: 'sdlc/run-1/T-01',
+        sha: 'head-sha',
+        task: SPEC.tasks[0],
+        runsDir: '/runs'
+      })
+    );
     const call = aggregate.mock.calls[0][0];
     expect(call.gates.envelope).toBe(breachVerdict);
     expect(call.gates.reviewer).toBe(reviewerVerdict);
@@ -480,6 +561,42 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
     expect(appendVerdict).toHaveBeenCalledTimes(12);
   });
 
+  it('envelope and reviewer diff against the task integration tip, not frozen base (#42 F1)', async () => {
+    executeReady.mockImplementation(async () =>
+      executedPool([
+        taskOutcome({
+          task: makeTask({ id: 'T-04', dependsOn: ['T-01'] }),
+          branch: 'sdlc/run-1/T-04',
+          baseSha: 'integration-tip'
+        })
+      ])
+    );
+    state.taskResults['T-04'] = {
+      taskId: 'T-04',
+      status: 'completed',
+      branch: 'sdlc/run-1/T-04',
+      recordedAt: 'x'
+    };
+
+    await handler.runTask(INPUT);
+
+    expect(evaluate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseRef: 'integration-tip',
+        headRef: 'sdlc/run-1/T-04'
+      })
+    );
+    expect(review).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseRef: 'integration-tip',
+        headRef: 'sdlc/run-1/T-04'
+      })
+    );
+    expect(evaluate).not.toHaveBeenCalledWith(
+      expect.objectContaining({ baseRef: 'base-sha' })
+    );
+  });
+
   it('pushes the task branch and opens its PR before the gates, recording the URL (P3 T-02)', async () => {
     await handler.runTask(INPUT);
 
@@ -548,6 +665,330 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
     expect(recordTaskPrUrl).toHaveBeenCalledTimes(1);
   });
 
+  describe('P3 T-04 gate enforcement', () => {
+    const greenGates = () => {
+      evaluate.mockResolvedValue(verdictOf('envelope', 'pass'));
+      review.mockResolvedValue(verdictOf('reviewer', 'pass'));
+      verify.mockResolvedValue({
+        verdict: verdictOf('verification', 'pass'),
+        criteria: criterionVerdicts
+      });
+      ciEvaluate.mockResolvedValue(verdictOf('ci', 'pass'));
+      aggregate.mockReturnValue({
+        verdict: verdictOf('phase', 'pass'),
+        exceptions: []
+      });
+    };
+
+    it('auto-merges the PR when all four gates are green, recording the SHA in state and Chronicle', async () => {
+      greenGates();
+
+      await handler.runTask({ ...INPUT, chronicleRepo: '/chronicle' });
+
+      expect(prMerge).toHaveBeenCalledWith('/repo', 7);
+      expect(state.taskResults['T-01'].mergedSha).toBe('merged-sha-abc');
+      expect(state.mergedSha).toBe('merged-sha-abc');
+      // sdlc.merge.v1 artifact, attributed to the machine gates.
+      expect(recordMerge).toHaveBeenCalledWith(
+        expect.objectContaining({
+          mergedSha: 'merged-sha-abc',
+          taskId: 'T-01',
+          approvedBy: 'machine-gates'
+        })
+      );
+      // Cached: resume does not merge twice.
+      await handler.runTask({ ...INPUT, chronicleRepo: '/chronicle' });
+      expect(prMerge).toHaveBeenCalledTimes(1);
+    });
+
+    it.each(['envelope', 'reviewer', 'verification', 'ci'] as const)(
+      'a red %s gate blocks the merge and records the escalation — no merge call',
+      async gate => {
+        greenGates();
+        const red = verdictOf(gate, 'breach', [`${gate} went red`]);
+        if (gate === 'envelope') evaluate.mockResolvedValue(red);
+        if (gate === 'reviewer') review.mockResolvedValue(red);
+        if (gate === 'verification')
+          verify.mockResolvedValue({ verdict: red, criteria: [] });
+        if (gate === 'ci') ciEvaluate.mockResolvedValue(red);
+        aggregate.mockReturnValue({
+          verdict: verdictOf('phase', 'breach', [`failing gates: ${gate}`]),
+          exceptions: []
+        });
+
+        await handler.runTask(INPUT);
+
+        expect(prMerge).not.toHaveBeenCalled();
+        expect(recordMerge).not.toHaveBeenCalled();
+        expect(state.exceptions).toContainEqual(
+          expect.objectContaining({
+            trigger: 'merge-blocked',
+            taskId: 'T-01',
+            context: [`failing gates: ${gate}`]
+          })
+        );
+      }
+    );
+
+    it('with the shadow flag set, verdicts are recorded but no merge call is ever issued', async () => {
+      greenGates();
+
+      await handler.runTask({ ...INPUT, shadow: true });
+
+      expect(prMerge).not.toHaveBeenCalled();
+      // Verdicts still recorded (envelope, reviewer, sandbox, verification,
+      // ci, phase).
+      expect(appendVerdict).toHaveBeenCalledTimes(6);
+      expect(state.exceptions).toEqual([]);
+    });
+
+    it('green gates without a recorded PR block with an escalation instead of merging', async () => {
+      greenGates();
+      openTaskPr.mockImplementation(() => {
+        throw new WorkflowError('gh unavailable', 'GH_FAILED');
+      });
+
+      await handler.runTask(INPUT);
+
+      expect(prMerge).not.toHaveBeenCalled();
+      expect(state.exceptions).toContainEqual(
+        expect.objectContaining({
+          trigger: 'merge-blocked',
+          context: ['all gates green but no PR is recorded for the task']
+        })
+      );
+    });
+
+    it('a failed merge call records the escalation without crashing the run', async () => {
+      greenGates();
+      prMerge.mockImplementation(() => {
+        throw new WorkflowError('merge conflict', 'GH_FAILED', ['dirty']);
+      });
+
+      const result = await handler.runTask(INPUT);
+
+      expect(result.outcome).toBe('executed');
+      expect(state.exceptions).toContainEqual(
+        expect.objectContaining({
+          trigger: 'merge-blocked',
+          context: [expect.stringContaining('merge conflict')]
+        })
+      );
+    });
+  });
+
+  describe('P3 T-05 phase boundary and veto', () => {
+    const greenGates = () => {
+      evaluate.mockResolvedValue(verdictOf('envelope', 'pass'));
+      review.mockResolvedValue(verdictOf('reviewer', 'pass'));
+      verify.mockResolvedValue({
+        verdict: verdictOf('verification', 'pass'),
+        criteria: criterionVerdicts
+      });
+      ciEvaluate.mockResolvedValue(verdictOf('ci', 'pass'));
+      aggregate.mockReturnValue({
+        verdict: verdictOf('phase', 'pass'),
+        exceptions: []
+      });
+    };
+
+    const phaseDeployCalls = () =>
+      deploy.mock.calls.filter(([arg]) => arg.worktreePath.includes('_phase'));
+
+    it('deploys the merged default branch exactly once and posts the phase digest with merge links', async () => {
+      greenGates();
+
+      await handler.runTask({ ...INPUT, chronicleRepo: '/chronicle' });
+
+      // The phase deploy targets the merged default branch head in the
+      // dedicated _phase worktree — not a task branch.
+      const calls = phaseDeployCalls();
+      expect(calls).toHaveLength(1);
+      expect(calls[0][0]).toEqual(expect.objectContaining({ sha: 'main-sha' }));
+      // The phase digest carries the merged SHAs and the recorded verdicts.
+      const phasePost = digestPost.mock.calls.find(
+        ([arg]) => arg.taskId === 'phase'
+      );
+      expect(phasePost).toBeDefined();
+      expect(phasePost?.[0].merges).toEqual([
+        { taskId: 'T-01', mergedSha: 'merged-sha-abc' }
+      ]);
+      expect(phasePost?.[0].verdicts.length).toBeGreaterThan(0);
+
+      // Resume: the boundary is step-cached — no second deploy, no
+      // duplicate digest.
+      await handler.runTask({ ...INPUT, chronicleRepo: '/chronicle' });
+      expect(phaseDeployCalls()).toHaveLength(1);
+      expect(
+        digestPost.mock.calls.filter(([arg]) => arg.taskId === 'phase')
+      ).toHaveLength(1);
+    });
+
+    it('does not reach the phase boundary while any task is unmerged', async () => {
+      greenGates();
+      prMerge.mockImplementation(() => {
+        throw new WorkflowError('merge conflict', 'GH_FAILED');
+      });
+
+      await handler.runTask({ ...INPUT, chronicleRepo: '/chronicle' });
+
+      expect(phaseDeployCalls()).toHaveLength(0);
+      expect(
+        digestPost.mock.calls.filter(([arg]) => arg.taskId === 'phase')
+      ).toHaveLength(0);
+    });
+
+    it('replays the phase boundary on a no-ready-task resume', async () => {
+      greenGates();
+      // Seed a fully-merged state and force the executor into the
+      // no-ready-task kind so the resume path is exercised.
+      state.taskResults['T-01'].mergedSha = 'merged-sha-abc';
+      executeReady.mockResolvedValue({
+        kind: 'no-ready-task',
+        spec: SPEC,
+        state,
+        outcomes: []
+      });
+
+      await handler.runTask({ ...INPUT, chronicleRepo: '/chronicle' });
+
+      expect(phaseDeployCalls()).toHaveLength(1);
+      expect(
+        digestPost.mock.calls.filter(([arg]) => arg.taskId === 'phase')
+      ).toHaveLength(1);
+    });
+
+    it('leaves the phase-deploy step uncached when the sandbox deploy fails', async () => {
+      greenGates();
+      deploy.mockResolvedValue({
+        verdict: verdictOf('sandbox', 'breach', ['deploy failed']),
+        record: { sha: 'main-sha', status: 'failed', recordedAt: 'x' }
+      });
+
+      await handler.runTask({ ...INPUT, chronicleRepo: '/chronicle' });
+
+      expect(phaseDeployCalls()).toHaveLength(1);
+      // Step not recorded → digest not posted → retryable on next run.
+      expect(
+        Object.values(state.steps).some(step => step.name === 'phase-deploy')
+      ).toBe(false);
+      expect(
+        digestPost.mock.calls.filter(([arg]) => arg.taskId === 'phase')
+      ).toHaveLength(0);
+    });
+
+    it('deploys the phase but skips the digest without --chronicle-repo', async () => {
+      greenGates();
+
+      await handler.runTask(INPUT);
+
+      expect(phaseDeployCalls()).toHaveLength(1);
+      expect(
+        digestPost.mock.calls.filter(([arg]) => arg.taskId === 'phase')
+      ).toHaveLength(0);
+    });
+
+    describe('checkVeto', () => {
+      const VETO_INPUT = {
+        runsDir: '/runs',
+        runId: 'run-1',
+        repoPath: '/repo',
+        chronicleRepo: '/chronicle'
+      };
+
+      beforeEach(() => {
+        const vetoState = makeState();
+        vetoState.taskResults['T-01'] = {
+          taskId: 'T-01',
+          status: 'completed',
+          branch: 'sdlc/run-1/T-01',
+          mergedSha: 'merge-sha-1',
+          recordedAt: '2026-08-01T00:00:00Z'
+        };
+        vetoState.taskResults['T-02'] = {
+          taskId: 'T-02',
+          status: 'completed',
+          branch: 'sdlc/run-1/T-02',
+          mergedSha: 'merge-sha-2',
+          recordedAt: '2026-08-01T01:00:00Z'
+        };
+        stateLoad.mockReturnValue(vetoState);
+      });
+
+      it('a [veto] tag reverts the phase merges through a PR, redeploys the sandbox, and records the Chronicle artifact', async () => {
+        itemTags.mockReturnValue(['follow-up', 'veto']);
+
+        const result = await handler.checkVeto(VETO_INPUT);
+
+        expect(result).toEqual({
+          veto: true,
+          reverted: true,
+          prUrl: 'https://github.com/org/repo/pull/99'
+        });
+        // Most recent merge reverted first.
+        expect(revertMerge.mock.calls.map(call => call[1])).toEqual([
+          'merge-sha-2',
+          'merge-sha-1'
+        ]);
+        expect(gitPush).toHaveBeenCalledWith(
+          expect.stringContaining('_revert'),
+          'sdlc/run-1/revert'
+        );
+        expect(prCreate).toHaveBeenCalled();
+        // Sandbox redeployed at the reverted SHA — through the same
+        // sandbox-only deploy service, no environment parameter exists.
+        const revertDeploys = deploy.mock.calls.filter(([arg]) =>
+          arg.worktreePath.includes('_revert')
+        );
+        expect(revertDeploys).toHaveLength(1);
+        expect(Object.keys(revertDeploys[0][0]).sort()).toEqual([
+          'previous',
+          'sha',
+          'worktreePath'
+        ]);
+        expect(recordRevert).toHaveBeenCalledWith(
+          expect.objectContaining({
+            revertedShas: ['merge-sha-1', 'merge-sha-2'],
+            prUrl: 'https://github.com/org/repo/pull/99'
+          })
+        );
+
+        // Idempotent: a second check replays the cached revert.
+        const second = await handler.checkVeto(VETO_INPUT);
+        expect(second.reverted).toBe(true);
+        expect(revertMerge).toHaveBeenCalledTimes(2); // no new reverts
+      });
+
+      it('absence of a veto tag changes nothing', async () => {
+        itemTags.mockReturnValue(['follow-up']);
+
+        const result = await handler.checkVeto(VETO_INPUT);
+
+        expect(result).toEqual({ veto: false, reverted: false });
+        expect(revertMerge).not.toHaveBeenCalled();
+        expect(deploy).not.toHaveBeenCalled();
+        expect(recordRevert).not.toHaveBeenCalled();
+      });
+
+      it('does nothing when the run has no merges', async () => {
+        stateLoad.mockReturnValue(makeState());
+
+        const result = await handler.checkVeto(VETO_INPUT);
+
+        expect(result).toEqual({ veto: false, reverted: false });
+        expect(itemTags).not.toHaveBeenCalled();
+      });
+
+      it('rejects check-veto for an unknown run', async () => {
+        stateLoad.mockReturnValue(null);
+
+        await expect(handler.checkVeto(VETO_INPUT)).rejects.toThrow(
+          expect.objectContaining({ code: 'RUN_NOT_FOUND' })
+        );
+      });
+    });
+  });
+
   it('skips digest and chronicle steps without --chronicle-repo', async () => {
     await handler.runTask(INPUT);
 
@@ -569,8 +1010,10 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
     expect(posted.taskId).toBe('T-01');
     expect(posted.phaseVerdict).toBe(phaseVerdict);
     expect(posted.verdicts).toHaveLength(6); // all gate verdicts for the task
+    // Enforcing mode adds the merge-blocked escalation for the red phase.
     expect(posted.exceptions).toEqual([
-      expect.objectContaining({ trigger: 'envelope-breach' })
+      expect.objectContaining({ trigger: 'envelope-breach' }),
+      expect.objectContaining({ trigger: 'merge-blocked' })
     ]);
   });
 
@@ -658,12 +1101,14 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
       .map(call => String(call[0]))
       .join('\n');
     expect(output).toContain('Run run-1');
-    expect(output).toContain('T-01 completed on sdlc/run-1/T-01');
+    // P3 T-06 categories: escalated takes precedence over completed-unmerged.
+    expect(output).toContain('T-01 halted-escalated');
     expect(output).toContain('T-01 implementation');
     expect(output).toContain('T-01 envelope → pass');
     expect(output).toContain('reviewer-disagreement');
     expect(output).toContain('head-sha healthy');
     expect(output).toContain('merged: abc123');
+    expect(output).toContain('spend:');
   });
 
   it('shows placeholders for a fresh run and throws for an unknown one', () => {
@@ -672,7 +1117,8 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
     const output = (console.log as jest.Mock).mock.calls
       .map(call => String(call[0]))
       .join('\n');
-    expect(output).toContain('(none attempted)');
+    // Spec tasks surface as not-started when nothing has been attempted.
+    expect(output).toContain('T-01 not-started');
     expect(output).toContain('(none completed)');
     expect(output).toContain('(none recorded)');
 
@@ -680,6 +1126,75 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
     expect(() =>
       handler.showStatus({ runsDir: '/runs', runId: 'run-x' })
     ).toThrow(WorkflowError);
+  });
+
+  it('status falls back to recorded results when the spec file is gone', () => {
+    specRead.mockImplementation(() => {
+      throw new Error('ENOENT');
+    });
+    const loaded = makeState();
+    loaded.taskResults['T-01'] = {
+      taskId: 'T-01',
+      status: 'completed',
+      mergedSha: 'm1',
+      recordedAt: 'x'
+    };
+    stateLoad.mockReturnValue(loaded);
+
+    handler.showStatus({ runsDir: '/runs', runId: 'run-1' });
+    const output = (console.log as jest.Mock).mock.calls
+      .map(call => String(call[0]))
+      .join('\n');
+    expect(output).toContain('T-01 merged');
+  });
+
+  it('status categorizes a mixed run into merged / escalated / blocked-by-dependency (P3 T-06)', () => {
+    const loaded = makeState();
+    loaded.specPath = '/specs/spec.md';
+    loaded.taskResults['T-01'] = {
+      taskId: 'T-01',
+      status: 'completed',
+      mergedSha: 'merged-1',
+      recordedAt: 'x'
+    };
+    loaded.taskResults['T-02'] = {
+      taskId: 'T-02',
+      status: 'completed',
+      recordedAt: 'x'
+    };
+    loaded.exceptions.push({
+      trigger: 'envelope-breach',
+      taskId: 'T-02',
+      context: ['outside'],
+      recordedAt: 'x'
+    });
+    specRead.mockReturnValue({
+      ...SPEC,
+      tasks: [
+        SPEC.tasks[0],
+        {
+          ...SPEC.tasks[0],
+          id: 'T-02',
+          title: 'second',
+          dependsOn: [] as string[]
+        },
+        {
+          ...SPEC.tasks[0],
+          id: 'T-03',
+          title: 'blocked',
+          dependsOn: ['T-02']
+        }
+      ]
+    });
+    stateLoad.mockReturnValue(loaded);
+
+    handler.showStatus({ runsDir: '/runs', runId: 'run-1' });
+    const output = (console.log as jest.Mock).mock.calls
+      .map(call => String(call[0]))
+      .join('\n');
+    expect(output).toContain('T-01 merged');
+    expect(output).toContain('T-02 halted-escalated');
+    expect(output).toContain('T-03 blocked-by-dependency');
   });
 
   it('dispatches record-merge to the chronicle service, task ID included', async () => {

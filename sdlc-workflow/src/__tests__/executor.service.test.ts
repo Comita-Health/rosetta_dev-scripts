@@ -69,7 +69,13 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
       addWorktree: jest.fn(),
       diffStat: jest.fn(),
       diffText: jest.fn(),
-      push: jest.fn()
+      push: jest.fn(),
+      fetch: jest.fn(),
+      resolveSha: jest.fn(),
+      defaultBranch: jest.fn(),
+      revertMerge: jest.fn(),
+      stageAll: jest.fn(),
+      commit: jest.fn()
     };
     agentRun = jest.fn().mockResolvedValue({ ok: true, output: 'done' });
     stateMock = {
@@ -81,13 +87,24 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
         .mockImplementation((_d, state: RunState, result) => {
           state.taskResults[result.taskId] = result;
         }),
-      recordExceptions: jest.fn(),
+      recordExceptions: jest
+        .fn()
+        .mockImplementation((_d, state: RunState, entries) => {
+          state.exceptions.push(...entries);
+        }),
       recordSandbox: jest.fn(),
       recordCriteria: jest.fn(),
       recordStep: jest.fn(),
       recordMergedSha: jest.fn(),
       recordTaskMerged: jest.fn(),
-      recordTaskPrUrl: jest.fn()
+      recordTaskPrUrl: jest.fn(),
+      recordCiFixAttempt: jest.fn(),
+      recordTokenSpend: jest
+        .fn()
+        .mockImplementation((_d, state: RunState, delta: number) => {
+          state.tokenSpendK = (state.tokenSpendK ?? 0) + delta;
+          return state.tokenSpendK;
+        })
     };
 
     const container = new Container();
@@ -181,6 +198,7 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
       mergedSha: 'merge-sha',
       recordedAt: 'x'
     };
+    state.mergedSha = 'merge-sha';
     state.steps[stepKey('implementation', 'T-01', digest)] = {
       name: 'implementation',
       taskId: 'T-01',
@@ -199,6 +217,64 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
 
     expect(pool.outcomes.map(o => o.task.id)).toEqual(['T-02']);
     expect(agentRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('branches a dependent from the post-merge tip and digests against that tip (#42)', async () => {
+    const state = baseState();
+    const t01 = makeSpec().tasks[0];
+    const t02 = makeSpec().tasks[1];
+    const t01Digest = implementationDigest(t01, 'base-sha');
+    state.taskResults['T-01'] = {
+      taskId: 'T-01',
+      status: 'completed',
+      branch: 'sdlc/run-1/T-01',
+      inputsDigest: t01Digest,
+      mergedSha: 'integration-tip',
+      recordedAt: 'x'
+    };
+    state.mergedSha = 'integration-tip';
+    state.steps[stepKey('implementation', 'T-01', t01Digest)] = {
+      name: 'implementation',
+      taskId: 'T-01',
+      inputsDigest: t01Digest,
+      completedAt: 'x'
+    };
+    state.steps[stepKey('phase', 'T-01', 'p')] = {
+      name: 'phase',
+      taskId: 'T-01',
+      inputsDigest: 'p',
+      completedAt: 'x'
+    };
+    stateMock.load.mockReturnValue(state);
+    // Worktree head advances past the tip once the agent commits.
+    gitMock.headSha.mockImplementation((repoPath: string) =>
+      repoPath.includes('worktrees') ? 't02-commit' : 'base-sha'
+    );
+
+    const pool = await executor.executeReady(INPUT);
+
+    const expectedTipDigest = implementationDigest(t02, 'integration-tip');
+    const frozenDigest = implementationDigest(t02, 'base-sha');
+    expect(expectedTipDigest).not.toBe(frozenDigest);
+    expect(pool.outcomes[0].task.id).toBe('T-02');
+    expect(pool.outcomes[0].baseSha).toBe('integration-tip');
+    expect(pool.outcomes[0].implDigest).toBe(expectedTipDigest);
+    expect(gitMock.addWorktree).toHaveBeenCalledWith(
+      '/repo',
+      path.join('/runs', 'run-1', 'worktrees', 'T-02'),
+      'sdlc/run-1/T-02',
+      'integration-tip'
+    );
+    expect(stateMock.recordStep).toHaveBeenCalledWith(
+      '/runs',
+      expect.anything(),
+      stepKey('implementation', 'T-02', expectedTipDigest),
+      expect.objectContaining({
+        name: 'implementation',
+        taskId: 'T-02',
+        inputsDigest: expectedTipDigest
+      })
+    );
   });
 
   it('reports no-ready-task without side effects when none qualify', async () => {
@@ -267,22 +343,82 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
     expect(pool.outcomes[0].detail).toBe('spawn refused');
   });
 
-  it('records a failure when the agent exits ok without committing', async () => {
-    // Worktree head still equals the base SHA: no commit was made.
-    gitMock.headSha.mockReturnValue('base-sha');
+  it('engine-commits a dirty worktree when the agent exits without committing (#41)', async () => {
+    // Tip unchanged but dirty: husky typically blocked `sdlc/*` commits.
+    let committed = false;
+    gitMock.headSha.mockImplementation((repoPath: string) => {
+      if (!repoPath.includes('worktrees')) return 'base-sha';
+      return committed ? 'engine-sha' : 'base-sha';
+    });
+    gitMock.commit.mockImplementation(() => {
+      committed = true;
+    });
     gitMock.status.mockReturnValue(' M docs/live-validation.md\n');
+
+    const pool = await executor.executeReady(INPUT);
+
+    expect(pool.outcomes[0].kind).toBe('completed');
+    expect(pool.outcomes[0].detail).toContain(
+      'engine committed dirty worktree'
+    );
+    expect(gitMock.stageAll).toHaveBeenCalled();
+    expect(gitMock.commit).toHaveBeenCalledWith(
+      expect.stringContaining('worktrees/T-01'),
+      expect.stringMatching(/^feat\(T-01\):/),
+      { noVerify: true, signOff: true }
+    );
+    expect(stateMock.recordTaskResult).toHaveBeenCalledWith(
+      '/runs',
+      expect.anything(),
+      expect.objectContaining({ taskId: 'T-01', status: 'completed' })
+    );
+  });
+
+  it('records a failure when the agent exits with a clean tip and no commit', async () => {
+    gitMock.headSha.mockReturnValue('base-sha');
+    gitMock.status.mockReturnValue('');
 
     const pool = await executor.executeReady(INPUT);
 
     expect(pool.outcomes[0].kind).toBe('failed');
     expect(pool.outcomes[0].detail).toContain('produced no commit');
-    expect(pool.outcomes[0].detail).toContain('docs/live-validation.md');
-    expect(stateMock.recordTaskResult).toHaveBeenCalledWith(
-      '/runs',
-      expect.anything(),
-      expect.objectContaining({ taskId: 'T-01', status: 'failed' })
-    );
+    expect(gitMock.commit).not.toHaveBeenCalled();
     expect(stateMock.recordStep).not.toHaveBeenCalled();
+  });
+
+  it('records a failure when engine salvage-commit throws (#41)', async () => {
+    gitMock.headSha.mockReturnValue('base-sha');
+    gitMock.status.mockReturnValue(' M src/a.ts\n');
+    gitMock.commit.mockImplementation(() => {
+      throw new Error('commit refused');
+    });
+
+    const pool = await executor.executeReady(INPUT);
+
+    expect(pool.outcomes[0].kind).toBe('failed');
+    expect(pool.outcomes[0].detail).toContain('engine commit failed');
+    expect(pool.outcomes[0].detail).toContain('src/a.ts');
+  });
+
+  it('salvages a dirty tip after a non-ok agent exit (#41)', async () => {
+    agentRun.mockResolvedValue({ ok: false, output: 'hook rejected commit' });
+    let committed = false;
+    gitMock.headSha.mockImplementation((repoPath: string) => {
+      if (!repoPath.includes('worktrees')) return 'base-sha';
+      return committed ? 'engine-sha' : 'base-sha';
+    });
+    gitMock.commit.mockImplementation(() => {
+      committed = true;
+    });
+    gitMock.status.mockReturnValue('A  src/new.ts\n');
+
+    const pool = await executor.executeReady(INPUT);
+
+    expect(pool.outcomes[0].kind).toBe('completed');
+    expect(pool.outcomes[0].detail).toContain('hook rejected commit');
+    expect(pool.outcomes[0].detail).toContain(
+      'engine committed dirty worktree'
+    );
   });
 
   describe('P3 T-01 parallel pool', () => {
@@ -493,6 +629,42 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
 
       expect(pool.outcomes[0].task.id).toBe('T-01');
       expect(agentRun).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('P3 T-06 budget enforcement', () => {
+    it('halts new agent dispatches when spend exceeds budgetK and records the escalation', async () => {
+      const state = baseState();
+      state.tokenSpendK = 250; // envelope default budgetK is 200
+      stateMock.load.mockReturnValue(state);
+
+      const pool = await executor.executeReady(INPUT);
+
+      expect(agentRun).not.toHaveBeenCalled();
+      expect(pool.outcomes[0]).toEqual(
+        expect.objectContaining({
+          kind: 'failed',
+          detail: expect.stringContaining('budget exhausted')
+        })
+      );
+      expect(state.exceptions).toContainEqual(
+        expect.objectContaining({
+          trigger: 'budget-exhaustion',
+          taskId: 'T-01'
+        })
+      );
+      // Worktree creation (non-agent) still happened before the dispatch check.
+      expect(gitMock.addWorktree).toHaveBeenCalled();
+    });
+
+    it('meters token spend after each agent dispatch', async () => {
+      await executor.executeReady(INPUT);
+
+      expect(stateMock.recordTokenSpend).toHaveBeenCalledWith(
+        '/runs',
+        expect.anything(),
+        5
+      );
     });
   });
 });

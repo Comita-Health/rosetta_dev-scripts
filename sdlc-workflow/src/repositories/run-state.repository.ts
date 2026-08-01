@@ -59,6 +59,16 @@ export interface IRunStateRepository {
     taskId: string,
     prUrl: string
   ): void;
+  /**
+   * P3 T-03: increment the task's CI fix-attempt counter and persist.
+   * Returns the new count. Persisted so resume never resets the budget.
+   */
+  recordCiFixAttempt(runsDir: string, state: RunState, taskId: string): number;
+  /**
+   * P3 T-06: add `deltaK` (thousands of tokens) to the run's cumulative
+   * spend and persist. Returns the new total.
+   */
+  recordTokenSpend(runsDir: string, state: RunState, deltaK: number): number;
 }
 
 const stateFile = (runsDir: string, runId: string): string =>
@@ -163,5 +173,18 @@ export class RunStateRepository implements IRunStateRepository {
     if (result === undefined) return;
     result.prUrl = prUrl;
     this.save(runsDir, state);
+  }
+
+  recordCiFixAttempt(runsDir: string, state: RunState, taskId: string): number {
+    const next = (state.ciFixAttempts[taskId] ?? 0) + 1;
+    state.ciFixAttempts[taskId] = next;
+    this.save(runsDir, state);
+    return next;
+  }
+
+  recordTokenSpend(runsDir: string, state: RunState, deltaK: number): number {
+    state.tokenSpendK = (state.tokenSpendK ?? 0) + deltaK;
+    this.save(runsDir, state);
+    return state.tokenSpendK;
   }
 }

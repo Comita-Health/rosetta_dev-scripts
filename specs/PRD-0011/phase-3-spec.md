@@ -2,7 +2,7 @@
 id: SPEC-PRD-0011-P3
 prd: PRD-0011
 phase: 3
-status: Approved # Draft | Approved | Done | Superseded
+status: Done # Draft | Approved | Done | Superseded
 date: 2026-08-01
 owner: Russ Watson
 envelope:
@@ -58,9 +58,9 @@ Poll the pushed branch's check runs until terminal (bounded timeout). On failure
 
 ### Acceptance criteria
 
-- [ ] test: a failing check dispatches the fix agent with the failing output in its prompt, increments ciFixAttempts, and re-evaluates after the fix is pushed
-- [ ] test: the third failing attempt stops the cycle, records the escalation, and no fourth agent dispatch occurs
-- [ ] test: a green check run within the attempt budget yields a pass CI verdict carrying the check-run evidence
+- [x] test: a failing check dispatches the fix agent with the failing output in its prompt, increments ciFixAttempts, and re-evaluates after the fix is pushed
+- [x] test: the third failing attempt stops the cycle, records the escalation, and no fourth agent dispatch occurs
+- [x] test: a green check run within the attempt budget yields a pass CI verdict carrying the check-run evidence
 
 ## Task T-04: Gate enforcement and auto-merge on green
 
@@ -72,10 +72,20 @@ Flip the aggregate phase gate from shadow to enforcing: when envelope, verificat
 
 ### Acceptance criteria
 
-- [ ] test: with all four gates green the task PR is merged automatically and the merged SHA is recorded in the run state and Chronicle merge artifact
-- [ ] test: each single red gate (envelope breach, verification fail, reviewer disagree, CI fail) blocks the merge, records the escalation, and no merge call is issued — asserted for all four gates
-- [ ] test: with the shadow flag set, verdicts are recorded but no merge call is ever issued regardless of gate outcomes
-- [ ] agent: on a live run, a task with all gates green auto-merges its PR and the recorded merged SHA matches the remote merge commit
+- [x] test: with all four gates green the task PR is merged automatically and the merged SHA is recorded in the run state and Chronicle merge artifact
+- [x] test: each single red gate (envelope breach, verification fail, reviewer disagree, CI fail) blocks the merge, records the escalation, and no merge call is issued — asserted for all four gates
+- [x] test: with the shadow flag set, verdicts are recorded but no merge call is ever issued regardless of gate outcomes
+- [x] agent: on a live run, a task with all gates green auto-merges its PR and the recorded merged SHA matches the remote merge commit
+
+> **Live evidence (2026-08-01, run `p3-live-val`):** the enforcing run drove
+> SPEC-LIVE-VALIDATION-P3 T-01 end to end — implementation, PR #32, and all
+> four gates green (envelope, reviewer, verification, CI: 2 check runs) —
+> then merged the PR automatically. The mergedSha recorded in run state and
+> the `sdlc.merge.v1` artifact (`7bf2fdfb9712ab06306b171e7bda12549ddf33ae`,
+> approvedBy `machine-gates`) matches the remote merge commit reported by
+> `gh pr view 32 --json mergeCommit` exactly. The run also survived a
+> mid-pipeline kill: on resume the implementation, PR, envelope, reviewer,
+> and sandbox steps were all reused from the step cache.
 
 ## Task T-05: Post-merge sandbox deploy, digest, and veto-triggered revert
 
@@ -87,9 +97,9 @@ When every task of a spec phase has merged, deploy the merged default branch to 
 
 ### Acceptance criteria
 
-- [ ] test: after the last task of a phase merges, the merged branch deploys to the sandbox exactly once (SHA-idempotent on resume) and the digest posts to the queue with links to the merged SHAs and verdict evidence
-- [ ] test: a veto tag detected on the digest item produces a revert commit covering the phase's merges, a redeploy at the reverted SHA, and a Chronicle revert artifact; absence of a veto changes nothing
-- [ ] test: no deploy, revert, or any other code path in this task can target an environment other than sandbox
+- [x] test: after the last task of a phase merges, the merged branch deploys to the sandbox exactly once (SHA-idempotent on resume) and the digest posts to the queue with links to the merged SHAs and verdict evidence
+- [x] test: a veto tag detected on the digest item produces a revert commit covering the phase's merges, a redeploy at the reverted SHA, and a Chronicle revert artifact; absence of a veto changes nothing
+- [x] test: no deploy, revert, or any other code path in this task can target an environment other than sandbox
 
 ## Task T-06: Escalation surface, budget enforcement, and partial-failure reporting
 
@@ -101,7 +111,16 @@ Escalations stop being ledger entries and start interrupting: each escalation tr
 
 ### Acceptance criteria
 
-- [ ] test: each of the four escalation triggers posts an action-required queue item naming the task, trigger, and evidence refs, and halts only the affected task
-- [ ] test: cumulative token spend exceeding budgetK halts new agent dispatches across the pool, records the budget-exhaustion escalation, and in-flight non-agent steps complete
-- [ ] test: a run ending with a mix of merged, escalated, and dependency-blocked tasks reports each task in the correct category via the status interface
-- [ ] agent: an operator agent reviews a live partially-failed run via the status interface and confirms the escalated task's queue item contains everything needed to triage without consulting internal state files
+- [x] test: each of the four escalation triggers posts an action-required queue item naming the task, trigger, and evidence refs, and halts only the affected task
+- [x] test: cumulative token spend exceeding budgetK halts new agent dispatches across the pool, records the budget-exhaustion escalation, and in-flight non-agent steps complete
+- [x] test: a run ending with a mix of merged, escalated, and dependency-blocked tasks reports each task in the correct category via the status interface
+- [x] agent: an operator agent reviews a live partially-failed run via the status interface and confirms the escalated task's queue item contains everything needed to triage without consulting internal state files
+
+> **Live evidence (2026-08-01, run `p3-live-t06`):** a seeded partial-failure
+> run (T-01 merged, T-02 halted on reviewer-disagreement + merge-blocked,
+> T-03 blocked by dependency) was reviewed by an independent operator agent
+> using only `sdlc-workflow status --run-id p3-live-t06` and the personal
+> queue. The status summary placed each task in the correct category, and
+> the operator confirmed the action-required queue items named the task,
+> the triggers, and the evidence refs — everything needed to triage without
+> opening any internal state file. Operator VERDICT: PASS.

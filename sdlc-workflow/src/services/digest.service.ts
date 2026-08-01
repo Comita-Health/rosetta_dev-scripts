@@ -15,6 +15,11 @@ export interface DigestInput {
   verdicts: GateVerdict[];
   /** Exception-ledger entries derived for the task. */
   exceptions: ExceptionEntry[];
+  /**
+   * P3 T-05: the phase-boundary digest links every merged task's merge
+   * commit so the veto decision can be made from the item alone.
+   */
+  merges?: Array<{ taskId: string; mergedSha: string }>;
 }
 
 /** The digest document posted at a phase boundary (T-07). */
@@ -32,6 +37,7 @@ export interface SdlcDigest {
     evidenceLinks: string[];
   }>;
   exceptions: ExceptionEntry[];
+  merges?: Array<{ taskId: string; mergedSha: string }>;
   postedAt: string;
 }
 
@@ -87,6 +93,7 @@ export class DigestService implements IDigestService {
         )
       })),
       exceptions: input.exceptions,
+      ...(input.merges !== undefined ? { merges: input.merges } : {}),
       postedAt: new Date().toISOString()
     };
 

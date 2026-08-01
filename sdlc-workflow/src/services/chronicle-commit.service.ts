@@ -32,6 +32,8 @@ export interface RecordMergeInput {
    * which is what makes its dependents eligible in the pool.
    */
   taskId?: string;
+  /** P3 T-04: who authorized the merge. Defaults to 'human'. */
+  approvedBy?: 'human' | 'machine-gates';
 }
 
 /**
@@ -43,9 +45,23 @@ export interface RecordMergeInput {
  * with provenance trailers) and a clean tree is a no-op, so resume never
  * duplicates ledger writes.
  */
+export interface RecordRevertInput {
+  chronicleRepo: string;
+  runId: string;
+  specId: string;
+  /** Merge commits of the phase that the revert covers. */
+  revertedShas: string[];
+  /** Head of the revert branch. */
+  revertSha: string;
+  /** PR carrying the revert to the default branch. */
+  prUrl: string;
+}
+
 export interface IChronicleCommitService {
   record(input: ChronicleRecordInput): Promise<ChronicleRecordOutcome>;
   recordMerge(input: RecordMergeInput): Promise<string>;
+  /** P3 T-05: record a veto-triggered revert (sdlc.revert.v1). */
+  recordRevert(input: RecordRevertInput): Promise<string>;
 }
 
 @injectable()
@@ -161,7 +177,7 @@ export class ChronicleCommitService implements IChronicleCommitService {
         recordedAt: new Date().toISOString(),
         payload: {
           mergedSha: input.mergedSha,
-          approvedBy: 'human',
+          approvedBy: input.approvedBy ?? 'human',
           ...(input.taskId !== undefined ? { taskId: input.taskId } : {})
         }
       }
@@ -170,6 +186,32 @@ export class ChronicleCommitService implements IChronicleCommitService {
       input.chronicleRepo,
       'sdlc',
       `${input.runId} merged at ${input.mergedSha.slice(0, 12)}`
+    );
+    return path;
+  }
+
+  async recordRevert(input: RecordRevertInput): Promise<string> {
+    const path = this._artifactRepo.writeArtifact(
+      input.chronicleRepo,
+      input.runId,
+      'revert',
+      {
+        schema: 'sdlc.revert.v1',
+        runId: input.runId,
+        specId: input.specId,
+        recordedAt: new Date().toISOString(),
+        payload: {
+          revertedShas: input.revertedShas,
+          revertSha: input.revertSha,
+          prUrl: input.prUrl,
+          trigger: 'queue-veto'
+        }
+      }
+    );
+    this._artifactRepo.commit(
+      input.chronicleRepo,
+      'sdlc',
+      `${input.runId} veto revert at ${input.revertSha.slice(0, 12)}`
     );
     return path;
   }

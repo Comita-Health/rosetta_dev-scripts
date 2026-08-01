@@ -6,8 +6,10 @@ import type { IRunStateRepository } from '../repositories/run-state.repository';
 import type { ISpecDocRepository } from '../repositories/spec-doc.repository';
 import { WORKFLOW_TOKENS } from '../tokens';
 import { RunState, SpecDocument, SpecTask, stepKey } from '../types';
+import { agentSpendK } from '../utils/agent-spend';
 import { inputsDigest } from '../utils/digest';
 import { buildImplementationPrompt } from '../utils/implementation-prompt';
+import { taskIntegrationTip } from '../utils/task-base';
 
 export interface ExecutorInput {
   specPath: string;
@@ -16,9 +18,21 @@ export interface ExecutorInput {
   runsDir: string;
 }
 
+/** Optional progress sink for native heartbeat (#39) — not a Service call. */
+export interface ProgressSink {
+  set(ctx: {
+    taskId: string;
+    step: string;
+    worktreePath?: string;
+    lastLine?: string;
+  }): void;
+}
+
 export interface PoolInput extends ExecutorInput {
   /** Upper bound on concurrently running implementation agents. */
   maxParallel: number;
+  /** Called as the pool enters implementation steps (heartbeat #39). */
+  progress?: ProgressSink;
 }
 
 /** Per-task outcome of one pool wave. */
@@ -29,8 +43,13 @@ export interface ExecutorOutcome {
   detail?: string;
   /** True when the implementation step was reused from the T-09 cache. */
   cached: boolean;
-  /** Digest of {task content, baseSha} — root of this task's step chain. */
+  /** Digest of {task content, integration tip} — root of this task's step chain. */
   implDigest: string;
+  /**
+   * Tip the worktree was branched from and envelope/reviewer must diff
+   * against (#42 / F1) — never a cumulative frozen-base mega-diff.
+   */
+  baseSha: string;
 }
 
 export interface PoolOutcome {
@@ -59,7 +78,7 @@ export interface IExecutorService {
 export const taskBranch = (runId: string, taskId: string): string =>
   `sdlc/${runId}/${taskId}`;
 
-/** Digest rooting a task's step chain: task content + the base commit. */
+/** Digest rooting a task's step chain: task content + the integration tip. */
 export const implementationDigest = (task: SpecTask, baseSha: string): string =>
   inputsDigest({ task, baseSha });
 
@@ -76,12 +95,13 @@ const selectReadyTasks = (
   spec: SpecDocument,
   state: RunState,
   maxParallel: number
-): { task: SpecTask; implDigest: string }[] => {
-  const ready: { task: SpecTask; implDigest: string }[] = [];
+): { task: SpecTask; implDigest: string; baseSha: string }[] => {
+  const ready: { task: SpecTask; implDigest: string; baseSha: string }[] = [];
   for (const task of spec.tasks) {
     if (ready.length >= maxParallel) break;
     if (!task.dependsOn.every(dep => isMerged(state, dep))) continue;
-    const digest = implementationDigest(task, state.baseSha);
+    const tip = taskIntegrationTip(state, task);
+    const digest = implementationDigest(task, tip);
     const result = state.taskResults[task.id];
     if (result !== undefined) {
       // A digest-less result predates the step graph: keep the pre-T-09
@@ -98,7 +118,7 @@ const selectReadyTasks = (
         if (hasStep(state, 'phase', task.id)) continue;
       }
     }
-    ready.push({ task, implDigest: digest });
+    ready.push({ task, implDigest: digest, baseSha: tip });
   }
   return ready;
 };
@@ -147,10 +167,13 @@ export class ExecutorService implements IExecutorService {
     }
 
     // Worktree creation mutates the shared .git directory — do it
-    // sequentially; only the agent runs themselves fan out.
-    const wave = selected.map(({ task, implDigest }) => ({
+    // sequentially; only the agent runs themselves fan out. Tip is the
+    // post-merge integration SHA when deps are merged (#42), not the
+    // frozen run baseSha.
+    const wave = selected.map(({ task, implDigest, baseSha }) => ({
       task,
       implDigest,
+      baseSha,
       branch: taskBranch(input.runId, task.id),
       worktreePath: path.join(input.runsDir, input.runId, 'worktrees', task.id)
     }));
@@ -160,7 +183,7 @@ export class ExecutorService implements IExecutorService {
           input.repoPath,
           entry.worktreePath,
           entry.branch,
-          state.baseSha
+          entry.baseSha
         );
     }
 
@@ -189,11 +212,12 @@ export class ExecutorService implements IExecutorService {
     entry: {
       task: SpecTask;
       implDigest: string;
+      baseSha: string;
       branch: string;
       worktreePath: string;
     }
   ): Promise<ExecutorOutcome> {
-    const { task, implDigest, branch, worktreePath } = entry;
+    const { task, implDigest, baseSha, branch, worktreePath } = entry;
 
     if (this.isImplementationCached(state, task.id, implDigest)) {
       // T-09: implementation cached — reuse the branch, skip the agent.
@@ -203,33 +227,82 @@ export class ExecutorService implements IExecutorService {
         branch: state.taskResults[task.id].branch ?? branch,
         detail: 'implementation reused from step cache',
         cached: true,
-        implDigest
+        implDigest,
+        baseSha
       };
     }
+
+    // P3 T-06: budget exhaustion halts new agent dispatches pool-wide.
+    // In-flight non-agent steps (worktree creation above, gates later)
+    // still complete — only the agent call is skipped.
+    if (state.tokenSpendK > spec.envelope.budgetK) {
+      const detail = `budget exhausted: spend ${state.tokenSpendK}k exceeds budget ${spec.envelope.budgetK}k`;
+      this._runStateRepo.recordTaskResult(input.runsDir, state, {
+        taskId: task.id,
+        status: 'failed',
+        branch,
+        worktreePath,
+        inputsDigest: implDigest,
+        detail,
+        recordedAt: new Date().toISOString()
+      });
+      if (
+        !state.exceptions.some(
+          entry =>
+            entry.trigger === 'budget-exhaustion' && entry.taskId === task.id
+        )
+      ) {
+        this._runStateRepo.recordExceptions(input.runsDir, state, [
+          {
+            trigger: 'budget-exhaustion',
+            taskId: task.id,
+            context: [detail],
+            recordedAt: new Date().toISOString()
+          }
+        ]);
+      }
+      return {
+        kind: 'failed',
+        task,
+        branch,
+        detail,
+        cached: false,
+        implDigest,
+        baseSha
+      };
+    }
+
+    input.progress?.set({
+      taskId: task.id,
+      step: 'implementation',
+      worktreePath,
+      lastLine: 'dispatching implementation agent'
+    });
 
     const prompt = buildImplementationPrompt(spec, task);
     let ok = false;
     let detail = '';
     try {
       const result = await this._agentRepo.run(worktreePath, prompt);
+      // Meter the dispatch whether it succeeded or failed — the tokens
+      // were spent either way.
+      this._runStateRepo.recordTokenSpend(input.runsDir, state, agentSpendK());
       ok = result.ok;
       detail = result.ok ? '' : result.output;
     } catch (err) {
+      this._runStateRepo.recordTokenSpend(input.runsDir, state, agentSpendK());
       detail = err instanceof Error ? err.message : String(err);
     }
 
-    if (ok && this._gitRepo.headSha(worktreePath) === state.baseSha) {
-      // Live-run finding (live-val-1): an agent can exit 0 having staged
-      // work without committing, leaving an empty diff for every gate.
-      // No commit means no implementation — record an honest failure.
-      ok = false;
-      const uncommitted = this._gitRepo.status(worktreePath).trim();
-      detail =
-        'implementation agent produced no commit' +
-        (uncommitted.length > 0
-          ? `; uncommitted changes left in worktree:\n${uncommitted}`
-          : '');
-    }
+    const commitOutcome = this.ensureEngineCommit(
+      worktreePath,
+      baseSha,
+      task,
+      ok,
+      detail
+    );
+    ok = commitOutcome.ok;
+    detail = commitOutcome.detail;
 
     // Mutations of the shared state object are synchronous, so concurrent
     // task completions serialize on the event loop — each recordTaskResult
@@ -263,8 +336,66 @@ export class ExecutorService implements IExecutorService {
       branch,
       detail: detail.length > 0 ? detail : undefined,
       cached: false,
-      implDigest
+      implDigest,
+      baseSha
     };
+  }
+
+  /**
+   * #41: when the agent leaves a dirty worktree on the tip (common when
+   * husky rejects `sdlc/*` branches), the engine owns the commit with
+   * `--no-verify -s` so gates can proceed. A clean tip with no commit is
+   * still an honest failure.
+   */
+  private ensureEngineCommit(
+    worktreePath: string,
+    tipSha: string,
+    task: SpecTask,
+    agentOk: boolean,
+    agentDetail: string
+  ): { ok: boolean; detail: string } {
+    const head = this._gitRepo.headSha(worktreePath);
+    if (head !== tipSha) {
+      return { ok: agentOk, detail: agentDetail };
+    }
+
+    const uncommitted = this._gitRepo.status(worktreePath).trim();
+    if (uncommitted.length === 0) {
+      return {
+        ok: false,
+        detail:
+          agentDetail.length > 0
+            ? agentDetail
+            : 'implementation agent produced no commit'
+      };
+    }
+
+    try {
+      this._gitRepo.stageAll(worktreePath);
+      this._gitRepo.commit(worktreePath, `feat(${task.id}): ${task.title}`, {
+        noVerify: true,
+        signOff: true
+      });
+      const note = 'engine committed dirty worktree (--no-verify)';
+      return {
+        ok: true,
+        detail:
+          agentDetail.length > 0 && agentOk === false
+            ? `${agentDetail}; ${note}`
+            : note
+      };
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      return {
+        ok: false,
+        detail:
+          'implementation agent produced no commit; engine commit failed: ' +
+          reason.slice(0, 300) +
+          (uncommitted.length > 0
+            ? `\nuncommitted changes:\n${uncommitted}`
+            : '')
+      };
+    }
   }
 
   private initState(input: ExecutorInput, spec: SpecDocument): RunState {

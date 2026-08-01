@@ -135,7 +135,9 @@ export type ExceptionTrigger =
   | 'reviewer-disagreement'
   | 'ci-fix-attempts-exhausted'
   | 'envelope-breach'
-  | 'budget-exhaustion';
+  | 'budget-exhaustion'
+  /** P3 T-04: a red phase gate blocked an enforced merge. */
+  | 'merge-blocked';
 
 /**
  * An exception-ledger entry (SPEC-PRD-0011-P2 T-06): a would-escalate
@@ -242,7 +244,8 @@ export type ArtifactSchema =
   | 'sdlc.verdict.v1'
   | 'sdlc.exceptions.v1'
   | 'sdlc.digest.v1'
-  | 'sdlc.merge.v1';
+  | 'sdlc.merge.v1'
+  | 'sdlc.revert.v1';
 
 export interface ChronicleArtifact {
   schema: ArtifactSchema;

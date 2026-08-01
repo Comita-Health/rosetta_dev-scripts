@@ -109,6 +109,14 @@ import {
   PrLifecycleService,
   IPrLifecycleService
 } from './services/pr-lifecycle.service';
+import {
+  EscalationService,
+  IEscalationService
+} from './services/escalation.service';
+import {
+  HeartbeatService,
+  IHeartbeatService
+} from './services/heartbeat.service';
 import { WORKFLOW_TOKENS } from './tokens';
 import { WorkflowError } from './types';
 import { resolveInferenceBackend } from './utils/backend-select';
@@ -206,6 +214,12 @@ container
 container
   .bind<IPrLifecycleService>(WORKFLOW_TOKENS.PrLifecycleService)
   .to(PrLifecycleService);
+container
+  .bind<IEscalationService>(WORKFLOW_TOKENS.EscalationService)
+  .to(EscalationService);
+container
+  .bind<IHeartbeatService>(WORKFLOW_TOKENS.HeartbeatService)
+  .to(HeartbeatService);
 container.bind<IRunHandler>(WORKFLOW_TOKENS.RunHandler).to(RunHandler);
 
 yargs(hideBin(process.argv))
@@ -299,6 +313,18 @@ yargs(hideBin(process.argv))
           default: 3,
           describe:
             'Upper bound on concurrently running implementation agents (P3 T-01)'
+        })
+        .option('shadow', {
+          type: 'boolean',
+          default: false,
+          describe:
+            'Calibration mode: record gate verdicts but never merge (P3 T-04)'
+        })
+        .option('heartbeat', {
+          type: 'number',
+          default: 30,
+          describe:
+            'Emit structured progress lines every N seconds (0 disables) — #39'
         }),
     async argv => {
       const handler = container.get<IRunHandler>(WORKFLOW_TOKENS.RunHandler);
@@ -314,7 +340,9 @@ yargs(hideBin(process.argv))
           runId,
           runsDir: argv['runs-dir'],
           chronicleRepo: argv['chronicle-repo'],
-          maxParallel: argv['max-parallel']
+          maxParallel: argv['max-parallel'],
+          shadow: argv.shadow,
+          heartbeatSeconds: argv.heartbeat
         });
         const anyFailed = result.tasks.some(task => task.kind === 'failed');
         if (result.outcome === 'blocked' || anyFailed) {
@@ -372,6 +400,53 @@ yargs(hideBin(process.argv))
           runId: argv['run-id'],
           mergedSha: argv.sha,
           taskId: argv.task
+        });
+      } catch (err) {
+        if (err instanceof WorkflowError) {
+          console.error(chalk.red(`\n✗ ${err.code}: ${err.message}`));
+          for (const detail of err.details) {
+            console.error(chalk.red(`  - ${detail}`));
+          }
+        } else {
+          console.error(chalk.red(`\n✗ ${err}`));
+        }
+        process.exit(1);
+      }
+    }
+  )
+  .command(
+    'check-veto',
+    'Check the phase digest queue item for a [veto] tag; revert the phase merges and redeploy the sandbox when present (P3 T-05)',
+    y =>
+      y
+        .option('run-id', {
+          type: 'string',
+          demandOption: true,
+          describe: 'Run identifier whose digest item to check'
+        })
+        .option('repo', {
+          type: 'string',
+          demandOption: true,
+          describe: 'Path to the target repo the phase merged into'
+        })
+        .option('chronicle-repo', {
+          type: 'string',
+          demandOption: true,
+          describe: 'Personal Chronicle ledger repo holding the queue'
+        })
+        .option('runs-dir', {
+          type: 'string',
+          default: path.join(os.homedir(), '.rosetta', 'sdlc-runs'),
+          describe: 'Directory holding run state'
+        }),
+    async argv => {
+      const handler = container.get<IRunHandler>(WORKFLOW_TOKENS.RunHandler);
+      try {
+        await handler.checkVeto({
+          runsDir: argv['runs-dir'],
+          runId: argv['run-id'],
+          repoPath: argv.repo,
+          chronicleRepo: argv['chronicle-repo']
         });
       } catch (err) {
         if (err instanceof WorkflowError) {

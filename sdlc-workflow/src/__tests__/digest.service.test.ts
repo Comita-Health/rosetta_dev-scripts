@@ -63,7 +63,7 @@ describe('DigestService (T-07 phase-boundary digest)', () => {
     const container = new Container();
     container
       .bind<IQueueRepository>(WORKFLOW_TOKENS.QueueRepository)
-      .toConstantValue({ appendItem });
+      .toConstantValue({ appendItem, itemTags: jest.fn() });
     container
       .bind<IChronicleArtifactRepository>(
         WORKFLOW_TOKENS.ChronicleArtifactRepository
@@ -112,6 +112,23 @@ describe('DigestService (T-07 phase-boundary digest)', () => {
       'queue',
       expect.stringContaining('run-1 T-01')
     );
+  });
+
+  it('includes merged SHAs on the phase-boundary digest (P3 T-05)', async () => {
+    const outcome = await service.post({
+      ...INPUT,
+      taskId: 'phase',
+      merges: [
+        { taskId: 'T-01', mergedSha: 'aaa' },
+        { taskId: 'T-02', mergedSha: 'bbb' }
+      ]
+    });
+
+    expect(outcome.digest.merges).toEqual([
+      { taskId: 'T-01', mergedSha: 'aaa' },
+      { taskId: 'T-02', mergedSha: 'bbb' }
+    ]);
+    expect(appendItem.mock.calls[0][1]).toContain('phase');
   });
 
   it('re-posting is a no-op append (resume never duplicates the digest)', async () => {

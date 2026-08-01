@@ -3,17 +3,22 @@ import chalk from 'chalk';
 import path from 'path';
 import type { IEvidenceRepository } from '../repositories/evidence.repository';
 import type { IGitRepository } from '../repositories/git.repository';
+import type { IQueueRepository } from '../repositories/queue.repository';
 import type { IRunStateRepository } from '../repositories/run-state.repository';
+import type { ISpecDocRepository } from '../repositories/spec-doc.repository';
 import type { IAggregatorService } from '../services/aggregator.service';
 import type { IChronicleCommitService } from '../services/chronicle-commit.service';
 import type { ICiGateService } from '../services/ci-gate.service';
 import type { IDigestService } from '../services/digest.service';
 import type { IEnvelopeGateService } from '../services/envelope-gate.service';
+import type { IEscalationService } from '../services/escalation.service';
 import type {
   ExecutorOutcome,
   IExecutorService,
   PoolInput
 } from '../services/executor.service';
+import type { IHeartbeatService } from '../services/heartbeat.service';
+import type { IPullRequestRepository } from '../repositories/pull-request.repository';
 import type { IPrLifecycleService } from '../services/pr-lifecycle.service';
 import type { IReviewerGateService } from '../services/reviewer-gate.service';
 import type { ISandboxDeployService } from '../services/sandbox-deploy.service';
@@ -23,6 +28,7 @@ import type {
 } from '../services/verification.service';
 import { WORKFLOW_TOKENS } from '../tokens';
 import {
+  ExceptionEntry,
   GateVerdict,
   RunState,
   SpecDocument,
@@ -31,6 +37,7 @@ import {
   WorkflowError
 } from '../types';
 import { inputsDigest } from '../utils/digest';
+import { categorizeTasks } from '../utils/run-summary';
 
 export interface RunTaskInput extends PoolInput {
   /**
@@ -39,6 +46,17 @@ export interface RunTaskInput extends PoolInput {
    * artifacts (T-08). Absent → both steps are skipped with a notice.
    */
   chronicleRepo?: string;
+  /**
+   * P3 T-04 calibration mode: verdicts are recorded but no merge call is
+   * ever issued, regardless of gate outcomes. Default is enforcing.
+   */
+  shadow?: boolean;
+  /**
+   * Native progress heartbeat interval in seconds (#39). Default 30;
+   * pass 0 to disable. Writes `[heartbeat] {json}` lines and
+   * `<runsDir>/<runId>/heartbeat.jsonl`.
+   */
+  heartbeatSeconds?: number;
 }
 
 export interface RunTaskResult {
@@ -55,10 +73,12 @@ export interface RunTaskResult {
  * personal queue (T-07), and commit run artifacts to the Chronicle (T-08).
  *
  * Every step runs through the T-09 step graph: its result is cached under a
- * key derived from an inputs digest rooted at {task content, base SHA} and
- * chained through the worktree head SHA. Kill the run at any boundary and
+ * key derived from an inputs digest rooted at {task content, integration tip}
+ * and chained through the worktree head SHA. Kill the run at any boundary and
  * resume replays the graph — cache hits are reused, so agents are not
  * re-invoked, the sandbox is not redeployed, and digests are not re-posted.
+ * After deps merge, the tip (and envelope/reviewer baseRef) is the post-merge
+ * integration SHA — never a cumulative frozen-base mega-diff (#42 / F1).
  */
 export interface RecordMergeCliInput {
   chronicleRepo: string;
@@ -74,6 +94,19 @@ export interface StatusCliInput {
   runId: string;
 }
 
+export interface CheckVetoInput {
+  runsDir: string;
+  runId: string;
+  repoPath: string;
+  chronicleRepo: string;
+}
+
+export interface CheckVetoResult {
+  veto: boolean;
+  reverted: boolean;
+  prUrl?: string;
+}
+
 export interface IRunHandler {
   runTask(input: RunTaskInput): Promise<RunTaskResult>;
   /** T-08: record a human-approved merge in the run's Chronicle artifact. */
@@ -83,6 +116,12 @@ export interface IRunHandler {
    * (what is cached vs would re-execute), verdicts, and exceptions.
    */
   showStatus(input: StatusCliInput): void;
+  /**
+   * P3 T-05: read the phase digest's queue item; a [veto] tag reverts the
+   * phase's merges through a PR and redeploys the sandbox at the reverted
+   * SHA. No veto → nothing changes. The run itself never blocks on this.
+   */
+  checkVeto(input: CheckVetoInput): Promise<CheckVetoResult>;
 }
 
 @injectable()
@@ -96,6 +135,8 @@ export class RunHandler implements IRunHandler {
     private readonly _reviewerGate: IReviewerGateService,
     @inject(WORKFLOW_TOKENS.PrLifecycleService)
     private readonly _prLifecycle: IPrLifecycleService,
+    @inject(WORKFLOW_TOKENS.PullRequestRepository)
+    private readonly _prRepo: IPullRequestRepository,
     @inject(WORKFLOW_TOKENS.SandboxDeployService)
     private readonly _sandboxDeploy: ISandboxDeployService,
     @inject(WORKFLOW_TOKENS.VerificationService)
@@ -112,73 +153,129 @@ export class RunHandler implements IRunHandler {
     private readonly _gitRepo: IGitRepository,
     @inject(WORKFLOW_TOKENS.EvidenceRepository)
     private readonly _evidenceRepo: IEvidenceRepository,
+    @inject(WORKFLOW_TOKENS.QueueRepository)
+    private readonly _queueRepo: IQueueRepository,
+    @inject(WORKFLOW_TOKENS.EscalationService)
+    private readonly _escalation: IEscalationService,
     @inject(WORKFLOW_TOKENS.RunStateRepository)
-    private readonly _runStateRepo: IRunStateRepository
+    private readonly _runStateRepo: IRunStateRepository,
+    @inject(WORKFLOW_TOKENS.SpecDocRepository)
+    private readonly _specDocRepo: ISpecDocRepository,
+    @inject(WORKFLOW_TOKENS.HeartbeatService)
+    private readonly _heartbeat: IHeartbeatService
   ) {}
 
   async runTask(input: RunTaskInput): Promise<RunTaskResult> {
     console.log(chalk.bold(`\nRun ${input.runId} — ${input.specPath}\n`));
 
-    const pool = await this._executor.executeReady(input);
+    const heartbeatSeconds =
+      input.heartbeatSeconds === undefined ? 30 : input.heartbeatSeconds;
+    this._heartbeat.start({
+      runId: input.runId,
+      runsDir: input.runsDir,
+      intervalMs: heartbeatSeconds * 1000
+    });
 
-    if (pool.kind === 'blocked') {
-      console.log(
-        chalk.red(
-          '  ✗ Refused: spec is not Approved (blocked verdict recorded: unapproved-spec).'
-        )
-      );
-      console.log(
-        '  Approve the spec (status: Draft → Approved, ADR-0008) and rerun.'
-      );
-      return { outcome: pool.kind, tasks: [] };
-    }
+    try {
+      const poolInput: PoolInput = {
+        ...input,
+        progress: {
+          set: ctx => {
+            this._heartbeat.setContext(ctx);
+          }
+        }
+      };
+      const pool = await this._executor.executeReady(poolInput);
 
-    if (pool.kind === 'no-ready-task') {
-      console.log(
-        chalk.yellow(
-          '  No ready task (all done, or blocked on unmerged dependencies).'
-        )
-      );
-      return { outcome: pool.kind, tasks: [] };
-    }
-
-    const state = pool.state;
-    if (state === null) {
-      throw new Error('executor returned an executed pool without state');
-    }
-
-    // P3 T-01: implementation fanned out concurrently; the gate pipeline
-    // runs per task, sequentially — gates share the sandbox and the
-    // primary checkout's git object store.
-    for (const outcome of pool.outcomes) {
-      const icon =
-        outcome.kind === 'completed' ? chalk.green('✓') : chalk.red('✗');
-      const cachedNote = outcome.cached ? ' (cached)' : '';
-      console.log(
-        `  ${icon} ${outcome.task.id} ${outcome.kind}${cachedNote} on ${outcome.branch}`
-      );
-      if (outcome.detail !== undefined) {
-        console.log(chalk.gray(`    ${outcome.detail.slice(0, 300)}`));
+      if (pool.kind === 'blocked') {
+        console.log(
+          chalk.red(
+            '  ✗ Refused: spec is not Approved (blocked verdict recorded: unapproved-spec).'
+          )
+        );
+        console.log(
+          '  Approve the spec (status: Draft → Approved, ADR-0008) and rerun.'
+        );
+        return { outcome: pool.kind, tasks: [] };
       }
-      if (outcome.kind === 'completed') {
-        await this.taskPipeline(input, state, pool.spec, outcome);
+
+      if (pool.kind === 'no-ready-task') {
+        console.log(
+          chalk.yellow(
+            '  No ready task (all done, or blocked on unmerged dependencies).'
+          )
+        );
+        // Resume case: the last task may have merged in a prior invocation
+        // with the phase boundary interrupted — replay it (fully cached when
+        // it already ran).
+        if (pool.state !== null) {
+          await this.phaseBoundary(input, pool.state, pool.spec);
+        }
+        return { outcome: pool.kind, tasks: [] };
       }
+
+      const state = pool.state;
+      if (state === null) {
+        throw new Error('executor returned an executed pool without state');
+      }
+
+      // P3 T-01: implementation fanned out concurrently; the gate pipeline
+      // runs per task, sequentially — gates share the sandbox and the
+      // primary checkout's git object store.
+      for (const outcome of pool.outcomes) {
+        const icon =
+          outcome.kind === 'completed' ? chalk.green('✓') : chalk.red('✗');
+        const cachedNote = outcome.cached ? ' (cached)' : '';
+        console.log(
+          `  ${icon} ${outcome.task.id} ${outcome.kind}${cachedNote} on ${outcome.branch}`
+        );
+        if (outcome.detail !== undefined) {
+          console.log(chalk.gray(`    ${outcome.detail.slice(0, 300)}`));
+        }
+        if (outcome.kind === 'completed') {
+          await this.taskPipeline(input, state, pool.spec, outcome);
+        } else {
+          // P3 T-06: a failed task (e.g. budget exhaustion) may have written
+          // exception entries without entering the gate pipeline — escalate
+          // those so the queue still surfaces them.
+          const entries = state.exceptions.filter(
+            entry => entry.taskId === outcome.task.id
+          );
+          this.postEscalations(input, state, outcome.task.id, entries);
+        }
+      }
+
+      // P3 T-05: once every task of the phase has merged, deploy the merged
+      // default branch to the sandbox and post the phase digest.
+      await this.phaseBoundary(input, state, pool.spec);
+
+      if (input.shadow === true) {
+        console.log(
+          chalk.bold('\n[HUMAN GATE] Shadow mode — nothing advances.')
+        );
+        console.log('  Review the task branches and the recorded verdicts;');
+        console.log('  merging (or not) is your call.');
+      } else {
+        console.log(
+          chalk.bold('\n[ENFORCING] Green gates merged automatically;')
+        );
+        console.log(
+          '  red gates blocked and escalated. Promotion beyond the sandbox'
+        );
+        console.log('  remains a human decision.');
+      }
+
+      return {
+        outcome: pool.kind,
+        tasks: pool.outcomes.map(outcome => ({
+          taskId: outcome.task.id,
+          kind: outcome.kind,
+          branch: outcome.branch
+        }))
+      };
+    } finally {
+      this._heartbeat.stop();
     }
-
-    console.log(chalk.bold('\n[HUMAN GATE] Shadow mode — nothing advances.'));
-    console.log('  Review the task branches and the recorded verdicts;');
-    console.log(
-      '  merging (or not) is your call. Gate enforcement lands in P3 T-04.'
-    );
-
-    return {
-      outcome: pool.kind,
-      tasks: pool.outcomes.map(outcome => ({
-        taskId: outcome.task.id,
-        kind: outcome.kind,
-        branch: outcome.branch
-      }))
-    };
   }
 
   /**
@@ -204,35 +301,61 @@ export class RunHandler implements IRunHandler {
     // content edit invalidates exactly this task's steps (T-09).
     const chain = { implDigest: outcome.implDigest, headSha };
 
+    this._heartbeat.setContext({
+      taskId: task.id,
+      step: 'pr',
+      worktreePath,
+      lastLine: 'opening task PR'
+    });
+
     // P3 T-02: push the branch and open (or rediscover) the task PR before
     // the gates — the PR is the reviewer-gate and CI-gate subject.
     this.prStep(input, state, task, spec, outcome.branch, worktreePath, chain);
+
+    // F1: diff against the task's integration tip (same tip the worktree
+    // branched from), not the frozen run baseSha — otherwise merged deps
+    // inflate maxDiffLines and blow up the reviewer prompt.
+    const gateBaseRef = outcome.baseSha;
+
+    this._heartbeat.setContext({
+      taskId: task.id,
+      step: 'envelope',
+      worktreePath,
+      lastLine: `baseRef=${gateBaseRef.slice(0, 12)}`
+    });
 
     const envelopeVerdict = await this.gateStep(
       input,
       state,
       'envelope',
       task.id,
-      inputsDigest({ ...chain, envelope: spec.envelope }),
+      inputsDigest({ ...chain, envelope: spec.envelope, baseRef: gateBaseRef }),
       () =>
         this._envelopeGate.evaluate({
           repoPath: input.repoPath,
-          baseRef: state.baseSha,
+          baseRef: gateBaseRef,
           headRef: outcome.branch,
           envelope: spec.envelope
         })
     );
+
+    this._heartbeat.setContext({
+      taskId: task.id,
+      step: 'reviewer',
+      worktreePath,
+      lastLine: 'dispatching reviewer agent'
+    });
 
     const reviewerVerdict = await this.gateStep(
       input,
       state,
       'reviewer',
       task.id,
-      inputsDigest({ ...chain, task }),
+      inputsDigest({ ...chain, task, baseRef: gateBaseRef }),
       async () => {
         const verdict = await this._reviewerGate.review({
           repoPath: input.repoPath,
-          baseRef: state.baseSha,
+          baseRef: gateBaseRef,
           headRef: outcome.branch,
           task,
           envelope: spec.envelope
@@ -270,19 +393,38 @@ export class RunHandler implements IRunHandler {
       inputsDigest({ ...chain, criteria: task.acceptanceCriteria })
     );
 
-    // The real CI gate: check runs for the task branch head SHA.
+    // P3 T-03: live CI gate — poll the pushed branch's checks to terminal,
+    // dispatch bounded fix agents on failure, and consume the post-cycle
+    // verdict. The cycle transcript is saved as resolvable evidence.
     const ciVerdict = await this.gateStep(
       input,
       state,
       'ci',
       task.id,
       inputsDigest({ ...chain, gate: 'ci' }),
-      () =>
-        this._ciGate.evaluate({
+      async () => {
+        const verdict = await this._ciGate.monitor({
           repoPath: input.repoPath,
-          sha: headSha,
-          taskId: task.id
-        })
+          worktreePath,
+          branch: outcome.branch,
+          sha: this._gitRepo.headSha(worktreePath),
+          task,
+          runsDir: input.runsDir,
+          state,
+          budgetK: spec.envelope.budgetK
+        });
+        if (verdict.transcript !== undefined) {
+          const evidenceId = `${task.id}-ci-monitor`;
+          this._evidenceRepo.save(
+            input.runsDir,
+            input.runId,
+            evidenceId,
+            verdict.transcript
+          );
+          verdict.evidenceIds = [evidenceId];
+        }
+        return verdict;
+      }
     );
 
     const phaseDigest = inputsDigest({ ...chain, step: 'phase' });
@@ -327,9 +469,412 @@ export class RunHandler implements IRunHandler {
           )
         );
       }
+      // P3 T-06: escalate — action-required queue items, then halt this
+      // task (staying unmerged blocks dependents; other tasks continue).
+      this.postEscalations(input, state, task.id, aggregate.exceptions);
     }
 
+    // P3 T-04: enforcement. Green across the board auto-merges; any red
+    // gate blocks and escalates. There is no code path that merges on red.
+    await this.enforcementStep(input, state, task, chain, phaseVerdict);
+
     await this.chronicleSteps(input, state, task, spec, chain, phaseVerdict);
+  }
+
+  /**
+   * The enforcing phase gate (P3 T-04). Exactly one code path reaches a
+   * merge call: enforcing mode AND a pass phase verdict AND a recorded PR.
+   * Shadow mode records verdicts and never merges (calibration for new
+   * repos). A red verdict records a merge-blocked escalation; the task
+   * halts by staying unmerged, which is what blocks its dependents (T-01).
+   */
+  private async enforcementStep(
+    input: RunTaskInput,
+    state: RunState,
+    task: SpecTask,
+    chain: { implDigest?: string; headSha: string },
+    phaseVerdict: GateVerdict
+  ): Promise<void> {
+    if (input.shadow === true) {
+      console.log(
+        chalk.gray('  [shadow] enforcement off — verdicts recorded, no merge')
+      );
+      return;
+    }
+
+    if (phaseVerdict.outcome !== 'pass') {
+      const entries = [
+        {
+          trigger: 'merge-blocked' as const,
+          taskId: task.id,
+          context: phaseVerdict.reasons,
+          recordedAt: new Date().toISOString()
+        }
+      ];
+      this._runStateRepo.recordExceptions(input.runsDir, state, entries);
+      this.postEscalations(input, state, task.id, entries);
+      console.log(
+        chalk.red(
+          `  [enforce] merge blocked for ${task.id}: ${phaseVerdict.reasons.join('; ')}`
+        )
+      );
+      return;
+    }
+
+    const digest = inputsDigest({ ...chain, step: 'merge' });
+    const key = stepKey('merge', task.id, digest);
+    const cached = state.steps[key];
+    if (cached !== undefined) {
+      console.log(
+        chalk.gray(`  [cached] already merged (${cached.detail ?? 'no SHA'})`)
+      );
+      return;
+    }
+
+    const prUrl = state.taskResults[task.id]?.prUrl;
+    const prNumber = prUrl?.match(/\/pull\/(\d+)$/)?.[1];
+    if (prUrl === undefined || prNumber === undefined) {
+      const entries = [
+        {
+          trigger: 'merge-blocked' as const,
+          taskId: task.id,
+          context: ['all gates green but no PR is recorded for the task'],
+          recordedAt: new Date().toISOString()
+        }
+      ];
+      this._runStateRepo.recordExceptions(input.runsDir, state, entries);
+      this.postEscalations(input, state, task.id, entries);
+      console.log(
+        chalk.red(`  [enforce] ${task.id} green but has no PR — cannot merge`)
+      );
+      return;
+    }
+
+    try {
+      const mergedSha = this._prRepo.merge(input.repoPath, Number(prNumber));
+      this._runStateRepo.recordTaskMerged(
+        input.runsDir,
+        state,
+        task.id,
+        mergedSha
+      );
+      this._runStateRepo.recordMergedSha(input.runsDir, state, mergedSha);
+      this._runStateRepo.recordStep(input.runsDir, state, key, {
+        name: 'merge',
+        taskId: task.id,
+        inputsDigest: digest,
+        detail: mergedSha,
+        completedAt: new Date().toISOString()
+      });
+      if (input.chronicleRepo !== undefined) {
+        // The sdlc.merge.v1 artifact, attributed to the machine gates.
+        await this._chronicle.recordMerge({
+          chronicleRepo: input.chronicleRepo,
+          runsDir: input.runsDir,
+          runId: input.runId,
+          mergedSha,
+          taskId: task.id,
+          approvedBy: 'machine-gates'
+        });
+      }
+      console.log(
+        chalk.green(
+          `  [enforce] all gates green — merged ${prUrl} at ${mergedSha.slice(0, 12)}`
+        )
+      );
+    } catch (err) {
+      const detail =
+        err instanceof WorkflowError
+          ? [err.message, ...err.details].join(': ')
+          : String(err);
+      const entries = [
+        {
+          trigger: 'merge-blocked' as const,
+          taskId: task.id,
+          context: [`merge call failed: ${detail.slice(0, 500)}`],
+          recordedAt: new Date().toISOString()
+        }
+      ];
+      this._runStateRepo.recordExceptions(input.runsDir, state, entries);
+      this.postEscalations(input, state, task.id, entries);
+      console.log(
+        chalk.red(
+          `  [enforce] merge failed for ${task.id}: ${detail.slice(0, 300)}`
+        )
+      );
+    }
+  }
+
+  /**
+   * P3 T-06: post action-required queue items for every exception entry.
+   * Evidence IDs are gathered from the task's recorded verdicts so the
+   * queue item alone is enough to triage.
+   */
+  private postEscalations(
+    input: RunTaskInput,
+    state: RunState,
+    taskId: string,
+    entries: ExceptionEntry[]
+  ): void {
+    if (entries.length === 0) return;
+    const evidenceIds = state.verdicts
+      .filter(verdict => verdict.taskId === taskId)
+      .flatMap(verdict => verdict.evidenceIds ?? []);
+    const outcome = this._escalation.post({
+      chronicleRepo: input.chronicleRepo,
+      runId: input.runId,
+      entries,
+      evidenceIds
+    });
+    for (const title of outcome.posted) {
+      console.log(chalk.yellow(`  [escalate] ${title}`));
+    }
+  }
+
+  /**
+   * P3 T-05 phase boundary: when every task of the spec phase has a merged
+   * SHA, deploy the merged default branch to the sandbox (repo-owned
+   * contract, SHA-idempotent, step-cached so resume never redeploys) and
+   * post the phase digest — links to every merged SHA and the recorded
+   * verdict evidence — to the PRD-0007 queue. The veto is non-blocking:
+   * the run advances immediately; `check-veto` reads the item later.
+   */
+  private async phaseBoundary(
+    input: RunTaskInput,
+    state: RunState,
+    spec: SpecDocument
+  ): Promise<void> {
+    const merges = spec.tasks.map(task => ({
+      taskId: task.id,
+      mergedSha: state.taskResults[task.id]?.mergedSha
+    }));
+    if (!merges.every(entry => entry.mergedSha !== undefined)) {
+      return;
+    }
+    const mergedShas = merges.map(entry => entry.mergedSha as string);
+    const digest = inputsDigest({ step: 'phase-boundary', mergedShas });
+
+    // Deploy the merged default branch, exactly once per merge set.
+    const deployKey = stepKey('phase-deploy', 'phase', digest);
+    if (state.steps[deployKey] !== undefined) {
+      console.log(
+        chalk.gray(
+          `  [cached] phase already deployed (${state.steps[deployKey].detail ?? ''})`
+        )
+      );
+    } else {
+      this._gitRepo.fetch(input.repoPath);
+      const defaultBranch = this._gitRepo.defaultBranch(input.repoPath);
+      const sha = this._gitRepo.resolveSha(
+        input.repoPath,
+        `origin/${defaultBranch}`
+      );
+      const worktreePath = path.join(
+        input.runsDir,
+        input.runId,
+        'worktrees',
+        '_phase'
+      );
+      this._gitRepo.addWorktree(
+        input.repoPath,
+        worktreePath,
+        `sdlc/${input.runId}/phase-deploy`,
+        sha
+      );
+      const outcome = await this._sandboxDeploy.deploy({
+        worktreePath,
+        sha,
+        previous: state.sandbox
+      });
+      outcome.verdict.taskId = 'phase';
+      outcome.verdict.inputsDigest = digest;
+      this._runStateRepo.appendVerdict(input.runsDir, state, outcome.verdict);
+      if (outcome.record !== undefined) {
+        this._runStateRepo.recordSandbox(input.runsDir, state, outcome.record);
+      }
+      this.printVerdict(outcome.verdict);
+      if (outcome.verdict.outcome !== 'pass') {
+        // Leave the step unrecorded so the next invocation retries.
+        return;
+      }
+      this._runStateRepo.recordStep(input.runsDir, state, deployKey, {
+        name: 'phase-deploy',
+        taskId: 'phase',
+        inputsDigest: digest,
+        detail: sha,
+        completedAt: new Date().toISOString()
+      });
+      console.log(
+        chalk.green(
+          `  [phase] merged ${defaultBranch} deployed to sandbox at ${sha.slice(0, 12)}`
+        )
+      );
+    }
+
+    // Post the phase digest with the merged SHAs and verdict evidence.
+    if (input.chronicleRepo === undefined) {
+      console.log(
+        chalk.gray('  [skip] no --chronicle-repo — phase digest not posted')
+      );
+      return;
+    }
+    const digestKey = stepKey('phase-digest', 'phase', digest);
+    if (state.steps[digestKey] !== undefined) {
+      console.log(chalk.gray('  [cached] phase digest already posted'));
+      return;
+    }
+    const posted = await this._digest.post({
+      chronicleRepo: input.chronicleRepo,
+      runId: input.runId,
+      specId: spec.id,
+      taskId: 'phase',
+      phaseVerdict: {
+        gate: 'phase',
+        outcome: 'pass',
+        wouldEscalate: false,
+        reasons: [
+          `all ${merges.length} tasks merged: ${mergedShas
+            .map(sha => sha.slice(0, 12))
+            .join(', ')}`
+        ],
+        recordedAt: new Date().toISOString()
+      },
+      verdicts: state.verdicts,
+      exceptions: state.exceptions,
+      merges: merges as Array<{ taskId: string; mergedSha: string }>
+    });
+    this._runStateRepo.recordStep(input.runsDir, state, digestKey, {
+      name: 'phase-digest',
+      taskId: 'phase',
+      inputsDigest: digest,
+      detail: posted.artifactPath,
+      completedAt: new Date().toISOString()
+    });
+    console.log(
+      chalk.green(
+        `  [phase] digest posted to queue (${posted.artifactPath}) — veto via [veto] tag`
+      )
+    );
+  }
+
+  async checkVeto(input: CheckVetoInput): Promise<CheckVetoResult> {
+    const state = this._runStateRepo.load(input.runsDir, input.runId);
+    if (state === null) {
+      throw new WorkflowError(
+        `run ${input.runId} has no recorded state`,
+        'RUN_NOT_FOUND'
+      );
+    }
+
+    const merged = Object.values(state.taskResults)
+      .filter(result => result.mergedSha !== undefined)
+      .sort((a, b) => a.recordedAt.localeCompare(b.recordedAt));
+    if (merged.length === 0) {
+      console.log(
+        chalk.yellow('  Nothing merged in this run — no veto surface.')
+      );
+      return { veto: false, reverted: false };
+    }
+
+    const tags =
+      this._queueRepo.itemTags(
+        input.chronicleRepo,
+        `Review SDLC digest ${input.runId} phase`
+      ) ?? [];
+    if (!tags.includes('veto')) {
+      console.log(
+        chalk.green('  No [veto] tag on the phase digest item — nothing to do.')
+      );
+      return { veto: false, reverted: false };
+    }
+
+    const mergedShas = merged.map(result => result.mergedSha as string);
+    const digest = inputsDigest({ step: 'revert', mergedShas });
+    const key = stepKey('revert', 'phase', digest);
+    const cached = state.steps[key];
+    if (cached !== undefined) {
+      console.log(
+        chalk.gray(`  [cached] veto already reverted (${cached.detail ?? ''})`)
+      );
+      return { veto: true, reverted: true, prUrl: cached.detail };
+    }
+
+    // Revert branch from the merged default branch head; most recent
+    // merge reverted first so each revert applies cleanly.
+    this._gitRepo.fetch(input.repoPath);
+    const defaultBranch = this._gitRepo.defaultBranch(input.repoPath);
+    const baseSha = this._gitRepo.resolveSha(
+      input.repoPath,
+      `origin/${defaultBranch}`
+    );
+    const branch = `sdlc/${input.runId}/revert`;
+    const worktreePath = path.join(
+      input.runsDir,
+      input.runId,
+      'worktrees',
+      '_revert'
+    );
+    this._gitRepo.addWorktree(input.repoPath, worktreePath, branch, baseSha);
+    for (const sha of [...mergedShas].reverse()) {
+      this._gitRepo.revertMerge(worktreePath, sha);
+    }
+    const revertSha = this._gitRepo.headSha(worktreePath);
+
+    this._gitRepo.push(worktreePath, branch);
+    const existing = this._prRepo.findByBranch(worktreePath, branch);
+    const pr =
+      existing ??
+      this._prRepo.create(worktreePath, {
+        branch,
+        title: `revert(sdlc): ${input.runId} phase merges (queue veto)`,
+        body: [
+          '## Summary',
+          '',
+          `Veto expressed on the phase digest queue item for run \`${input.runId}\`.`,
+          'Reverts the phase\u2019s merge commits:',
+          '',
+          ...mergedShas.map(sha => `- ${sha}`),
+          '',
+          `Sandbox redeployed at the reverted SHA. Generated by sdlc-workflow check-veto (PRD-0011 P3 T-05).`
+        ].join('\n')
+      });
+
+    // Redeploy the sandbox at the reverted state — sandbox only, same
+    // repo-owned contract as every other deploy.
+    const outcome = await this._sandboxDeploy.deploy({
+      worktreePath,
+      sha: revertSha,
+      previous: state.sandbox
+    });
+    outcome.verdict.taskId = 'phase-revert';
+    this._runStateRepo.appendVerdict(input.runsDir, state, outcome.verdict);
+    if (outcome.record !== undefined) {
+      this._runStateRepo.recordSandbox(input.runsDir, state, outcome.record);
+    }
+    this.printVerdict(outcome.verdict);
+
+    await this._chronicle.recordRevert({
+      chronicleRepo: input.chronicleRepo,
+      runId: input.runId,
+      specId: state.specId,
+      revertedShas: mergedShas,
+      revertSha,
+      prUrl: pr.url
+    });
+
+    this._runStateRepo.recordStep(input.runsDir, state, key, {
+      name: 'revert',
+      taskId: 'phase',
+      inputsDigest: digest,
+      detail: pr.url,
+      completedAt: new Date().toISOString()
+    });
+    console.log(
+      chalk.yellow(
+        `  [veto] reverted ${mergedShas.length} merge(s) — ${pr.url}; sandbox redeployed at ${revertSha.slice(0, 12)}`
+      )
+    );
+    return { veto: true, reverted: true, prUrl: pr.url };
   }
 
   showStatus(input: StatusCliInput): void {
@@ -349,21 +894,55 @@ export class RunHandler implements IRunHandler {
       console.log(chalk.green(`  merged: ${state.mergedSha}`));
     }
 
+    // P3 T-06: categorize every task so a partially-failed run surfaces
+    // exactly what needs human attention (merged / halted-escalated /
+    // blocked-by-dependency / …).
+    const categorized = (() => {
+      try {
+        return categorizeTasks(this._specDocRepo.read(state.specPath), state);
+      } catch {
+        // Spec file moved — fall back to the recorded task results alone.
+        return Object.values(state.taskResults).map(result => ({
+          taskId: result.taskId,
+          title: result.taskId,
+          category: (result.mergedSha !== undefined
+            ? 'merged'
+            : result.status === 'failed'
+              ? 'failed'
+              : 'completed-unmerged') as
+            'merged' | 'failed' | 'completed-unmerged',
+          detail: result.mergedSha ?? result.detail
+        }));
+      }
+    })();
+
     console.log(chalk.bold('\nTasks'));
-    const results = Object.values(state.taskResults);
-    if (results.length === 0) console.log('  (none attempted)');
-    for (const result of results) {
-      const icon =
-        result.status === 'completed' ? chalk.green('✓') : chalk.red('✗');
+    if (categorized.length === 0) console.log('  (none)');
+    for (const entry of categorized) {
+      const colour =
+        entry.category === 'merged'
+          ? chalk.green
+          : entry.category === 'halted-escalated' || entry.category === 'failed'
+            ? chalk.red
+            : entry.category === 'blocked-by-dependency'
+              ? chalk.yellow
+              : chalk.gray;
       console.log(
-        `  ${icon} ${result.taskId} ${result.status}` +
-          (result.branch !== undefined ? ` on ${result.branch}` : '') +
-          (result.prUrl !== undefined ? ` pr:${result.prUrl}` : '') +
-          (result.mergedSha !== undefined
-            ? chalk.green(` merged@${result.mergedSha.slice(0, 12)}`)
-            : '')
+        colour(
+          `  ${entry.taskId} ${entry.category}` +
+            (entry.detail !== undefined ? ` — ${entry.detail}` : '') +
+            ` (${entry.title})`
+        )
       );
     }
+    console.log(
+      chalk.gray(
+        `  spend: ${state.tokenSpendK}k tokens` +
+          (state.mergedSha !== undefined
+            ? ` · last merge ${state.mergedSha.slice(0, 12)}`
+            : '')
+      )
+    );
 
     console.log(chalk.bold('\nSteps (cached — reused on resume)'));
     const steps = Object.values(state.steps).sort((a, b) =>

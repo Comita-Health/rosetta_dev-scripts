@@ -168,6 +168,26 @@ describe('RunStateRepository', () => {
     repo.recordTaskPrUrl(dir, state, 'T-99', 'https://github.com/o/r/pull/4');
     expect(repo.load(dir, 'run-1')?.taskResults['T-99']).toBeUndefined();
   });
+
+  it('increments and persists CI fix attempts (P3 T-03)', () => {
+    const state = makeState();
+    repo.save(dir, state);
+
+    expect(repo.recordCiFixAttempt(dir, state, 'T-01')).toBe(1);
+    expect(repo.recordCiFixAttempt(dir, state, 'T-01')).toBe(2);
+
+    // Persisted: a resumed run never resets the budget.
+    expect(repo.load(dir, 'run-1')?.ciFixAttempts['T-01']).toBe(2);
+  });
+
+  it('accumulates and persists token spend (P3 T-06)', () => {
+    const state = makeState();
+    repo.save(dir, state);
+
+    expect(repo.recordTokenSpend(dir, state, 5)).toBe(5);
+    expect(repo.recordTokenSpend(dir, state, 3)).toBe(8);
+    expect(repo.load(dir, 'run-1')?.tokenSpendK).toBe(8);
+  });
 });
 
 describe('SurfaceMapRepository', () => {

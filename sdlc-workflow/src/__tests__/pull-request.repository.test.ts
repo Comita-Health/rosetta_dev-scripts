@@ -73,4 +73,36 @@ describe('PullRequestRepository (P3 T-02)', () => {
       repo.create('/repo', { branch: 'b', title: 't', body: 'x' })
     ).toThrow(expect.objectContaining({ code: 'GH_FAILED' }));
   });
+
+  describe('merge (P3 T-04)', () => {
+    it('merges the PR with a merge commit and returns the merge SHA', () => {
+      execMock
+        .mockReturnValueOnce('') // gh pr merge
+        .mockReturnValueOnce('abc123def4567890abc123def4567890abc123de\n');
+
+      const sha = repo.merge('/repo', 14);
+
+      expect(sha).toBe('abc123def4567890abc123def4567890abc123de');
+      expect(execMock.mock.calls[0][0]).toContain('gh pr merge 14 --merge');
+      expect(execMock.mock.calls[1][0]).toContain('gh pr view 14');
+    });
+
+    it('throws typed when the merge succeeds but the SHA cannot be resolved', () => {
+      execMock.mockReturnValueOnce('').mockReturnValueOnce('null\n');
+
+      expect(() => repo.merge('/repo', 14)).toThrow(
+        expect.objectContaining({ code: 'GH_FAILED' })
+      );
+    });
+
+    it('throws typed when gh pr merge fails', () => {
+      execMock.mockImplementation(() => {
+        throw new Error('gh: merge conflict');
+      });
+
+      expect(() => repo.merge('/repo', 14)).toThrow(
+        expect.objectContaining({ code: 'GH_FAILED' })
+      );
+    });
+  });
 });

@@ -52,11 +52,17 @@ describe('PrLifecycleService (P3 T-02)', () => {
         status: jest.fn(),
         addWorktree: jest.fn(),
         diffStat: jest.fn(),
-        diffText: jest.fn()
+        diffText: jest.fn(),
+        fetch: jest.fn(),
+        resolveSha: jest.fn(),
+        defaultBranch: jest.fn(),
+        revertMerge: jest.fn(),
+        stageAll: jest.fn(),
+        commit: jest.fn()
       });
     container
       .bind<IPullRequestRepository>(WORKFLOW_TOKENS.PullRequestRepository)
-      .toConstantValue({ findByBranch, create });
+      .toConstantValue({ findByBranch, create, merge: jest.fn() });
     container
       .bind<IPrLifecycleService>(WORKFLOW_TOKENS.PrLifecycleService)
       .to(PrLifecycleService);

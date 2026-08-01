@@ -114,6 +114,31 @@ describe('QueueRepository (T-07, PRD-0007 queue file contract)', () => {
     ]);
   });
 
+  describe('itemTags (P3 T-05 veto read-back)', () => {
+    it('returns the inline tags of the matching item, checkbox excluded', () => {
+      queue.appendItem(repo, 'Review SDLC digest run-1 phase — pass', [
+        'follow-up'
+      ]);
+      // A human vetoes by appending the tag and may tick the checkbox.
+      const raw = readFileSync(queueFile(repo), 'utf-8').replace(
+        '- [ ] Review SDLC digest run-1 phase — pass [follow-up]',
+        '- [x] Review SDLC digest run-1 phase — pass [follow-up] [veto]'
+      );
+      writeFileSync(queueFile(repo), raw);
+
+      expect(queue.itemTags(repo, 'Review SDLC digest run-1 phase')).toEqual([
+        'follow-up',
+        'veto'
+      ]);
+    });
+
+    it('returns null when no item matches or the queue is absent', () => {
+      expect(queue.itemTags(repo, 'no such item')).toBeNull();
+      queue.appendItem(repo, 'Something else', []);
+      expect(queue.itemTags(repo, 'no such item')).toBeNull();
+    });
+  });
+
   it('replaces the <!-- empty --> placeholder instead of stacking under it', () => {
     mkdirSync(path.join(repo, 'chronicles'), { recursive: true });
     writeFileSync(

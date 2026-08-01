@@ -55,6 +55,54 @@ describe('GitRepository', () => {
     expect(diff.totalLines).toBe(15);
   });
 
+  it('fetches origin and resolves refs to SHAs (P3 T-05)', () => {
+    execMock.mockReturnValue('def456\n');
+    repo.fetch('/repo');
+    expect(execMock.mock.calls[0][0]).toContain('fetch origin');
+    expect(repo.resolveSha('/repo', 'origin/main')).toBe('def456');
+    expect(execMock.mock.calls[1][0]).toContain('rev-parse "origin/main"');
+  });
+
+  it('reads the default branch from origin/HEAD, falling back to main', () => {
+    execMock.mockReturnValue('refs/remotes/origin/trunk\n');
+    expect(repo.defaultBranch('/repo')).toBe('trunk');
+
+    execMock.mockImplementation(() => {
+      throw new Error(
+        'fatal: ref refs/remotes/origin/HEAD is not a symbolic ref'
+      );
+    });
+    expect(repo.defaultBranch('/repo')).toBe('main');
+  });
+
+  it('reverts a merge commit first-parent with sign-off (P3 T-05)', () => {
+    execMock.mockReturnValue('');
+    repo.revertMerge('/wt', 'merge-sha');
+    expect(execMock.mock.calls[0][0]).toContain(
+      'revert --no-edit --signoff -m 1 "merge-sha"'
+    );
+  });
+
+  it('stages all changes and commits with --no-verify --signoff (#41)', () => {
+    execMock.mockReturnValue('');
+    repo.stageAll('/wt');
+    expect(execMock.mock.calls[0][0]).toContain('add -A');
+    repo.commit('/wt', 'feat(T-01): implement thing', {
+      noVerify: true,
+      signOff: true
+    });
+    expect(execMock.mock.calls[1][0]).toContain('--no-verify');
+    expect(execMock.mock.calls[1][0]).toContain('--signoff');
+    expect(execMock.mock.calls[1][0]).toContain('feat(T-01): implement thing');
+  });
+
+  it('commits without flags when options are omitted', () => {
+    execMock.mockReturnValue('');
+    repo.commit('/wt', 'chore: plain');
+    expect(execMock.mock.calls[0][0]).toContain('commit -m "chore: plain"');
+    expect(execMock.mock.calls[0][0]).not.toContain('--no-verify');
+  });
+
   it('wraps git failures in a typed error', () => {
     execMock.mockImplementation(() => {
       throw new Error('fatal: not a git repository');
