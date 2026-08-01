@@ -78,6 +78,13 @@ Handler / Service / Repository with InversifyJS (workspace rule):
   selection, worktree + implementation-agent execution (T-01).
 - `services/envelope-gate.service.ts` — diff vs blast-radius envelope,
   shadow-mode verdict (T-02).
+- `services/reviewer-gate.service.ts` — independent reviewer agent over the
+  diff + task + envelope only; concur/disagree with cited reasons and the
+  full transcript attached (T-05).
+- `services/aggregator.service.ts` — combines ci / verification / reviewer /
+  envelope into one phase verdict and derives exception-ledger entries
+  (reviewer disagreement, third CI fix attempt, envelope breach, budget
+  exhaustion) (T-06).
 - `repositories/` — PRD parsing (`prd`), model transports (`anthropic`,
   `openai`, `cursor-cli` behind the shared `IModelRepository` contract in
   `model`),

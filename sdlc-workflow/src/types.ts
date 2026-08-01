@@ -97,10 +97,36 @@ export type GateOutcome = 'pass' | 'breach' | 'blocked';
  * mechanism.
  */
 export interface GateVerdict {
-  gate: string; // e.g. 'envelope', 'intake'
+  gate: string; // e.g. 'envelope', 'reviewer', 'phase', 'intake'
   outcome: GateOutcome;
   wouldEscalate: boolean;
   reasons: string[];
+  /** Full agent transcript for agent-driven gates (T-05). */
+  transcript?: string;
+  recordedAt: string; // ISO timestamp
+}
+
+/** Reviewer-agent output contract (SPEC-PRD-0011-P2 T-05). */
+export interface ReviewerAssessment {
+  decision: 'concur' | 'disagree';
+  reasons: string[];
+}
+
+export type ExceptionTrigger =
+  | 'reviewer-disagreement'
+  | 'ci-fix-attempts-exhausted'
+  | 'envelope-breach'
+  | 'budget-exhaustion';
+
+/**
+ * An exception-ledger entry (SPEC-PRD-0011-P2 T-06): a would-escalate
+ * trigger recorded with enough context for later human triage. Shadow mode
+ * records; enforcement escalates (Phase 3).
+ */
+export interface ExceptionEntry {
+  trigger: ExceptionTrigger;
+  taskId?: string;
+  context: string[];
   recordedAt: string; // ISO timestamp
 }
 
@@ -111,6 +137,11 @@ export interface RunState {
   baseSha: string;
   taskResults: Record<string, TaskRunResult>;
   verdicts: GateVerdict[];
+  exceptions: ExceptionEntry[];
+  /** Cumulative model-token spend in thousands, metered where available. */
+  tokenSpendK: number;
+  /** Per-task count of failing CI fix attempts (Phase-3 machinery records). */
+  ciFixAttempts: Record<string, number>;
   updatedAt: string; // ISO timestamp
 }
 

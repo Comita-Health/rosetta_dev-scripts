@@ -14,5 +14,7 @@ export const WORKFLOW_TOKENS = {
   SurfaceMapRepository: Symbol.for('SurfaceMapRepository'),
   ExecutorService: Symbol.for('ExecutorService'),
   EnvelopeGateService: Symbol.for('EnvelopeGateService'),
+  ReviewerGateService: Symbol.for('ReviewerGateService'),
+  AggregatorService: Symbol.for('AggregatorService'),
   RunHandler: Symbol.for('RunHandler')
 } as const;

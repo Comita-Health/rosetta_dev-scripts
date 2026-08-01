@@ -36,6 +36,12 @@ describe('GitRepository', () => {
     expect(execMock).not.toHaveBeenCalled();
   });
 
+  it('returns the full unified diff text', () => {
+    execMock.mockReturnValue('diff --git a/x b/x\n+line\n');
+    expect(repo.diffText('/repo', 'base', 'head')).toContain('+line');
+    expect(execMock.mock.calls[0][0]).toContain('diff "base".."head"');
+  });
+
   it('parses numstat output including binary entries', () => {
     execMock.mockReturnValue(
       '10\t2\tsrc/a.ts\n-\t-\tassets/logo.png\n3\t0\tsrc/b.ts\n'

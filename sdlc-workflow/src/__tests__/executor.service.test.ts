@@ -44,14 +44,16 @@ describe('ExecutorService (T-01)', () => {
       headSha: jest.fn().mockReturnValue('base-sha'),
       status: jest.fn().mockReturnValue(''),
       addWorktree: jest.fn(),
-      diffStat: jest.fn()
+      diffStat: jest.fn(),
+      diffText: jest.fn()
     };
     agentRun = jest.fn().mockResolvedValue({ ok: true, output: 'done' });
     stateMock = {
       load: jest.fn().mockReturnValue(null),
       save: jest.fn(),
       appendVerdict: jest.fn(),
-      recordTaskResult: jest.fn()
+      recordTaskResult: jest.fn(),
+      recordExceptions: jest.fn()
     };
 
     const container = new Container();
@@ -116,6 +118,9 @@ describe('ExecutorService (T-01)', () => {
         }
       },
       verdicts: [],
+      exceptions: [],
+      tokenSpendK: 0,
+      ciFixAttempts: {},
       updatedAt: 'x'
     };
     stateMock.load.mockReturnValue(existing);
@@ -134,6 +139,9 @@ describe('ExecutorService (T-01)', () => {
         'T-01': { taskId: 'T-01', status: 'failed', recordedAt: 'x' }
       },
       verdicts: [],
+      exceptions: [],
+      tokenSpendK: 0,
+      ciFixAttempts: {},
       updatedAt: 'x'
     };
     stateMock.load.mockReturnValue(existing);

@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { injectable } from 'inversify';
 import path from 'path';
-import { GateVerdict, RunState, TaskRunResult } from '../types';
+import { ExceptionEntry, GateVerdict, RunState, TaskRunResult } from '../types';
 
 /**
  * Persists run state as JSON under `<runsDir>/<runId>/state.json` so a
@@ -17,6 +17,11 @@ export interface IRunStateRepository {
     state: RunState,
     result: TaskRunResult
   ): void;
+  recordExceptions(
+    runsDir: string,
+    state: RunState,
+    entries: ExceptionEntry[]
+  ): void;
 }
 
 const stateFile = (runsDir: string, runId: string): string =>
@@ -27,7 +32,12 @@ export class RunStateRepository implements IRunStateRepository {
   load(runsDir: string, runId: string): RunState | null {
     const file = stateFile(runsDir, runId);
     if (!existsSync(file)) return null;
-    return JSON.parse(readFileSync(file, 'utf-8')) as RunState;
+    const state = JSON.parse(readFileSync(file, 'utf-8')) as RunState;
+    // Fill fields introduced after older state files were written.
+    state.exceptions = state.exceptions ?? [];
+    state.tokenSpendK = state.tokenSpendK ?? 0;
+    state.ciFixAttempts = state.ciFixAttempts ?? {};
+    return state;
   }
 
   save(runsDir: string, state: RunState): string {
@@ -49,6 +59,16 @@ export class RunStateRepository implements IRunStateRepository {
     result: TaskRunResult
   ): void {
     state.taskResults[result.taskId] = result;
+    this.save(runsDir, state);
+  }
+
+  recordExceptions(
+    runsDir: string,
+    state: RunState,
+    entries: ExceptionEntry[]
+  ): void {
+    if (entries.length === 0) return;
+    state.exceptions.push(...entries);
     this.save(runsDir, state);
   }
 }
