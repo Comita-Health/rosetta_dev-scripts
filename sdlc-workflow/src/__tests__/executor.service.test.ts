@@ -386,6 +386,41 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
     expect(stateMock.recordStep).not.toHaveBeenCalled();
   });
 
+  it('records a failure when engine salvage-commit throws (#41)', async () => {
+    gitMock.headSha.mockReturnValue('base-sha');
+    gitMock.status.mockReturnValue(' M src/a.ts\n');
+    gitMock.commit.mockImplementation(() => {
+      throw new Error('commit refused');
+    });
+
+    const pool = await executor.executeReady(INPUT);
+
+    expect(pool.outcomes[0].kind).toBe('failed');
+    expect(pool.outcomes[0].detail).toContain('engine commit failed');
+    expect(pool.outcomes[0].detail).toContain('src/a.ts');
+  });
+
+  it('salvages a dirty tip after a non-ok agent exit (#41)', async () => {
+    agentRun.mockResolvedValue({ ok: false, output: 'hook rejected commit' });
+    let committed = false;
+    gitMock.headSha.mockImplementation((repoPath: string) => {
+      if (!repoPath.includes('worktrees')) return 'base-sha';
+      return committed ? 'engine-sha' : 'base-sha';
+    });
+    gitMock.commit.mockImplementation(() => {
+      committed = true;
+    });
+    gitMock.status.mockReturnValue('A  src/new.ts\n');
+
+    const pool = await executor.executeReady(INPUT);
+
+    expect(pool.outcomes[0].kind).toBe('completed');
+    expect(pool.outcomes[0].detail).toContain('hook rejected commit');
+    expect(pool.outcomes[0].detail).toContain(
+      'engine committed dirty worktree'
+    );
+  });
+
   describe('P3 T-01 parallel pool', () => {
     const independentSpec = (): SpecDocument =>
       makeSpec({

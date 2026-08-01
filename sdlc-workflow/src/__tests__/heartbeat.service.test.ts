@@ -99,4 +99,23 @@ describe('HeartbeatService (#39)', () => {
     );
     expect(hbCalls).toHaveLength(0);
   });
+
+  it('keeps stepElapsed when setContext does not change the step name', () => {
+    jest.useFakeTimers();
+    service.start({ runId: 'run-1', runsDir, intervalMs: 60_000 });
+    service.setContext({ step: 'implementation', taskId: 'T-01' });
+    jest.advanceTimersByTime(5_000);
+    service.setContext({ lastLine: 'still implementing' });
+    service.tick();
+    const hbLines = logSpy.mock.calls
+      .map(call => String(call[0]))
+      .filter(line => line.startsWith('[heartbeat] '));
+    const payload = JSON.parse(
+      hbLines[hbLines.length - 1].replace('[heartbeat] ', '')
+    );
+    expect(payload.step).toBe('implementation');
+    expect(payload.stepElapsedMs).toBeGreaterThanOrEqual(5_000);
+    expect(payload.lastLine).toBe('still implementing');
+    jest.useRealTimers();
+  });
 });

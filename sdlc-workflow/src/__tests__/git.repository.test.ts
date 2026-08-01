@@ -96,6 +96,13 @@ describe('GitRepository', () => {
     expect(execMock.mock.calls[1][0]).toContain('feat(T-01): implement thing');
   });
 
+  it('commits without flags when options are omitted', () => {
+    execMock.mockReturnValue('');
+    repo.commit('/wt', 'chore: plain');
+    expect(execMock.mock.calls[0][0]).toContain('commit -m "chore: plain"');
+    expect(execMock.mock.calls[0][0]).not.toContain('--no-verify');
+  });
+
   it('wraps git failures in a typed error', () => {
     execMock.mockImplementation(() => {
       throw new Error('fatal: not a git repository');
