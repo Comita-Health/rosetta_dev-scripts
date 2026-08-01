@@ -40,6 +40,9 @@ bun run dev -- run --spec ../specs/PRD-0011/phase-2-spec.md --repo .. \
 # Record a human-approved merge in the run's Chronicle artifact (T-08)
 bun run dev -- record-merge --run-id <run-id> --sha <merged-sha> \
   --chronicle-repo ../../rosetta_chronicle_roustalski
+
+# Inspect a run: task results, cached step graph, verdicts, exceptions (T-09)
+bun run dev -- status --run-id <run-id>
 ```
 
 `decompose` hard-stops after writing the Draft spec. Approval is a
@@ -87,7 +90,14 @@ through the worktree head SHA. Kill the run at any boundary and rerun the
 same command: cache hits are replayed (agents are not re-invoked, the
 sandbox is not redeployed, digests are not re-posted), and only steps whose
 inputs changed or never completed execute. Editing a task's spec content
-changes its digest and invalidates exactly that task's chain.
+changes its digest and invalidates exactly that task's chain. `status`
+shows what is cached versus what would re-execute.
+
+This repo dogfoods the pipeline against itself:
+[`SPEC-LIVE-VALIDATION-P1`](../specs/PRD-0011/live-validation-spec.md) is a
+one-task harness spec, and the root `.sdlc/` contracts declare a local
+process sandbox (`scripts/sandbox-deploy.sh` stages the built CLI keyed by
+`SDLC_SANDBOX_SHA`; `scripts/sandbox-health.sh` echoes it back).
 
 ## Chronicle integration (T-07 / T-08)
 

@@ -29,6 +29,8 @@ export const buildImplementationPrompt = (
     `- Forbidden surfaces: ${spec.envelope.forbiddenSurfaces.join(', ')}`,
     `- Max diff lines: ${spec.envelope.maxDiffLines}`,
     '',
-    'Implement the task, make every test-tier criterion pass, and stop.',
-    'Do not push, open PRs, or touch anything outside the worktree.'
+    'Implement the task, make every test-tier criterion pass, then COMMIT',
+    'your changes (git commit -s, Conventional Commits) before stopping —',
+    'an uncommitted worktree is recorded as a failed task. Do not push,',
+    'open PRs, or touch anything outside the worktree.'
   ].join('\n');

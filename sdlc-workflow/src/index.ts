@@ -358,6 +358,38 @@ yargs(hideBin(process.argv))
       }
     }
   )
+  .command(
+    'status',
+    'Show a run: task results, cached step graph, verdicts, exceptions (T-09)',
+    y =>
+      y
+        .option('run-id', {
+          type: 'string',
+          demandOption: true,
+          describe: 'Run identifier to inspect'
+        })
+        .option('runs-dir', {
+          type: 'string',
+          default: path.join(os.homedir(), '.rosetta', 'sdlc-runs'),
+          describe: 'Directory holding run state'
+        }),
+    argv => {
+      const handler = container.get<IRunHandler>(WORKFLOW_TOKENS.RunHandler);
+      try {
+        handler.showStatus({
+          runsDir: argv['runs-dir'],
+          runId: argv['run-id']
+        });
+      } catch (err) {
+        if (err instanceof WorkflowError) {
+          console.error(chalk.red(`\n✗ ${err.code}: ${err.message}`));
+        } else {
+          console.error(chalk.red(`\n✗ ${err}`));
+        }
+        process.exit(1);
+      }
+    }
+  )
   .demandCommand(1, 'You must specify a command')
   .strict()
   .help()

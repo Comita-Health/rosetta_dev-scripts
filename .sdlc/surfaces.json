@@ -1,0 +1,6 @@
+{
+  "ci-config": [".github/workflows/**"],
+  "personal-queue-schema": [
+    "sdlc-workflow/src/repositories/queue.repository.ts"
+  ]
+}
