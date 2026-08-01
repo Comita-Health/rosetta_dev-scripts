@@ -16,30 +16,44 @@ export interface ExecutorInput {
   runsDir: string;
 }
 
+export interface PoolInput extends ExecutorInput {
+  /** Upper bound on concurrently running implementation agents. */
+  maxParallel: number;
+}
+
+/** Per-task outcome of one pool wave. */
 export interface ExecutorOutcome {
-  kind: 'blocked' | 'no-ready-task' | 'completed' | 'failed';
-  spec: SpecDocument;
-  state: RunState | null;
-  task?: SpecTask;
-  branch?: string;
+  kind: 'completed' | 'failed';
+  task: SpecTask;
+  branch: string;
   detail?: string;
   /** True when the implementation step was reused from the T-09 cache. */
-  cached?: boolean;
+  cached: boolean;
   /** Digest of {task content, baseSha} — root of this task's step chain. */
-  implDigest?: string;
+  implDigest: string;
+}
+
+export interface PoolOutcome {
+  kind: 'blocked' | 'no-ready-task' | 'executed';
+  spec: SpecDocument;
+  state: RunState | null;
+  detail?: string;
+  /** Per-task outcomes, empty unless kind is 'executed'. */
+  outcomes: ExecutorOutcome[];
 }
 
 /**
- * SPEC-PRD-0011-P2 T-01 + T-09: consume an approved spec, select exactly one
- * task whose pipeline is incomplete (no parallelism this phase), and execute
- * the implementation agent in an isolated worktree — unless the T-09 step
- * cache already holds a result for this exact task content and base SHA, in
- * which case the cached branch is reused without re-invoking the agent.
- * Editing a task's spec content changes its digest and invalidates only that
- * task's chain. Refuses to run without an approval record (S-01).
+ * SPEC-PRD-0011-P3 T-01: dependency-ordered parallel task pool. Every task
+ * whose dependsOn are all *merged* (not merely implemented) is eligible;
+ * eligible tasks run concurrently — bounded by maxParallel — each in its
+ * own worktree on its deterministic branch. A failed task blocks only its
+ * dependents. The T-09 step cache carries over unchanged: cached
+ * implementations are reused without re-invoking the agent, and editing a
+ * task's spec content invalidates only that task's chain. Refuses to run
+ * without an approval record (S-01 of P2, unchanged).
  */
 export interface IExecutorService {
-  executeNext(input: ExecutorInput): Promise<ExecutorOutcome>;
+  executeReady(input: PoolInput): Promise<PoolOutcome>;
 }
 
 export const taskBranch = (runId: string, taskId: string): string =>
@@ -54,17 +68,19 @@ const hasStep = (state: RunState, name: string, taskId: string): boolean =>
     step => step.name === name && step.taskId === taskId
   );
 
-const selectReadyTask = (
+/** P3 dependency semantics: satisfied only by a *merged* dependency. */
+const isMerged = (state: RunState, taskId: string): boolean =>
+  state.taskResults[taskId]?.mergedSha !== undefined;
+
+const selectReadyTasks = (
   spec: SpecDocument,
-  state: RunState
-): { task: SpecTask; implDigest: string } | undefined => {
-  const completed = new Set(
-    Object.values(state.taskResults)
-      .filter(result => result.status === 'completed')
-      .map(result => result.taskId)
-  );
+  state: RunState,
+  maxParallel: number
+): { task: SpecTask; implDigest: string }[] => {
+  const ready: { task: SpecTask; implDigest: string }[] = [];
   for (const task of spec.tasks) {
-    if (!task.dependsOn.every(dep => completed.has(dep))) continue;
+    if (ready.length >= maxParallel) break;
+    if (!task.dependsOn.every(dep => isMerged(state, dep))) continue;
     const digest = implementationDigest(task, state.baseSha);
     const result = state.taskResults[task.id];
     if (result !== undefined) {
@@ -82,9 +98,9 @@ const selectReadyTask = (
         if (hasStep(state, 'phase', task.id)) continue;
       }
     }
-    return { task, implDigest: digest };
+    ready.push({ task, implDigest: digest });
   }
-  return undefined;
+  return ready;
 };
 
 @injectable()
@@ -100,7 +116,7 @@ export class ExecutorService implements IExecutorService {
     private readonly _runStateRepo: IRunStateRepository
   ) {}
 
-  async executeNext(input: ExecutorInput): Promise<ExecutorOutcome> {
+  async executeReady(input: PoolInput): Promise<PoolOutcome> {
     const spec = this._specDocRepo.read(input.specPath);
 
     if (spec.status !== 'Approved') {
@@ -113,49 +129,83 @@ export class ExecutorService implements IExecutorService {
         reasons: ['unapproved-spec'],
         recordedAt: new Date().toISOString()
       });
-      return { kind: 'blocked', spec, state, detail: 'unapproved-spec' };
+      return {
+        kind: 'blocked',
+        spec,
+        state,
+        detail: 'unapproved-spec',
+        outcomes: []
+      };
     }
 
     const existing = this._runStateRepo.load(input.runsDir, input.runId);
     const state: RunState = existing ?? this.initState(input, spec);
-    const selected = selectReadyTask(spec, state);
-    if (selected === undefined) {
+    const selected = selectReadyTasks(spec, state, input.maxParallel);
+    if (selected.length === 0) {
       // No side effects: nothing is persisted for a no-op invocation.
-      return { kind: 'no-ready-task', spec, state: existing };
+      return { kind: 'no-ready-task', spec, state: existing, outcomes: [] };
     }
-    const { task, implDigest } = selected;
 
-    const branch = taskBranch(input.runId, task.id);
-    const implKey = stepKey('implementation', task.id, implDigest);
-    if (
+    // Worktree creation mutates the shared .git directory — do it
+    // sequentially; only the agent runs themselves fan out.
+    const wave = selected.map(({ task, implDigest }) => ({
+      task,
+      implDigest,
+      branch: taskBranch(input.runId, task.id),
+      worktreePath: path.join(input.runsDir, input.runId, 'worktrees', task.id)
+    }));
+    for (const entry of wave) {
+      if (!this.isImplementationCached(state, entry.task.id, entry.implDigest))
+        this._gitRepo.addWorktree(
+          input.repoPath,
+          entry.worktreePath,
+          entry.branch,
+          state.baseSha
+        );
+    }
+
+    const outcomes = await Promise.all(
+      wave.map(entry => this.executeTask(input, spec, state, entry))
+    );
+    return { kind: 'executed', spec, state, outcomes };
+  }
+
+  private isImplementationCached(
+    state: RunState,
+    taskId: string,
+    implDigest: string
+  ): boolean {
+    const implKey = stepKey('implementation', taskId, implDigest);
+    return (
       state.steps[implKey] !== undefined &&
-      state.taskResults[task.id]?.status === 'completed'
-    ) {
+      state.taskResults[taskId]?.status === 'completed'
+    );
+  }
+
+  private async executeTask(
+    input: PoolInput,
+    spec: SpecDocument,
+    state: RunState,
+    entry: {
+      task: SpecTask;
+      implDigest: string;
+      branch: string;
+      worktreePath: string;
+    }
+  ): Promise<ExecutorOutcome> {
+    const { task, implDigest, branch, worktreePath } = entry;
+
+    if (this.isImplementationCached(state, task.id, implDigest)) {
       // T-09: implementation cached — reuse the branch, skip the agent.
       return {
         kind: 'completed',
-        spec,
-        state,
         task,
-        branch: state.taskResults[task.id].branch,
+        branch: state.taskResults[task.id].branch ?? branch,
         detail: 'implementation reused from step cache',
         cached: true,
         implDigest
       };
     }
-
-    const worktreePath = path.join(
-      input.runsDir,
-      input.runId,
-      'worktrees',
-      task.id
-    );
-    this._gitRepo.addWorktree(
-      input.repoPath,
-      worktreePath,
-      branch,
-      state.baseSha
-    );
 
     const prompt = buildImplementationPrompt(spec, task);
     let ok = false;
@@ -181,6 +231,9 @@ export class ExecutorService implements IExecutorService {
           : '');
     }
 
+    // Mutations of the shared state object are synchronous, so concurrent
+    // task completions serialize on the event loop — each recordTaskResult
+    // persists the full accumulated state and none are lost.
     this._runStateRepo.recordTaskResult(input.runsDir, state, {
       taskId: task.id,
       status: ok ? 'completed' : 'failed',
@@ -191,18 +244,21 @@ export class ExecutorService implements IExecutorService {
       recordedAt: new Date().toISOString()
     });
     if (ok) {
-      this._runStateRepo.recordStep(input.runsDir, state, implKey, {
-        name: 'implementation',
-        taskId: task.id,
-        inputsDigest: implDigest,
-        completedAt: new Date().toISOString()
-      });
+      this._runStateRepo.recordStep(
+        input.runsDir,
+        state,
+        stepKey('implementation', task.id, implDigest),
+        {
+          name: 'implementation',
+          taskId: task.id,
+          inputsDigest: implDigest,
+          completedAt: new Date().toISOString()
+        }
+      );
     }
 
     return {
       kind: ok ? 'completed' : 'failed',
-      spec,
-      state,
       task,
       branch,
       detail: detail.length > 0 ? detail : undefined,

@@ -29,10 +29,26 @@ const INPUT = {
   specPath: '/specs/spec.md',
   repoPath: '/repo',
   runId: 'run-1',
-  runsDir: '/runs'
+  runsDir: '/runs',
+  maxParallel: 3
 };
 
-describe('ExecutorService (T-01)', () => {
+const baseState = (): RunState => ({
+  runId: 'run-1',
+  specId: 'SPEC-PRD-0099-P2',
+  specPath: INPUT.specPath,
+  baseSha: 'base-sha',
+  taskResults: {},
+  verdicts: [],
+  exceptions: [],
+  criterionVerdicts: [],
+  steps: {},
+  tokenSpendK: 0,
+  ciFixAttempts: {},
+  updatedAt: 'x'
+});
+
+describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
   let executor: IExecutorService;
   let specRead: jest.Mock;
   let gitMock: jest.Mocked<IGitRepository>;
@@ -59,12 +75,17 @@ describe('ExecutorService (T-01)', () => {
       load: jest.fn().mockReturnValue(null),
       save: jest.fn(),
       appendVerdict: jest.fn(),
-      recordTaskResult: jest.fn(),
+      recordTaskResult: jest
+        .fn()
+        .mockImplementation((_d, state: RunState, result) => {
+          state.taskResults[result.taskId] = result;
+        }),
       recordExceptions: jest.fn(),
       recordSandbox: jest.fn(),
       recordCriteria: jest.fn(),
       recordStep: jest.fn(),
-      recordMergedSha: jest.fn()
+      recordMergedSha: jest.fn(),
+      recordTaskMerged: jest.fn()
     };
 
     const container = new Container();
@@ -89,10 +110,10 @@ describe('ExecutorService (T-01)', () => {
   it('refuses an unapproved spec and records a blocked verdict', async () => {
     specRead.mockReturnValue(makeSpec({ status: 'Draft' }));
 
-    const outcome = await executor.executeNext(INPUT);
+    const pool = await executor.executeReady(INPUT);
 
-    expect(outcome.kind).toBe('blocked');
-    expect(outcome.detail).toBe('unapproved-spec');
+    expect(pool.kind).toBe('blocked');
+    expect(pool.detail).toBe('unapproved-spec');
     expect(stateMock.appendVerdict).toHaveBeenCalledWith(
       '/runs',
       expect.anything(),
@@ -107,64 +128,92 @@ describe('ExecutorService (T-01)', () => {
     expect(gitMock.addWorktree).not.toHaveBeenCalled();
   });
 
-  it('selects exactly one ready task (dependsOn satisfied)', async () => {
-    const outcome = await executor.executeNext(INPUT);
+  it('starts only tasks whose dependencies are merged', async () => {
+    const pool = await executor.executeReady(INPUT);
 
-    expect(outcome.kind).toBe('completed');
-    expect(outcome.task?.id).toBe('T-01'); // T-02 depends on T-01
+    // T-02 depends on T-01, which is not merged: only T-01 starts.
+    expect(pool.kind).toBe('executed');
+    expect(pool.outcomes.map(o => o.task.id)).toEqual(['T-01']);
     expect(agentRun).toHaveBeenCalledTimes(1);
   });
 
-  it('selects the next task once its dependencies are completed', async () => {
-    const existing: RunState = {
-      runId: 'run-1',
-      specId: 'SPEC-PRD-0099-P2',
-      specPath: INPUT.specPath,
-      baseSha: 'base-sha',
-      taskResults: {
-        'T-01': {
-          taskId: 'T-01',
-          status: 'completed',
-          recordedAt: 'x'
-        }
-      },
-      verdicts: [],
-      exceptions: [],
-      criterionVerdicts: [],
-      steps: {},
-      tokenSpendK: 0,
-      ciFixAttempts: {},
-      updatedAt: 'x'
+  it('a completed but unmerged dependency does not unblock its dependents', async () => {
+    const state = baseState();
+    const digest = implementationDigest(makeSpec().tasks[0], 'base-sha');
+    state.taskResults['T-01'] = {
+      taskId: 'T-01',
+      status: 'completed',
+      branch: 'sdlc/run-1/T-01',
+      inputsDigest: digest,
+      recordedAt: 'x'
     };
-    stateMock.load.mockReturnValue(existing);
+    state.steps[stepKey('implementation', 'T-01', digest)] = {
+      name: 'implementation',
+      taskId: 'T-01',
+      inputsDigest: digest,
+      completedAt: 'x'
+    };
+    state.steps[stepKey('phase', 'T-01', 'p')] = {
+      name: 'phase',
+      taskId: 'T-01',
+      inputsDigest: 'p',
+      completedAt: 'x'
+    };
+    stateMock.load.mockReturnValue(state);
 
-    const outcome = await executor.executeNext(INPUT);
-    expect(outcome.task?.id).toBe('T-02');
+    const pool = await executor.executeReady(INPUT);
+
+    // T-01 is done (phase landed) but unmerged: T-02 stays ineligible.
+    expect(pool.kind).toBe('no-ready-task');
+    expect(agentRun).not.toHaveBeenCalled();
+  });
+
+  it('a merged dependency unblocks its dependents', async () => {
+    const state = baseState();
+    const digest = implementationDigest(makeSpec().tasks[0], 'base-sha');
+    state.taskResults['T-01'] = {
+      taskId: 'T-01',
+      status: 'completed',
+      branch: 'sdlc/run-1/T-01',
+      inputsDigest: digest,
+      mergedSha: 'merge-sha',
+      recordedAt: 'x'
+    };
+    state.steps[stepKey('implementation', 'T-01', digest)] = {
+      name: 'implementation',
+      taskId: 'T-01',
+      inputsDigest: digest,
+      completedAt: 'x'
+    };
+    state.steps[stepKey('phase', 'T-01', 'p')] = {
+      name: 'phase',
+      taskId: 'T-01',
+      inputsDigest: 'p',
+      completedAt: 'x'
+    };
+    stateMock.load.mockReturnValue(state);
+
+    const pool = await executor.executeReady(INPUT);
+
+    expect(pool.outcomes.map(o => o.task.id)).toEqual(['T-02']);
+    expect(agentRun).toHaveBeenCalledTimes(1);
   });
 
   it('reports no-ready-task without side effects when none qualify', async () => {
-    const existing: RunState = {
-      runId: 'run-1',
-      specId: 'SPEC-PRD-0099-P2',
-      specPath: INPUT.specPath,
-      baseSha: 'base-sha',
-      taskResults: {
-        'T-01': { taskId: 'T-01', status: 'failed', recordedAt: 'x' }
-      },
-      verdicts: [],
-      exceptions: [],
-      criterionVerdicts: [],
-      steps: {},
-      tokenSpendK: 0,
-      ciFixAttempts: {},
-      updatedAt: 'x'
+    const state = baseState();
+    const digest = implementationDigest(makeSpec().tasks[0], 'base-sha');
+    state.taskResults['T-01'] = {
+      taskId: 'T-01',
+      status: 'failed',
+      inputsDigest: digest,
+      recordedAt: 'x'
     };
-    stateMock.load.mockReturnValue(existing);
+    stateMock.load.mockReturnValue(state);
 
-    const outcome = await executor.executeNext(INPUT);
+    const pool = await executor.executeReady(INPUT);
 
-    // T-01 already attempted (failed), T-02's dependency is unmet.
-    expect(outcome.kind).toBe('no-ready-task');
+    // T-01 already attempted (failed), T-02's dependency is unmerged.
+    expect(pool.kind).toBe('no-ready-task');
     expect(stateMock.save).not.toHaveBeenCalled();
     expect(stateMock.recordTaskResult).not.toHaveBeenCalled();
     expect(agentRun).not.toHaveBeenCalled();
@@ -172,7 +221,7 @@ describe('ExecutorService (T-01)', () => {
   });
 
   it('runs the agent in a worktree on a deterministic branch', async () => {
-    await executor.executeNext(INPUT);
+    await executor.executeReady(INPUT);
 
     const expectedBranch = taskBranch('run-1', 'T-01');
     expect(expectedBranch).toBe('sdlc/run-1/T-01');
@@ -192,9 +241,9 @@ describe('ExecutorService (T-01)', () => {
   it('records a failure result instead of throwing when the agent fails', async () => {
     agentRun.mockResolvedValue({ ok: false, output: 'agent exploded' });
 
-    const outcome = await executor.executeNext(INPUT);
+    const pool = await executor.executeReady(INPUT);
 
-    expect(outcome.kind).toBe('failed');
+    expect(pool.outcomes[0].kind).toBe('failed');
     expect(stateMock.recordTaskResult).toHaveBeenCalledWith(
       '/runs',
       expect.anything(),
@@ -210,10 +259,10 @@ describe('ExecutorService (T-01)', () => {
   it('records a failure result when the agent runner throws', async () => {
     agentRun.mockRejectedValue(new Error('spawn refused'));
 
-    const outcome = await executor.executeNext(INPUT);
+    const pool = await executor.executeReady(INPUT);
 
-    expect(outcome.kind).toBe('failed');
-    expect(outcome.detail).toBe('spawn refused');
+    expect(pool.outcomes[0].kind).toBe('failed');
+    expect(pool.outcomes[0].detail).toBe('spawn refused');
   });
 
   it('records a failure when the agent exits ok without committing', async () => {
@@ -221,11 +270,11 @@ describe('ExecutorService (T-01)', () => {
     gitMock.headSha.mockReturnValue('base-sha');
     gitMock.status.mockReturnValue(' M docs/live-validation.md\n');
 
-    const outcome = await executor.executeNext(INPUT);
+    const pool = await executor.executeReady(INPUT);
 
-    expect(outcome.kind).toBe('failed');
-    expect(outcome.detail).toContain('produced no commit');
-    expect(outcome.detail).toContain('docs/live-validation.md');
+    expect(pool.outcomes[0].kind).toBe('failed');
+    expect(pool.outcomes[0].detail).toContain('produced no commit');
+    expect(pool.outcomes[0].detail).toContain('docs/live-validation.md');
     expect(stateMock.recordTaskResult).toHaveBeenCalledWith(
       '/runs',
       expect.anything(),
@@ -234,24 +283,88 @@ describe('ExecutorService (T-01)', () => {
     expect(stateMock.recordStep).not.toHaveBeenCalled();
   });
 
-  describe('T-09 step cache', () => {
-    const baseState = (): RunState => ({
-      runId: 'run-1',
-      specId: 'SPEC-PRD-0099-P2',
-      specPath: INPUT.specPath,
-      baseSha: 'base-sha',
-      taskResults: {},
-      verdicts: [],
-      exceptions: [],
-      criterionVerdicts: [],
-      steps: {},
-      tokenSpendK: 0,
-      ciFixAttempts: {},
-      updatedAt: 'x'
+  describe('P3 T-01 parallel pool', () => {
+    const independentSpec = (): SpecDocument =>
+      makeSpec({
+        tasks: [makeTask(), makeTask({ id: 'T-02' }), makeTask({ id: 'T-03' })]
+      });
+
+    it('executes independent ready tasks concurrently in separate worktrees', async () => {
+      specRead.mockReturnValue(independentSpec());
+      // Neither agent resolves until both have been started — proof the
+      // fan-out is concurrent, not sequential.
+      const resolvers: ((v: { ok: boolean; output: string }) => void)[] = [];
+      agentRun.mockImplementation(
+        () =>
+          new Promise(resolve => {
+            resolvers.push(resolve);
+          })
+      );
+
+      const poolPromise = executor.executeReady({ ...INPUT, maxParallel: 2 });
+      await new Promise(resolve => setImmediate(resolve));
+      expect(agentRun).toHaveBeenCalledTimes(2);
+      // Completion order is reversed: results must still be recorded per
+      // task, serialized on the shared state, none lost.
+      resolvers[1]({ ok: true, output: 'done' });
+      resolvers[0]({ ok: true, output: 'done' });
+      const pool = await poolPromise;
+
+      expect(pool.outcomes.map(o => o.task.id).sort()).toEqual([
+        'T-01',
+        'T-02'
+      ]);
+      const worktrees = agentRun.mock.calls.map(call => call[0]);
+      expect(new Set(worktrees).size).toBe(2);
+      const recorded = stateMock.recordTaskResult.mock.calls.map(
+        call => call[2].taskId
+      );
+      expect(recorded.sort()).toEqual(['T-01', 'T-02']);
+      const state = pool.state as RunState;
+      expect(state.taskResults['T-01']).toBeDefined();
+      expect(state.taskResults['T-02']).toBeDefined();
     });
 
+    it('bounds the wave at maxParallel', async () => {
+      specRead.mockReturnValue(independentSpec());
+
+      const pool = await executor.executeReady({ ...INPUT, maxParallel: 2 });
+
+      expect(pool.outcomes).toHaveLength(2);
+      expect(agentRun).toHaveBeenCalledTimes(2);
+    });
+
+    it('a failed task blocks its dependents while unrelated tasks proceed', async () => {
+      specRead.mockReturnValue(
+        makeSpec({
+          tasks: [
+            makeTask(),
+            makeTask({ id: 'T-02', dependsOn: ['T-01'] }),
+            makeTask({ id: 'T-03' })
+          ]
+        })
+      );
+      const state = baseState();
+      state.taskResults['T-01'] = {
+        taskId: 'T-01',
+        status: 'failed',
+        inputsDigest: implementationDigest(makeTask(), 'base-sha'),
+        recordedAt: 'x'
+      };
+      stateMock.load.mockReturnValue(state);
+
+      const pool = await executor.executeReady(INPUT);
+
+      // T-01 failed (not retried at unchanged content), T-02 blocked on it,
+      // T-03 is unrelated and completes.
+      expect(pool.outcomes.map(o => o.task.id)).toEqual(['T-03']);
+      expect(pool.outcomes[0].kind).toBe('completed');
+    });
+  });
+
+  describe('T-09 step cache', () => {
     it('records the implementation step on success', async () => {
-      await executor.executeNext(INPUT);
+      await executor.executeReady(INPUT);
 
       const digest = implementationDigest(makeSpec().tasks[0], 'base-sha');
       expect(stateMock.recordStep).toHaveBeenCalledWith(
@@ -269,7 +382,7 @@ describe('ExecutorService (T-01)', () => {
     it('does not record a step for a failed implementation', async () => {
       agentRun.mockResolvedValue({ ok: false, output: 'boom' });
 
-      await executor.executeNext(INPUT);
+      await executor.executeReady(INPUT);
 
       expect(stateMock.recordStep).not.toHaveBeenCalled();
     });
@@ -293,45 +406,14 @@ describe('ExecutorService (T-01)', () => {
       };
       stateMock.load.mockReturnValue(state);
 
-      const outcome = await executor.executeNext(INPUT);
+      const pool = await executor.executeReady(INPUT);
 
-      expect(outcome.kind).toBe('completed');
-      expect(outcome.cached).toBe(true);
-      expect(outcome.task?.id).toBe('T-01');
-      expect(outcome.branch).toBe('sdlc/run-1/T-01');
+      expect(pool.outcomes[0].kind).toBe('completed');
+      expect(pool.outcomes[0].cached).toBe(true);
+      expect(pool.outcomes[0].task.id).toBe('T-01');
+      expect(pool.outcomes[0].branch).toBe('sdlc/run-1/T-01');
       expect(agentRun).not.toHaveBeenCalled();
       expect(gitMock.addWorktree).not.toHaveBeenCalled();
-    });
-
-    it('skips a task whose phase verdict landed and picks the next one', async () => {
-      const task = makeSpec().tasks[0];
-      const digest = implementationDigest(task, 'base-sha');
-      const state = baseState();
-      state.taskResults['T-01'] = {
-        taskId: 'T-01',
-        status: 'completed',
-        branch: 'sdlc/run-1/T-01',
-        inputsDigest: digest,
-        recordedAt: 'x'
-      };
-      state.steps[stepKey('implementation', 'T-01', digest)] = {
-        name: 'implementation',
-        taskId: 'T-01',
-        inputsDigest: digest,
-        completedAt: 'x'
-      };
-      state.steps[stepKey('phase', 'T-01', 'phase-digest')] = {
-        name: 'phase',
-        taskId: 'T-01',
-        inputsDigest: 'phase-digest',
-        completedAt: 'x'
-      };
-      stateMock.load.mockReturnValue(state);
-
-      const outcome = await executor.executeNext(INPUT);
-
-      expect(outcome.task?.id).toBe('T-02');
-      expect(agentRun).toHaveBeenCalledTimes(1);
     });
 
     it('re-runs a task whose spec content changed, leaving other tasks cached (invalidation)', async () => {
@@ -367,14 +449,14 @@ describe('ExecutorService (T-01)', () => {
       };
       stateMock.load.mockReturnValue(state);
 
-      const outcome = await executor.executeNext(INPUT);
+      const pool = await executor.executeReady(INPUT);
 
       // The edited task is re-selected and the agent re-invoked.
-      expect(outcome.task?.id).toBe('T-01');
-      expect(outcome.cached).toBe(false);
+      expect(pool.outcomes[0].task.id).toBe('T-01');
+      expect(pool.outcomes[0].cached).toBe(false);
       expect(agentRun).toHaveBeenCalledTimes(1);
       // Only T-01's chain is invalidated: T-02's cached step is untouched.
-      expect(state.steps[otherKey]).toBeDefined();
+      expect((pool.state as RunState).steps[otherKey]).toBeDefined();
     });
 
     it('does not retry a failed attempt at unchanged content', async () => {
@@ -389,9 +471,9 @@ describe('ExecutorService (T-01)', () => {
       };
       stateMock.load.mockReturnValue(state);
 
-      const outcome = await executor.executeNext(INPUT);
+      const pool = await executor.executeReady(INPUT);
 
-      expect(outcome.kind).toBe('no-ready-task');
+      expect(pool.kind).toBe('no-ready-task');
       expect(agentRun).not.toHaveBeenCalled();
     });
 
@@ -405,9 +487,9 @@ describe('ExecutorService (T-01)', () => {
       };
       stateMock.load.mockReturnValue(state);
 
-      const outcome = await executor.executeNext(INPUT);
+      const pool = await executor.executeReady(INPUT);
 
-      expect(outcome.task?.id).toBe('T-01');
+      expect(pool.outcomes[0].task.id).toBe('T-01');
       expect(agentRun).toHaveBeenCalledTimes(1);
     });
   });

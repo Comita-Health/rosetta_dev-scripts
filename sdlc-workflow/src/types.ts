@@ -87,6 +87,12 @@ export interface TaskRunResult {
   detail?: string;
   /** Implementation-step digest the attempt ran against (T-09). */
   inputsDigest?: string;
+  /**
+   * Merge commit SHA of this task's branch. P3 T-01 dependency semantics:
+   * a task is eligible only when every dependsOn task is *merged*, not
+   * merely implemented. Set by auto-merge (P3 T-04) or `record-merge --task`.
+   */
+  mergedSha?: string;
   recordedAt: string; // ISO timestamp
 }
 

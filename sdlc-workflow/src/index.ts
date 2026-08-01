@@ -252,7 +252,7 @@ yargs(hideBin(process.argv))
   )
   .command(
     'run',
-    'Execute one ready task from an Approved spec (shadow-mode gates, halts for human review)',
+    'Execute all ready tasks from an Approved spec in parallel worktrees (shadow-mode gates, halts for human review)',
     y =>
       y
         .option('spec', {
@@ -279,6 +279,12 @@ yargs(hideBin(process.argv))
           type: 'string',
           describe:
             'Personal Chronicle ledger repo — enables the T-07 queue digest and T-08 artifact commits'
+        })
+        .option('max-parallel', {
+          type: 'number',
+          default: 3,
+          describe:
+            'Upper bound on concurrently running implementation agents (P3 T-01)'
         }),
     async argv => {
       const handler = container.get<IRunHandler>(WORKFLOW_TOKENS.RunHandler);
@@ -293,9 +299,11 @@ yargs(hideBin(process.argv))
           repoPath: argv.repo,
           runId,
           runsDir: argv['runs-dir'],
-          chronicleRepo: argv['chronicle-repo']
+          chronicleRepo: argv['chronicle-repo'],
+          maxParallel: argv['max-parallel']
         });
-        if (result.outcome === 'blocked' || result.outcome === 'failed') {
+        const anyFailed = result.tasks.some(task => task.kind === 'failed');
+        if (result.outcome === 'blocked' || anyFailed) {
           process.exit(1);
         }
       } catch (err) {
@@ -331,6 +339,11 @@ yargs(hideBin(process.argv))
           demandOption: true,
           describe: 'Personal Chronicle ledger repo'
         })
+        .option('task', {
+          type: 'string',
+          describe:
+            'Task ID the merge belongs to — marks it merged, unblocking dependents (P3 T-01)'
+        })
         .option('runs-dir', {
           type: 'string',
           default: path.join(os.homedir(), '.rosetta', 'sdlc-runs'),
@@ -343,7 +356,8 @@ yargs(hideBin(process.argv))
           chronicleRepo: argv['chronicle-repo'],
           runsDir: argv['runs-dir'],
           runId: argv['run-id'],
-          mergedSha: argv.sha
+          mergedSha: argv.sha,
+          taskId: argv.task
         });
       } catch (err) {
         if (err instanceof WorkflowError) {

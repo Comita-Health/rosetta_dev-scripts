@@ -221,6 +221,37 @@ describe('ChronicleCommitService + GatePolicyQueryService (T-08)', () => {
     expect(message).toContain('chronicle(sdlc): run-1 merged at abc123def456');
   });
 
+  it('record-merge with a task ID also marks that task merged (P3 T-01)', async () => {
+    const state = makeState();
+    state.taskResults['T-01'] = {
+      taskId: 'T-01',
+      status: 'completed',
+      recordedAt: 'x'
+    };
+    stateRepo.save(runsDir, state);
+
+    await service.recordMerge({
+      chronicleRepo: ledger,
+      runsDir,
+      runId: 'run-1',
+      mergedSha: 'abc123def456',
+      taskId: 'T-01'
+    });
+
+    const reloaded = stateRepo.load(runsDir, 'run-1');
+    expect(reloaded?.taskResults['T-01'].mergedSha).toBe('abc123def456');
+
+    const repo = new ChronicleArtifactRepository();
+    const merge = repo
+      .readArtifacts(ledger, 'run-1')
+      .find(artifact => artifact.schema === 'sdlc.merge.v1');
+    expect(merge?.payload).toEqual({
+      mergedSha: 'abc123def456',
+      approvedBy: 'human',
+      taskId: 'T-01'
+    });
+  });
+
   it('rejects record-merge for an unknown run', async () => {
     await expect(
       service.recordMerge({

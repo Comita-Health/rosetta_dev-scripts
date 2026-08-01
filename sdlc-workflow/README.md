@@ -8,9 +8,14 @@ PRD-0011 (Full-Loop SDLC Automation):
   implementation spec with a blast-radius envelope, write it to the target
   repo as `Draft`, and stop at the human gate.
 - **Phase 2** (`run`, [SPEC-PRD-0011-P2](../specs/PRD-0011/phase-2-spec.md),
-  in progress): execute one ready task from an Approved spec in an isolated
+  done): execute one ready task from an Approved spec in an isolated
   worktree, run machine gates in **shadow mode** (verdicts recorded, never
   enforced), and halt — human approval is the only advance mechanism.
+- **Phase 3** ([SPEC-PRD-0011-P3](../specs/PRD-0011/phase-3-spec.md), in
+  progress): parallel fan-out across ready tasks, real PR lifecycle with a
+  bounded CI fix cycle, gate enforcement with auto-merge on green,
+  post-merge sandbox deploy + PRD-0007 digest with veto-triggered revert.
+  Landed so far: the T-01 dependency-ordered task pool.
 
 ## Usage
 
@@ -26,8 +31,8 @@ bun run dev -- decompose --prd PRD-0011 --repo ../../rosetta_chronicle
 #   --phase      rollout phase to specify (default: 1)
 #   --budget-k   token budget in thousands, recorded in the envelope (default: 200)
 
-# Phase 2: execute one ready task from an Approved spec
-bun run dev -- run --spec ../specs/PRD-0011/phase-2-spec.md --repo .. \
+# Execute all ready tasks from an Approved spec (parallel worktrees)
+bun run dev -- run --spec ../specs/PRD-0011/phase-3-spec.md --repo .. \
   --chronicle-repo ../../rosetta_chronicle_roustalski
 
 # Options
@@ -36,10 +41,12 @@ bun run dev -- run --spec ../specs/PRD-0011/phase-2-spec.md --repo .. \
 #   --runs-dir        run state + worktrees location (default: ~/.rosetta/sdlc-runs)
 #   --chronicle-repo  personal Chronicle ledger repo; enables the T-07 queue
 #                     digest and T-08 artifact commits (skipped when absent)
+#   --max-parallel    concurrent implementation agents per wave (default: 3)
 
-# Record a human-approved merge in the run's Chronicle artifact (T-08)
+# Record a human-approved merge in the run's Chronicle artifact (T-08);
+# --task marks that task merged, which unblocks its dependents (P3 T-01)
 bun run dev -- record-merge --run-id <run-id> --sha <merged-sha> \
-  --chronicle-repo ../../rosetta_chronicle_roustalski
+  --task T-01 --chronicle-repo ../../rosetta_chronicle_roustalski
 
 # Inspect a run: task results, cached step graph, verdicts, exceptions (T-09)
 bun run dev -- status --run-id <run-id>
@@ -141,13 +148,15 @@ operator-auth pattern as `gh`).
 Handler / Service / Repository with InversifyJS (workspace rule):
 
 - `handlers/workflow.handler.ts` — Phase 1 pipeline, prints the gate.
-- `handlers/run.handler.ts` — Phase 2 single-task loop: executor + shadow
-  gates + digest/Chronicle steps, all through the T-09 step cache.
+- `handlers/run.handler.ts` — pooled task loop: parallel executor wave +
+  per-task shadow gates + digest/Chronicle steps, all through the T-09
+  step cache.
 - `services/decompose.service.ts` — PRD → `ProductStory[]` (right-sizing prompt).
 - `services/spec-synthesis.service.ts` — stories → tasks + envelope → validated
   ADR-0008 Markdown.
-- `services/executor.service.ts` — approved-spec intake, single ready-task
-  selection, worktree + implementation-agent execution (T-01).
+- `services/executor.service.ts` — approved-spec intake and the P3 T-01
+  task pool: merged-dependency eligibility, bounded parallel agent
+  fan-out, one worktree per task.
 - `services/envelope-gate.service.ts` — diff vs blast-radius envelope,
   shadow-mode verdict (T-02).
 - `services/sandbox-deploy.service.ts` — task-branch build → sandbox via the
