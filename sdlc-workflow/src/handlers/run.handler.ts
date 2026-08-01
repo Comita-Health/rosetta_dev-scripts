@@ -14,6 +14,7 @@ import type {
   IExecutorService,
   PoolInput
 } from '../services/executor.service';
+import type { IPullRequestRepository } from '../repositories/pull-request.repository';
 import type { IPrLifecycleService } from '../services/pr-lifecycle.service';
 import type { IReviewerGateService } from '../services/reviewer-gate.service';
 import type { ISandboxDeployService } from '../services/sandbox-deploy.service';
@@ -39,6 +40,11 @@ export interface RunTaskInput extends PoolInput {
    * artifacts (T-08). Absent → both steps are skipped with a notice.
    */
   chronicleRepo?: string;
+  /**
+   * P3 T-04 calibration mode: verdicts are recorded but no merge call is
+   * ever issued, regardless of gate outcomes. Default is enforcing.
+   */
+  shadow?: boolean;
 }
 
 export interface RunTaskResult {
@@ -96,6 +102,8 @@ export class RunHandler implements IRunHandler {
     private readonly _reviewerGate: IReviewerGateService,
     @inject(WORKFLOW_TOKENS.PrLifecycleService)
     private readonly _prLifecycle: IPrLifecycleService,
+    @inject(WORKFLOW_TOKENS.PullRequestRepository)
+    private readonly _prRepo: IPullRequestRepository,
     @inject(WORKFLOW_TOKENS.SandboxDeployService)
     private readonly _sandboxDeploy: ISandboxDeployService,
     @inject(WORKFLOW_TOKENS.VerificationService)
@@ -165,11 +173,19 @@ export class RunHandler implements IRunHandler {
       }
     }
 
-    console.log(chalk.bold('\n[HUMAN GATE] Shadow mode — nothing advances.'));
-    console.log('  Review the task branches and the recorded verdicts;');
-    console.log(
-      '  merging (or not) is your call. Gate enforcement lands in P3 T-04.'
-    );
+    if (input.shadow === true) {
+      console.log(chalk.bold('\n[HUMAN GATE] Shadow mode — nothing advances.'));
+      console.log('  Review the task branches and the recorded verdicts;');
+      console.log('  merging (or not) is your call.');
+    } else {
+      console.log(
+        chalk.bold('\n[ENFORCING] Green gates merged automatically;')
+      );
+      console.log(
+        '  red gates blocked and escalated. Promotion beyond the sandbox'
+      );
+      console.log('  remains a human decision.');
+    }
 
     return {
       outcome: pool.kind,
@@ -347,7 +363,129 @@ export class RunHandler implements IRunHandler {
       }
     }
 
+    // P3 T-04: enforcement. Green across the board auto-merges; any red
+    // gate blocks and escalates. There is no code path that merges on red.
+    await this.enforcementStep(input, state, task, chain, phaseVerdict);
+
     await this.chronicleSteps(input, state, task, spec, chain, phaseVerdict);
+  }
+
+  /**
+   * The enforcing phase gate (P3 T-04). Exactly one code path reaches a
+   * merge call: enforcing mode AND a pass phase verdict AND a recorded PR.
+   * Shadow mode records verdicts and never merges (calibration for new
+   * repos). A red verdict records a merge-blocked escalation; the task
+   * halts by staying unmerged, which is what blocks its dependents (T-01).
+   */
+  private async enforcementStep(
+    input: RunTaskInput,
+    state: RunState,
+    task: SpecTask,
+    chain: { implDigest?: string; headSha: string },
+    phaseVerdict: GateVerdict
+  ): Promise<void> {
+    if (input.shadow === true) {
+      console.log(
+        chalk.gray('  [shadow] enforcement off — verdicts recorded, no merge')
+      );
+      return;
+    }
+
+    if (phaseVerdict.outcome !== 'pass') {
+      this._runStateRepo.recordExceptions(input.runsDir, state, [
+        {
+          trigger: 'merge-blocked',
+          taskId: task.id,
+          context: phaseVerdict.reasons,
+          recordedAt: new Date().toISOString()
+        }
+      ]);
+      console.log(
+        chalk.red(
+          `  [enforce] merge blocked for ${task.id}: ${phaseVerdict.reasons.join('; ')}`
+        )
+      );
+      return;
+    }
+
+    const digest = inputsDigest({ ...chain, step: 'merge' });
+    const key = stepKey('merge', task.id, digest);
+    const cached = state.steps[key];
+    if (cached !== undefined) {
+      console.log(
+        chalk.gray(`  [cached] already merged (${cached.detail ?? 'no SHA'})`)
+      );
+      return;
+    }
+
+    const prUrl = state.taskResults[task.id]?.prUrl;
+    const prNumber = prUrl?.match(/\/pull\/(\d+)$/)?.[1];
+    if (prUrl === undefined || prNumber === undefined) {
+      this._runStateRepo.recordExceptions(input.runsDir, state, [
+        {
+          trigger: 'merge-blocked',
+          taskId: task.id,
+          context: ['all gates green but no PR is recorded for the task'],
+          recordedAt: new Date().toISOString()
+        }
+      ]);
+      console.log(
+        chalk.red(`  [enforce] ${task.id} green but has no PR — cannot merge`)
+      );
+      return;
+    }
+
+    try {
+      const mergedSha = this._prRepo.merge(input.repoPath, Number(prNumber));
+      this._runStateRepo.recordTaskMerged(
+        input.runsDir,
+        state,
+        task.id,
+        mergedSha
+      );
+      this._runStateRepo.recordMergedSha(input.runsDir, state, mergedSha);
+      this._runStateRepo.recordStep(input.runsDir, state, key, {
+        name: 'merge',
+        taskId: task.id,
+        inputsDigest: digest,
+        detail: mergedSha,
+        completedAt: new Date().toISOString()
+      });
+      if (input.chronicleRepo !== undefined) {
+        // The sdlc.merge.v1 artifact, attributed to the machine gates.
+        await this._chronicle.recordMerge({
+          chronicleRepo: input.chronicleRepo,
+          runsDir: input.runsDir,
+          runId: input.runId,
+          mergedSha,
+          taskId: task.id,
+          approvedBy: 'machine-gates'
+        });
+      }
+      console.log(
+        chalk.green(
+          `  [enforce] all gates green — merged ${prUrl} at ${mergedSha.slice(0, 12)}`
+        )
+      );
+    } catch (err) {
+      const detail =
+        err instanceof WorkflowError
+          ? [err.message, ...err.details].join(': ')
+          : String(err);
+      this._runStateRepo.recordExceptions(input.runsDir, state, [
+        {
+          trigger: 'merge-blocked',
+          taskId: task.id,
+          context: [`merge call failed: ${detail.slice(0, 500)}`],
+          recordedAt: new Date().toISOString()
+        }
+      ]);
+      console.log(
+        chalk.red(
+          `  [enforce] merge failed for ${task.id}: ${detail.slice(0, 300)}`
+        )
+      );
+    }
   }
 
   showStatus(input: StatusCliInput): void {

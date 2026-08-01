@@ -32,6 +32,8 @@ export interface RecordMergeInput {
    * which is what makes its dependents eligible in the pool.
    */
   taskId?: string;
+  /** P3 T-04: who authorized the merge. Defaults to 'human'. */
+  approvedBy?: 'human' | 'machine-gates';
 }
 
 /**
@@ -161,7 +163,7 @@ export class ChronicleCommitService implements IChronicleCommitService {
         recordedAt: new Date().toISOString(),
         payload: {
           mergedSha: input.mergedSha,
-          approvedBy: 'human',
+          approvedBy: input.approvedBy ?? 'human',
           ...(input.taskId !== undefined ? { taskId: input.taskId } : {})
         }
       }

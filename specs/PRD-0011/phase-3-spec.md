@@ -72,9 +72,9 @@ Flip the aggregate phase gate from shadow to enforcing: when envelope, verificat
 
 ### Acceptance criteria
 
-- [ ] test: with all four gates green the task PR is merged automatically and the merged SHA is recorded in the run state and Chronicle merge artifact
-- [ ] test: each single red gate (envelope breach, verification fail, reviewer disagree, CI fail) blocks the merge, records the escalation, and no merge call is issued — asserted for all four gates
-- [ ] test: with the shadow flag set, verdicts are recorded but no merge call is ever issued regardless of gate outcomes
+- [x] test: with all four gates green the task PR is merged automatically and the merged SHA is recorded in the run state and Chronicle merge artifact
+- [x] test: each single red gate (envelope breach, verification fail, reviewer disagree, CI fail) blocks the merge, records the escalation, and no merge call is issued — asserted for all four gates
+- [x] test: with the shadow flag set, verdicts are recorded but no merge call is ever issued regardless of gate outcomes
 - [ ] agent: on a live run, a task with all gates green auto-merges its PR and the recorded merged SHA matches the remote merge commit
 
 ## Task T-05: Post-merge sandbox deploy, digest, and veto-triggered revert

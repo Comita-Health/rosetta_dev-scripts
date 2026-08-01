@@ -299,6 +299,12 @@ yargs(hideBin(process.argv))
           default: 3,
           describe:
             'Upper bound on concurrently running implementation agents (P3 T-01)'
+        })
+        .option('shadow', {
+          type: 'boolean',
+          default: false,
+          describe:
+            'Calibration mode: record gate verdicts but never merge (P3 T-04)'
         }),
     async argv => {
       const handler = container.get<IRunHandler>(WORKFLOW_TOKENS.RunHandler);
@@ -314,7 +320,8 @@ yargs(hideBin(process.argv))
           runId,
           runsDir: argv['runs-dir'],
           chronicleRepo: argv['chronicle-repo'],
-          maxParallel: argv['max-parallel']
+          maxParallel: argv['max-parallel'],
+          shadow: argv.shadow
         });
         const anyFailed = result.tasks.some(task => task.kind === 'failed');
         if (result.outcome === 'blocked' || anyFailed) {
