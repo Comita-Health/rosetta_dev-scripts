@@ -630,6 +630,49 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
       expect(pool.outcomes[0].task.id).toBe('T-01');
       expect(agentRun).toHaveBeenCalledTimes(1);
     });
+
+    it('does not reopen a merged task when the integration tip advances (#44 tip digest)', async () => {
+      // Live-val shadow-2: after record-merge of T-02, state.mergedSha moves
+      // to the merge tip → implementationDigest(T-02, tip) changes → without
+      // an isMerged guard T-02 was re-selected, produced an empty diff, and
+      // blocked T-03.
+      const t01 = makeTask();
+      const t02 = makeTask({ id: 'T-02', dependsOn: ['T-01'] });
+      const t03 = makeTask({ id: 'T-03', dependsOn: ['T-02'] });
+      specRead.mockReturnValue(makeSpec({ tasks: [t01, t02, t03] }));
+
+      const oldTip = 'merge-t01';
+      const newTip = 'merge-t02';
+      const state = baseState();
+      state.mergedSha = newTip;
+      state.taskResults['T-01'] = {
+        taskId: 'T-01',
+        status: 'completed',
+        mergedSha: oldTip,
+        inputsDigest: implementationDigest(t01, 'base-sha'),
+        recordedAt: 'x'
+      };
+      state.taskResults['T-02'] = {
+        taskId: 'T-02',
+        status: 'completed',
+        mergedSha: newTip,
+        // Digest rooted at the tip used when T-02 originally ran.
+        inputsDigest: implementationDigest(t02, oldTip),
+        recordedAt: 'x'
+      };
+      state.steps[stepKey('phase', 'T-02', 'old-phase')] = {
+        name: 'phase',
+        taskId: 'T-02',
+        inputsDigest: 'old-phase',
+        completedAt: 'x'
+      };
+      stateMock.load.mockReturnValue(state);
+
+      const pool = await executor.executeReady(INPUT);
+
+      expect(pool.outcomes.map(o => o.task.id)).toEqual(['T-03']);
+      expect(agentRun).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('P3 T-06 budget enforcement', () => {
