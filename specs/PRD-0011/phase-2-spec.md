@@ -6,7 +6,7 @@ status: Draft # Draft | Approved | Done | Superseded
 date: 2026-07-31
 owner: Russ Watson
 envelope:
-  allowedPaths: ["src/workflow/**", "src/gates/**", "src/verification/**", "src/sandbox/**", "src/chronicle/**", "tests/**", "docs/prds/PRD-0011/**"]
+  allowedPaths: ['sdlc-workflow/**', 'specs/PRD-0011/**']
   forbiddenSurfaces: ["migrations", "auth", "ci-config", "production-deploy", "personal-queue-schema"]
   maxDiffLines: 2500
   budgetK: 200
