@@ -83,8 +83,16 @@ Parse the spec's per-task criteria by verification-tier prefix (test:/agent:/man
 
 - [x] test: criteria are parsed by tier prefix and a criterion with a missing or unknown prefix fails spec validation before any execution begins
 - [x] test: every test-tier criterion executes as a scripted check and its pass/fail result plus captured output are recorded per criterion
-- [ ] agent: for a sample task with agent-tier criteria, a verifier agent exercises the running sandbox interface and each resulting verdict carries the agent transcript as attached evidence
+- [x] agent: for a sample task with agent-tier criteria, a verifier agent exercises the running sandbox interface and each resulting verdict carries the agent transcript as attached evidence
 - [x] test: the aggregate phase verification verdict is green only when every criterion verdict is green, and a manual-tier criterion forces the verdict into a human-required state
+
+> **Live evidence (2026-08-01, runs `live-val-1` / `live-val-2`,
+> SPEC-LIVE-VALIDATION-P1):** the verifier agent exercised this repo's
+> local process sandbox health interface, confirmed the deployed SHA, and
+> returned a structured pass whose transcript is attached as evidence
+> (`~/.rosetta/sdlc-runs/<run>/evidence/T-01-agent-criterion-2.txt`,
+> referenced from the committed verdict artifact). Validation against a
+> real deployed cloud sandbox is planned via external adoption (Comita).
 
 ## Task T-05: Independent reviewer-agent concurrence gate in shadow mode
 
@@ -97,8 +105,19 @@ A reviewer agent with no shared context with the implementation agent reviews th
 ### Acceptance criteria
 
 - [x] test: the reviewer agent is invoked with only the PR diff, the spec task, and the envelope — no implementation-agent conversation state — asserted via the constructed prompt payload
-- [ ] agent: on a sample task PR, the reviewer agent produces a concur-or-disagree verdict with cited reasons, and the full review transcript is attached to the verdict
+- [x] agent: on a sample task PR, the reviewer agent produces a concur-or-disagree verdict with cited reasons, and the full review transcript is attached to the verdict
 - [x] test: a disagree verdict is persisted with wouldEscalate=true and does not block the run, and no code path exists that converts a disagree verdict into an auto-approval
+
+> **Live evidence (2026-08-01):** both branches fired on real diffs. Run
+> `live-val-1` — the implementation agent staged but never committed, and
+> the reviewer returned **disagree** with three cited reasons (empty diff,
+> missing file, unsatisfiable criteria), recorded to the exception ledger
+> with wouldEscalate=true. Run `live-val-2` — the reviewer returned
+> **concur** with six cited reasons. Full transcripts attached as evidence
+> (`T-01-reviewer-transcript.txt`) and referenced from the committed
+> verdict artifacts. The live-val-1 failure also produced a hardening fix:
+> the executor now records a failed task when the agent exits without
+> committing.
 
 ## Task T-06: Shadow gate aggregator and exception ledger
 
@@ -161,4 +180,13 @@ Persist run state as a step graph where each step's result is cached under a key
 - [x] test: killing a run after the implementation step and resuming reuses the cached implementation-agent result and worktree branch without re-invoking the agent
 - [x] test: modifying a task's spec content between runs invalidates only that task's cached steps, and unaffected cached results are still reused
 - [x] test: a kill-resume cycle at each step boundary in the single-task loop produces no duplicate sandbox deployments and no duplicate digest posts
-- [ ] agent: an operator agent kills a live run mid-verification, resumes it, and confirms via the run-status interface that the run completes with only the interrupted and downstream steps re-executed
+- [x] agent: an operator agent kills a live run mid-verification, resumes it, and confirms via the run-status interface that the run completes with only the interrupted and downstream steps re-executed
+
+> **Live evidence (2026-08-01, run `live-val-1`):** the operator agent
+> killed the run (SIGKILL to the process group) during the verification
+> step. `sdlc-workflow status --run-id live-val-1` showed exactly four
+> cached steps (implementation, envelope, reviewer, sandbox) and no
+> verification step. On resume, all four cached steps were reused (`[cached]
+> ... reused (step cache)`, agents not re-invoked, sandbox not redeployed)
+> and only verification, ci, and phase executed; the run completed to the
+> human gate with one digest post and one Chronicle artifact commit.

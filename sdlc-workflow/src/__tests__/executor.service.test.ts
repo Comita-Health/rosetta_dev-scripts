@@ -42,7 +42,13 @@ describe('ExecutorService (T-01)', () => {
   beforeEach(() => {
     specRead = jest.fn().mockReturnValue(makeSpec());
     gitMock = {
-      headSha: jest.fn().mockReturnValue('base-sha'),
+      // The primary checkout is at base-sha; a worktree the agent committed
+      // in reports a new head (the no-commit guard compares the two).
+      headSha: jest
+        .fn()
+        .mockImplementation((repoPath: string) =>
+          repoPath.includes('worktrees') ? 'agent-sha' : 'base-sha'
+        ),
       status: jest.fn().mockReturnValue(''),
       addWorktree: jest.fn(),
       diffStat: jest.fn(),
@@ -208,6 +214,24 @@ describe('ExecutorService (T-01)', () => {
 
     expect(outcome.kind).toBe('failed');
     expect(outcome.detail).toBe('spawn refused');
+  });
+
+  it('records a failure when the agent exits ok without committing', async () => {
+    // Worktree head still equals the base SHA: no commit was made.
+    gitMock.headSha.mockReturnValue('base-sha');
+    gitMock.status.mockReturnValue(' M docs/live-validation.md\n');
+
+    const outcome = await executor.executeNext(INPUT);
+
+    expect(outcome.kind).toBe('failed');
+    expect(outcome.detail).toContain('produced no commit');
+    expect(outcome.detail).toContain('docs/live-validation.md');
+    expect(stateMock.recordTaskResult).toHaveBeenCalledWith(
+      '/runs',
+      expect.anything(),
+      expect.objectContaining({ taskId: 'T-01', status: 'failed' })
+    );
+    expect(stateMock.recordStep).not.toHaveBeenCalled();
   });
 
   describe('T-09 step cache', () => {

@@ -168,6 +168,19 @@ export class ExecutorService implements IExecutorService {
       detail = err instanceof Error ? err.message : String(err);
     }
 
+    if (ok && this._gitRepo.headSha(worktreePath) === state.baseSha) {
+      // Live-run finding (live-val-1): an agent can exit 0 having staged
+      // work without committing, leaving an empty diff for every gate.
+      // No commit means no implementation — record an honest failure.
+      ok = false;
+      const uncommitted = this._gitRepo.status(worktreePath).trim();
+      detail =
+        'implementation agent produced no commit' +
+        (uncommitted.length > 0
+          ? `; uncommitted changes left in worktree:\n${uncommitted}`
+          : '');
+    }
+
     this._runStateRepo.recordTaskResult(input.runsDir, state, {
       taskId: task.id,
       status: ok ? 'completed' : 'failed',

@@ -28,5 +28,9 @@ Create `docs/live-validation.md` containing a section titled "Live validation" t
 
 ### Acceptance criteria
 
-- [ ] test: the sdlc-workflow build and test suite pass with the change applied
-- [ ] agent: the running sandbox's health interface reports the deployed commit SHA
+- [x] test: the sdlc-workflow build and test suite pass with the change applied
+- [x] agent: the running sandbox's health interface reports the deployed commit SHA
+
+> Verified live in run `live-val-2` (2026-08-01): verification gate passed
+> both criteria; evidence committed to the Chronicle under
+> `chronicles/sdlc/live-val-2/`.
