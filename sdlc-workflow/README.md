@@ -185,6 +185,5 @@ Handler / Service / Repository with InversifyJS (workspace rule):
 bun run test:coverage   # jest via @swc/jest; 90% global thresholds
 ```
 
-> Note: repo CI currently runs `team-setup` tests only; wiring this package
-> into `ci.yml` and the root workspace list is outside SPEC-PRD-0011-P1's
-> envelope (`ci-config` is a forbidden surface) and tracked as a follow-up.
+Repo CI runs this suite on every PR (`.github/workflows/ci.yml`), alongside
+`team-setup`.
