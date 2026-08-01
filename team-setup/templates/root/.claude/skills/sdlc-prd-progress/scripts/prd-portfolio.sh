@@ -4,7 +4,7 @@
 #
 # Usage:
 #   ROSETTA_WORKSPACE=~/projects/comita ./prd-portfolio.sh
-#   PRD_PORTFOLIO_ALL=1 ./prd-portfolio.sh          # include Accepted/…
+#   PRD_PORTFOLIO_ALL=1 ./prd-portfolio.sh          # include Shipped/…
 #   PRD_PORTFOLIO_STALE_HOURS=72 ./prd-portfolio.sh
 #   PRD_PORTFOLIO_SCOPE=comita|rosetta|all ./prd-portfolio.sh
 set -euo pipefail
@@ -97,7 +97,7 @@ bucket_for() {
     echo "parked"
   elif [[ "$spec_note" != "none" ]]; then
     echo "parked"
-  elif [[ "$status" == "Proposed" || "$status" == "Draft" ]]; then
+  elif [[ "$status" == "Proposed" || "$status" == "Draft" || "$status" == "Accepted" ]]; then
     echo "backlog"
   else
     echo "other"
@@ -140,7 +140,7 @@ while IFS= read -r f; do
 
   if [[ "$INCLUDE_TERMINAL" != "1" ]]; then
     case "$status" in
-      Accepted|Deprecated|Superseded) continue ;;
+      Shipped|Deprecated|Superseded) continue ;;
     esac
   fi
 
@@ -235,12 +235,12 @@ done
 
 echo ""
 echo "## Legend"
-echo "  backlog  — Draft/Proposed product PRD, no implementation run/spec"
+echo "  backlog  — Draft/Proposed/Accepted product PRD, no implementation run/spec"
 echo "  parked   — Spec and/or run exists, but no recent activity / no live process"
 echo "  warm     — Run updated within ${STALE_HOURS}h"
 echo "  active   — Live sdlc-workflow process for this run"
 echo "  other    — Non-default product status without run activity"
 echo ""
-echo "Tip: PRD_PORTFOLIO_ALL=1 includes Accepted/Deprecated/Superseded."
+echo "Tip: PRD_PORTFOLIO_ALL=1 includes Shipped/Deprecated/Superseded."
 echo "     PRD_PORTFOLIO_SCOPE=comita|rosetta|all filters product families."
 echo "     Do not confuse Comita PRD-NNNN with Rosetta PRD-NNNN (different products)."
