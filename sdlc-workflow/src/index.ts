@@ -20,6 +20,7 @@ import {
   InferenceRepository,
   IInferenceRepository
 } from './repositories/inference.repository';
+import { OpenAiRepository } from './repositories/openai.repository';
 import { PrdRepository, IPrdRepository } from './repositories/prd.repository';
 import {
   RunStateRepository,
@@ -58,8 +59,11 @@ const container = new Container();
 const modelBinding = container.bind<IModelRepository>(
   WORKFLOW_TOKENS.ModelRepository
 );
-if (resolveInferenceBackend(process.env) === 'anthropic') {
+const backend = resolveInferenceBackend(process.env);
+if (backend === 'anthropic') {
   modelBinding.to(AnthropicRepository);
+} else if (backend === 'openai') {
+  modelBinding.to(OpenAiRepository);
 } else {
   modelBinding.to(CursorCliRepository);
 }
