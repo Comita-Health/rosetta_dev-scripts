@@ -44,4 +44,56 @@ describe('buildSuperviseChildArgv', () => {
     expect(out.some(a => a.startsWith('--detach'))).toBe(false);
     expect(out).toContain('--supervise');
   });
+
+  it('wraps a bare .ts entrypoint with the tsx CLI for detached Node', () => {
+    const out = buildSuperviseChildArgv([
+      'node',
+      'src/index.ts',
+      'run',
+      '--spec',
+      '/s.md',
+      '--detach'
+    ]);
+    expect(out[0]).toMatch(/tsx[/\\]dist[/\\]cli/);
+    expect(out).toContain('src/index.ts');
+    expect(out).toContain('--supervise');
+  });
+
+  it('treats --supervise=true as already present', () => {
+    const out = buildSuperviseChildArgv([
+      'node',
+      'src/index.ts',
+      'run',
+      '--supervise=true',
+      '--detach'
+    ]);
+    expect(
+      out.filter(a => a === '--supervise' || a.startsWith('--supervise='))
+    ).toHaveLength(1);
+  });
+
+  it('inserts tsx before a .ts entry that follows other argv tokens', () => {
+    const out = buildSuperviseChildArgv([
+      'node',
+      '--no-warnings',
+      'src/index.mts',
+      'run',
+      '--detach'
+    ]);
+    const tsIdx = out.indexOf('src/index.mts');
+    expect(tsIdx).toBeGreaterThan(0);
+    expect(out[tsIdx - 1]).toMatch(/tsx[/\\]dist[/\\]cli/);
+  });
+
+  it('does not wrap when tsx is already on the argv path', () => {
+    const out = buildSuperviseChildArgv([
+      'node',
+      '/app/node_modules/tsx/dist/cli.mjs',
+      'src/index.ts',
+      'run',
+      '--detach'
+    ]);
+    expect(out.filter(a => a.includes('tsx')).length).toBe(1);
+    expect(out[0]).toContain('tsx');
+  });
 });

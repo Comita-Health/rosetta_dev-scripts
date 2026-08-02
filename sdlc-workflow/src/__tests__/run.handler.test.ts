@@ -100,6 +100,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
   let revertMerge: jest.Mock;
   let prCreate: jest.Mock;
   let gitPush: jest.Mock;
+  let gitFetch: jest.Mock;
   let specRead: jest.Mock;
   let escalationPost: jest.Mock;
 
@@ -233,6 +234,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
     itemTags = jest.fn().mockReturnValue(null);
     revertMerge = jest.fn();
     gitPush = jest.fn();
+    gitFetch = jest.fn();
     prCreate = jest.fn().mockReturnValue({
       url: 'https://github.com/org/repo/pull/99',
       number: 99
@@ -306,7 +308,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
         diffStat: jest.fn(),
         diffText: jest.fn(),
         push: gitPush,
-        fetch: jest.fn(),
+        fetch: gitFetch,
         resolveSha: jest.fn().mockReturnValue('main-sha'),
         defaultBranch: jest.fn().mockReturnValue('main'),
         revertMerge,
@@ -694,6 +696,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
       await handler.runTask({ ...INPUT, chronicleRepo: '/chronicle' });
 
       expect(prMerge).toHaveBeenCalledWith('/repo', 7);
+      expect(gitFetch).toHaveBeenCalledWith('/repo');
       expect(state.taskResults['T-01'].mergedSha).toBe('merged-sha-abc');
       expect(state.mergedSha).toBe('merged-sha-abc');
       // sdlc.merge.v1 artifact, attributed to the machine gates.

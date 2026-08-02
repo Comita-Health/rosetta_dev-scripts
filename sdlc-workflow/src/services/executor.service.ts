@@ -87,6 +87,23 @@ const hasStep = (state: RunState, name: string, taskId: string): boolean =>
     step => step.name === name && step.taskId === taskId
   );
 
+/**
+ * Latest phase step for a task (by completedAt). Used so a green phase with
+ * a failed merge call can re-enter the gate pipeline without reopening
+ * breach-terminal tasks (Comita Phase 0b: conflict → fix → resume).
+ */
+const latestPhaseStep = (state: RunState, taskId: string) => {
+  const phases = Object.values(state.steps).filter(
+    step => step.name === 'phase' && step.taskId === taskId
+  );
+  if (phases.length === 0) {
+    return undefined;
+  }
+  return phases.reduce((best, step) =>
+    step.completedAt > best.completedAt ? step : best
+  );
+};
+
 /** P3 dependency semantics: satisfied only by a *merged* dependency. */
 const isMerged = (state: RunState, taskId: string): boolean =>
   state.taskResults[taskId]?.mergedSha !== undefined;
@@ -117,10 +134,18 @@ const selectReadyTasks = (
         // edit (different digest) makes the task eligible again.
         if (result.inputsDigest === digest) continue;
       } else if (result.inputsDigest === digest) {
-        // Completed at the current content: done once the phase verdict
-        // landed; otherwise resume the gate pipeline with the cached
-        // implementation. A content edit reopens the task (invalidation).
-        if (hasStep(state, 'phase', task.id)) continue;
+        // Completed at the current content: resume the gate pipeline until
+        // phase lands. After a *pass* phase with no merge step, re-select
+        // so enforce can retry `gh pr merge` (dirty PR / flaky API). A
+        // *breach* phase stays terminal for this digest.
+        const phase = latestPhaseStep(state, task.id);
+        if (phase !== undefined) {
+          const passed = phase.verdict?.outcome === 'pass';
+          const mergeDone = hasStep(state, 'merge', task.id);
+          if (!passed || mergeDone) {
+            continue;
+          }
+        }
       }
     }
     ready.push({ task, implDigest: digest, baseSha: tip });
@@ -182,6 +207,16 @@ export class ExecutorService implements IExecutorService {
       branch: taskBranch(input.runId, task.id),
       worktreePath: path.join(input.runsDir, input.runId, 'worktrees', task.id)
     }));
+    const needsWorktree = wave.some(
+      entry =>
+        !this.isImplementationCached(state, entry.task.id, entry.implDigest)
+    );
+    // Belt-and-suspenders with post-merge fetch in enforcement: a resume
+    // after an older engine tip (or external record-merge) may still lack
+    // the tip object locally.
+    if (needsWorktree) {
+      this._gitRepo.fetch(input.repoPath);
+    }
     for (const entry of wave) {
       if (!this.isImplementationCached(state, entry.task.id, entry.implDigest))
         this._gitRepo.addWorktree(
