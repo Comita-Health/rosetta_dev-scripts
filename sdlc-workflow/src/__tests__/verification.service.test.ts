@@ -187,7 +187,9 @@ describe('VerificationService (T-04)', () => {
     const manual = outcome.criteria.find(v => v.tier === 'manual');
     expect(manual).toMatchObject({ outcome: 'human-required' });
     expect(outcome.verdict.outcome).toBe('human-required');
-    expect(outcome.verdict.wouldEscalate).toBe(false);
+    // Escalates: human-required blocks the merge just like a failure, so it
+    // must reach the exception ledger rather than stalling the task silently.
+    expect(outcome.verdict.wouldEscalate).toBe(true);
     expect(outcome.verdict.reasons[0]).toContain('human required');
   });
 

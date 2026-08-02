@@ -21,9 +21,7 @@ const isTypeScriptEntrypoint = (arg: string | undefined): boolean => {
  * ensure `--supervise` is present after the `run` subcommand, and wrap a
  * bare `.ts` entrypoint with the `tsx` CLI (Node cannot load `.ts` directly).
  */
-export const buildSuperviseChildArgv = (
-  argv: readonly string[]
-): string[] => {
+export const buildSuperviseChildArgv = (argv: readonly string[]): string[] => {
   // argv[0] is node; argv[1+] are script + CLI args (or tsx loader + script).
   const nodeArgs = argv.slice(1);
   const filtered = nodeArgs.filter(arg => {

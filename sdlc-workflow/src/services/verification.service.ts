@@ -185,7 +185,10 @@ export class VerificationService implements IVerificationService {
     return {
       gate: 'verification',
       outcome,
-      wouldEscalate: failing.length > 0,
+      // human-required escalates too: it blocks the merge exactly like a
+      // failure, so staying silent would strand the task with no ledger
+      // entry and nothing for a human to act on.
+      wouldEscalate: failing.length > 0 || manual.length > 0,
       reasons: [
         ...failing.map(verdict => `failed: ${verdict.criterion}`),
         ...manual.map(verdict => `human required: ${verdict.criterion}`)

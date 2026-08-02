@@ -23,6 +23,22 @@ export interface IAgentRunnerRepository {
 const DEFAULT_BIN = 'cursor-agent';
 const MAX_BUFFER = 64 * 1024 * 1024;
 
+/**
+ * Wall-clock ceiling for one agent dispatch. `spawn` has no implicit timeout,
+ * so an agent that wedges (waiting on a prompt, stuck in a tool loop) would
+ * otherwise hold its wave open forever: the supervisor never advances, the
+ * heartbeat keeps claiming `agentAlive`, and the run stalls with no error.
+ * Override with `SDLC_AGENT_TIMEOUT_MS`.
+ */
+const DEFAULT_TIMEOUT_MS = 45 * 60_000;
+/** Grace period between SIGTERM and SIGKILL. */
+const KILL_GRACE_MS = 10_000;
+
+const timeoutMs = (): number => {
+  const raw = Number(process.env.SDLC_AGENT_TIMEOUT_MS);
+  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_TIMEOUT_MS;
+};
+
 @injectable()
 export class AgentRunnerRepository implements IAgentRunnerRepository {
   async run(cwd: string, prompt: string): Promise<AgentRunResult> {
@@ -33,10 +49,27 @@ export class AgentRunnerRepository implements IAgentRunnerRepository {
       args.push('--model', model);
     }
 
+    const limitMs = timeoutMs();
+
     return new Promise<AgentRunResult>((resolve, reject) => {
       const child = spawn(bin, args, { cwd });
       let stdout = '';
       let stderr = '';
+      let timedOut = false;
+
+      const killTimer = setTimeout(() => {
+        timedOut = true;
+        child.kill('SIGTERM');
+        // SIGKILL only if SIGTERM was ignored — a wedged agent often is.
+        setTimeout(() => child.kill('SIGKILL'), KILL_GRACE_MS).unref();
+      }, limitMs);
+      killTimer.unref();
+
+      const settle = (result: AgentRunResult): void => {
+        clearTimeout(killTimer);
+        resolve(result);
+      };
+
       child.stdout.on('data', (chunk: Buffer) => {
         if (stdout.length < MAX_BUFFER) stdout += chunk.toString('utf-8');
       });
@@ -44,6 +77,7 @@ export class AgentRunnerRepository implements IAgentRunnerRepository {
         if (stderr.length < MAX_BUFFER) stderr += chunk.toString('utf-8');
       });
       child.on('error', (err: Error) => {
+        clearTimeout(killTimer);
         reject(
           new WorkflowError(
             `Cursor Agent CLI (${bin}) could not be started — install it and run \`${bin} login\``,
@@ -53,12 +87,21 @@ export class AgentRunnerRepository implements IAgentRunnerRepository {
         );
       });
       child.on('close', (status: number | null) => {
-        if (status !== 0) {
-          const output = stderr.length > 0 ? stderr : stdout;
-          resolve({ ok: false, output: output.slice(0, 2000) });
+        if (timedOut) {
+          // A timeout is a failure with a legible cause, not a crash: the
+          // caller records it as a task failure and the run keeps moving.
+          settle({
+            ok: false,
+            output: `agent timed out after ${Math.round(limitMs / 1000)}s and was killed\n${stderr.slice(0, 2000)}`
+          });
           return;
         }
-        resolve({ ok: true, output: stdout });
+        if (status !== 0) {
+          const output = stderr.length > 0 ? stderr : stdout;
+          settle({ ok: false, output: output.slice(0, 2000) });
+          return;
+        }
+        settle({ ok: true, output: stdout });
       });
     });
   }

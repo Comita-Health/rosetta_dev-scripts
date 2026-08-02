@@ -344,6 +344,20 @@ export class ExecutorService implements IExecutorService {
     ok = commitOutcome.ok;
     detail = commitOutcome.detail;
 
+    // A clean worktree with no commit is terminal at this content digest —
+    // re-running selects nothing. Record it so the run surfaces a task that
+    // would otherwise just be missing from the wave.
+    if (commitOutcome.noCommit === true) {
+      this._runStateRepo.recordExceptions(input.runsDir, state, [
+        {
+          trigger: 'no-commit',
+          taskId: task.id,
+          context: [detail.slice(0, 500)],
+          recordedAt: new Date().toISOString()
+        }
+      ]);
+    }
+
     // Mutations of the shared state object are synchronous, so concurrent
     // task completions serialize on the event loop — each recordTaskResult
     // persists the full accumulated state and none are lost.
@@ -393,7 +407,7 @@ export class ExecutorService implements IExecutorService {
     task: SpecTask,
     agentOk: boolean,
     agentDetail: string
-  ): { ok: boolean; detail: string } {
+  ): { ok: boolean; detail: string; noCommit?: boolean } {
     const head = this._gitRepo.headSha(worktreePath);
     if (head !== tipSha) {
       return { ok: agentOk, detail: agentDetail };
@@ -403,6 +417,7 @@ export class ExecutorService implements IExecutorService {
     if (uncommitted.length === 0) {
       return {
         ok: false,
+        noCommit: true,
         detail:
           agentDetail.length > 0
             ? agentDetail

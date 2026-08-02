@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   cpSync,
   mkdirSync,
   existsSync,
@@ -137,6 +138,20 @@ export const layDownRootConfig = (baseDir: string): void => {
       cpSync(src, path.join(baseDir, '.cursor', entry), { recursive: true });
     }
     console.log(chalk.green('  ✓ .cursor/ (cli.json, skills/, …)'));
+  }
+
+  // Workspace-level scripts (wake inbox, continuity daemon) live outside
+  // .claude/.cursor because they are shared by both agents and by launchd.
+  const scriptsDir = path.join(rootTemplateDir, 'scripts');
+  if (existsSync(scriptsDir)) {
+    const target = path.join(baseDir, 'scripts');
+    cpSync(scriptsDir, target, { recursive: true });
+    for (const entry of readdirSync(target)) {
+      if (entry.endsWith('.sh')) {
+        chmodSync(path.join(target, entry), 0o755);
+      }
+    }
+    console.log(chalk.green('  ✓ scripts/ (wake inbox, continuity daemon)'));
   }
 
   if (existsSync(claudeDir)) {

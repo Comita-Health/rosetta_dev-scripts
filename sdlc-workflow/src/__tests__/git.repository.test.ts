@@ -75,6 +75,11 @@ describe('GitRepository', () => {
     expect(repo.defaultBranch('/repo')).toBe('main');
   });
 
+  it('keeps slashes in the default branch name', () => {
+    execMock.mockReturnValue('refs/remotes/origin/build-env/dev\n');
+    expect(repo.defaultBranch('/repo')).toBe('build-env/dev');
+  });
+
   it('reverts a merge commit first-parent with sign-off (P3 T-05)', () => {
     execMock.mockReturnValue('');
     repo.revertMerge('/wt', 'merge-sha');

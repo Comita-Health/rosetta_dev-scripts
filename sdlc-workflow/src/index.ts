@@ -51,6 +51,11 @@ import {
   IPullRequestRepository
 } from './repositories/pull-request.repository';
 import {
+  GitHubIssueRepository,
+  IGitHubIssueRepository
+} from './repositories/github-issue.repository';
+import { BlockerService, IBlockerService } from './services/blocker.service';
+import {
   RunStateRepository,
   IRunStateRepository
 } from './repositories/run-state.repository';
@@ -231,6 +236,12 @@ container
   .bind<IPullRequestRepository>(WORKFLOW_TOKENS.PullRequestRepository)
   .to(PullRequestRepository);
 container
+  .bind<IGitHubIssueRepository>(WORKFLOW_TOKENS.GitHubIssueRepository)
+  .to(GitHubIssueRepository);
+container
+  .bind<IBlockerService>(WORKFLOW_TOKENS.BlockerService)
+  .to(BlockerService);
+container
   .bind<IPrLifecycleService>(WORKFLOW_TOKENS.PrLifecycleService)
   .to(PrLifecycleService);
 container
@@ -348,6 +359,13 @@ yargs(hideBin(process.argv))
           describe:
             'Calibration mode: record gate verdicts but never merge (P3 T-04)'
         })
+        .option('enforce', {
+          type: 'boolean',
+          default: false,
+          describe:
+            'Explicitly select enforcing mode (the default) — green gates auto-merge'
+        })
+        .conflicts('enforce', 'shadow')
         .option('heartbeat', {
           type: 'number',
           default: 30,
@@ -548,6 +566,71 @@ yargs(hideBin(process.argv))
           runsDir: argv['runs-dir'],
           runId: argv['run-id']
         });
+      } catch (err) {
+        if (err instanceof WorkflowError) {
+          console.error(chalk.red(`\n✗ ${err.code}: ${err.message}`));
+        } else {
+          console.error(chalk.red(`\n✗ ${err}`));
+        }
+        process.exit(1);
+      }
+    }
+  )
+  .command(
+    'blockers',
+    'Report which needs-human issues for a run the human has cleared',
+    y =>
+      y
+        .option('run-id', {
+          type: 'string',
+          demandOption: true,
+          describe: 'Run identifier to inspect'
+        })
+        .option('repo', {
+          type: 'string',
+          demandOption: true,
+          describe: 'Target repo the needs-human issues were filed against'
+        })
+        .option('runs-dir', {
+          type: 'string',
+          default: path.join(os.homedir(), '.rosetta', 'sdlc-runs'),
+          describe: 'Directory holding run state'
+        })
+        .option('json', {
+          type: 'boolean',
+          default: false,
+          describe: 'Emit machine-readable JSON (used by the daemon)'
+        }),
+    argv => {
+      const blockers = container.get<IBlockerService>(
+        WORKFLOW_TOKENS.BlockerService
+      );
+      try {
+        const report = blockers.query({
+          runsDir: argv['runs-dir'],
+          runId: argv['run-id'],
+          repoPath: argv.repo
+        });
+        if (argv.json) {
+          console.log(JSON.stringify(report));
+          return;
+        }
+        if (report.blockers.length === 0) {
+          console.log(chalk.green(`No recorded blockers for ${report.runId}.`));
+          return;
+        }
+        for (const blocker of report.blockers) {
+          const mark =
+            blocker.state === 'cleared' ? chalk.green('✓') : chalk.yellow('•');
+          console.log(
+            `  ${mark} ${blocker.taskId} — ${blocker.trigger} (${blocker.state})`
+          );
+        }
+        console.log(
+          report.resumable
+            ? chalk.green('\nAll blockers cleared — safe to resume.')
+            : chalk.yellow('\nOpen blockers remain; resuming will re-stall.')
+        );
       } catch (err) {
         if (err instanceof WorkflowError) {
           console.error(chalk.red(`\n✗ ${err.code}: ${err.message}`));

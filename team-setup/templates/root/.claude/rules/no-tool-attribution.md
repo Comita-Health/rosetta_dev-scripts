@@ -14,7 +14,7 @@ Forbidden in commit messages and PR titles/bodies:
 
 1. **IDE:** Cursor Settings → Agents (or Git & PRs) → Attribution → turn **off**
    Commit Attribution and PR Attribution.
-2. **CLI:** `~/.cursor/cli-config.json` must include:
+2. **CLI (global only):** `~/.cursor/cli-config.json` must include:
 
 ```json
 "attribution": {
@@ -23,8 +23,9 @@ Forbidden in commit messages and PR titles/bodies:
 }
 ```
 
-3. **Workspace:** `.cursor/cli.json` also sets those flags to `false` (team-setup
-   lays this down) so project sessions inherit the opt-out.
+   Cursor only allows `permissions` in project `.cursor/cli.json` — putting
+   `attribution` there fails schema validation and blocks the Agent CLI from
+   starting. Keep attribution opt-out in the global config.
 
 ## Agent behavior
 

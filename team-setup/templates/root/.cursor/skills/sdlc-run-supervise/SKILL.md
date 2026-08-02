@@ -50,8 +50,14 @@ bunx tsx src/index.ts run \
   --heartbeat 30 \
   --supervise \
   --detach
-# Optional calibration: add --shadow (supervise stops at human gate per wave)
 ```
+
+**Enforcing is the default and is what you want.** Green gates auto-merge and
+the loop keeps going; the spec `Draft → Approved` flip was the human gate.
+Add `--shadow` only to calibrate a repo the engine has never merged into —
+shadow stops at a human gate after *every* wave and needs a merge plus
+`record-merge` plus a relaunch per task, so it is three manual steps per task,
+not one.
 
 Smoke-check once (do not loop yet):
 

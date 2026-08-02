@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** SPEC-PRD-0011-P4 path-aware sandbox deploy. The sandbox
+  gate now exports `SDLC_SANDBOX_BASE_SHA` (the task's gate base; the run's
+  frozen base at the phase boundary) alongside `SDLC_SANDBOX_SHA`, so
+  repo-owned deploy scripts can diff `base..head` and skip or thin out the
+  ship. The engine stays path-agnostic — policy lives in the target repo.
+  First consumer: `comita_admissions`, where a docs-and-tests-only task used
+  to pay a full backend + frontend AWS deploy.
+- **team-setup:** remove `attribution` from project `.cursor/cli.json` — Cursor
+  only allows `permissions` at project scope; `attribution` belongs in
+  `~/.cursor/cli-config.json` and was failing Agent CLI schema validation.
+- **team-setup:** `update-config` now targets the workspace enclosing the cwd
+  before falling back to `shared.baseDir`. Every checkout ships the same
+  hard-coded `baseDir`, so running it from a second workspace silently rewrote
+  the first — the two workspaces drifted while both appeared synced.
 - **team-setup:** Addi merge-on-approve uses GitHub **`merge-async`** for
   native stacked PRs (`pull.stack`); plain `gh pr merge` is rejected on stacks.
   Conflicts on a lower PR still require an agent resolve (GHA comments only).

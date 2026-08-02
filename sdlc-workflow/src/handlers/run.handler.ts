@@ -401,7 +401,8 @@ export class RunHandler implements IRunHandler {
       state,
       task,
       worktreePath,
-      inputsDigest({ ...chain, step: 'sandbox' })
+      inputsDigest({ ...chain, step: 'sandbox' }),
+      gateBaseRef
     );
 
     const verificationVerdict = await this.verificationStep(
@@ -571,7 +572,10 @@ export class RunHandler implements IRunHandler {
     }
 
     try {
-      const mergedSha = this._prRepo.merge(input.repoPath, Number(prNumber));
+      const mergedSha = await this._prRepo.merge(
+        input.repoPath,
+        Number(prNumber)
+      );
       // Bring the merge commit into the local object store before the next
       // wave's worktree add (Comita Phase 0b: gh merge SHA is remote-only).
       this._gitRepo.fetch(input.repoPath);
@@ -645,12 +649,16 @@ export class RunHandler implements IRunHandler {
       .flatMap(verdict => verdict.evidenceIds ?? []);
     const outcome = this._escalation.post({
       chronicleRepo: input.chronicleRepo,
+      repoPath: input.repoPath,
       runId: input.runId,
       entries,
       evidenceIds
     });
     for (const title of outcome.posted) {
       console.log(chalk.yellow(`  [escalate] ${title}`));
+    }
+    for (const url of outcome.issueUrls) {
+      console.log(chalk.yellow(`  [needs-human] ${url}`));
     }
   }
 
@@ -671,7 +679,32 @@ export class RunHandler implements IRunHandler {
       taskId: task.id,
       mergedSha: state.taskResults[task.id]?.mergedSha
     }));
-    if (!merges.every(entry => entry.mergedSha !== undefined)) {
+    const unmerged = merges.filter(entry => entry.mergedSha === undefined);
+    if (unmerged.length > 0) {
+      // Returning silently here is what makes a stalled phase invisible:
+      // no deploy, no digest, no log line. Say so, and escalate once the
+      // tasks have at least been implemented (mid-run waves are normal).
+      const pending = unmerged.map(entry => entry.taskId);
+      console.log(
+        chalk.yellow(
+          `  [phase] blocked — ${pending.length} task(s) unmerged: ${pending.join(', ')}`
+        )
+      );
+      const allImplemented = pending.every(
+        taskId => state.taskResults[taskId]?.status === 'completed'
+      );
+      if (allImplemented) {
+        this.postEscalations(input, state, pending[0], [
+          {
+            trigger: 'phase-blocked-on-unmerged',
+            taskId: pending[0],
+            context: [
+              `phase deploy blocked; unmerged tasks: ${pending.join(', ')}`
+            ],
+            recordedAt: new Date().toISOString()
+          }
+        ]);
+      }
       return;
     }
     const mergedShas = merges.map(entry => entry.mergedSha as string);
@@ -707,6 +740,10 @@ export class RunHandler implements IRunHandler {
       const outcome = await this._sandboxDeploy.deploy({
         worktreePath,
         sha,
+        // The phase ships everything merged since the run froze its base, so
+        // that — not a merge-base against the branch we just merged into,
+        // which would be empty — is the diff a path-aware script must see.
+        baseSha: state.baseSha,
         previous: state.sandbox
       });
       outcome.verdict.taskId = 'phase';
@@ -864,6 +901,11 @@ export class RunHandler implements IRunHandler {
 
     // Redeploy the sandbox at the reverted state — sandbox only, same
     // repo-owned contract as every other deploy.
+    //
+    // No baseSha: the meaningful diff is the revert itself, against the tip
+    // that still carries the phase merges. That is exactly what the script's
+    // own `git merge-base` fallback resolves to; passing the run base here
+    // would diff to empty and skip the deploy that undoes the phase.
     const outcome = await this._sandboxDeploy.deploy({
       worktreePath,
       sha: revertSha,
@@ -1083,6 +1125,17 @@ export class RunHandler implements IRunHandler {
           `  [pr] push/PR failed for ${branch}: ${detail.slice(0, 300)}`
         )
       );
+      // Without a PR the CI gate reports `blocked` and enforcement refuses to
+      // merge, so this is terminal for the task until a human intervenes —
+      // escalate rather than letting it read as a transient log line.
+      this.postEscalations(input, state, task.id, [
+        {
+          trigger: 'pr-open-failed',
+          taskId: task.id,
+          context: [detail.slice(0, 500)],
+          recordedAt: new Date().toISOString()
+        }
+      ]);
     }
   }
 
@@ -1201,7 +1254,8 @@ export class RunHandler implements IRunHandler {
     state: RunState,
     task: SpecTask,
     worktreePath: string,
-    digest: string
+    digest: string,
+    baseSha?: string
   ): Promise<{ verdict: GateVerdict; healthReport?: string }> {
     const key = stepKey('sandbox', task.id, digest);
     const cached = state.steps[key];
@@ -1213,6 +1267,7 @@ export class RunHandler implements IRunHandler {
     const sandbox = await this._sandboxDeploy.deploy({
       worktreePath,
       sha: this._gitRepo.headSha(worktreePath),
+      baseSha,
       previous: state.sandbox
     });
     sandbox.verdict.taskId = task.id;
