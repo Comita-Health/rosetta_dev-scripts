@@ -44,4 +44,18 @@ describe('buildSuperviseChildArgv', () => {
     expect(out.some(a => a.startsWith('--detach'))).toBe(false);
     expect(out).toContain('--supervise');
   });
+
+  it('wraps a bare .ts entrypoint with the tsx CLI for detached Node', () => {
+    const out = buildSuperviseChildArgv([
+      'node',
+      'src/index.ts',
+      'run',
+      '--spec',
+      '/s.md',
+      '--detach'
+    ]);
+    expect(out[0]).toMatch(/tsx[/\\]dist[/\\]cli/);
+    expect(out).toContain('src/index.ts');
+    expect(out).toContain('--supervise');
+  });
 });
