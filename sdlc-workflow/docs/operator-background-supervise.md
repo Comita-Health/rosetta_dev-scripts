@@ -45,7 +45,7 @@ Under `~/.rosetta/sdlc-runs/<runId>/`:
 
 ## Shadow vs enforce
 
-- **Enforce** (`--shadow` omitted): green gates auto-merge; `--supervise` resumes until all `mergedSha`s are set. A red phase / `merge-blocked` **fails the supervise loop** (exit 1) — it does not spin another empty wave.
+- **Enforce** (`--shadow` omitted): green gates auto-merge; `--supervise` resumes until all `mergedSha`s are set. A red phase, or a green phase whose `gh pr merge` failed (e.g. conflicts), **fails the supervise loop** (exit 1) — it does not spin another empty wave. After you fix gates or conflicts, resume: a green-phase unmerged task is re-selected so merge can retry. Stale `merge-blocked` exceptions from an earlier red phase do not block that resume.
 - **Shadow**: after a wave with completed-but-unmerged tasks, supervise **stops** at the human gate. Merge + `record-merge`, then re-invoke with `--supervise` (and `--detach` if backgrounding).
 
 Gate log lines are labeled `[enforce]` or `[shadow]` to match the mode. When supervise exits, `monitor.log` gets an `[hb-watch] stopped` line (the watch is not a healer — it only mirrors heartbeats while the loop runs).

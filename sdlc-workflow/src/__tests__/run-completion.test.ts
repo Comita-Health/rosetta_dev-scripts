@@ -100,4 +100,73 @@ describe('run-completion', () => {
       false
     );
   });
+
+  it('hasMergeBlockedHalt ignores stale gate merge-blocked once latest phase is pass', () => {
+    const s = state({ 'T-01': undefined });
+    s.steps = {
+      'phase:T-01:old': {
+        name: 'phase',
+        taskId: 'T-01',
+        inputsDigest: 'old',
+        verdict: {
+          gate: 'phase',
+          outcome: 'breach',
+          wouldEscalate: true,
+          reasons: ['failing gates: envelope'],
+          recordedAt: 't0'
+        },
+        completedAt: 't0'
+      } as StepResult,
+      'phase:T-01:new': {
+        name: 'phase',
+        taskId: 'T-01',
+        inputsDigest: 'new',
+        verdict: {
+          gate: 'phase',
+          outcome: 'pass',
+          wouldEscalate: false,
+          reasons: [],
+          recordedAt: 't1'
+        },
+        completedAt: 't1'
+      } as StepResult
+    };
+    s.exceptions = [
+      {
+        trigger: 'merge-blocked',
+        taskId: 'T-01',
+        context: ['failing gates: envelope'],
+        recordedAt: 't0'
+      }
+    ];
+    expect(hasMergeBlockedHalt(s, ['T-01'])).toBe(false);
+  });
+
+  it('hasMergeBlockedHalt stops on merge call failure after a green phase', () => {
+    const s = state({ 'T-01': undefined });
+    s.steps = {
+      'phase:T-01': {
+        name: 'phase',
+        taskId: 'T-01',
+        inputsDigest: 'x',
+        verdict: {
+          gate: 'phase',
+          outcome: 'pass',
+          wouldEscalate: false,
+          reasons: [],
+          recordedAt: 't'
+        },
+        completedAt: 't'
+      } as StepResult
+    };
+    s.exceptions = [
+      {
+        trigger: 'merge-blocked',
+        taskId: 'T-01',
+        context: ['merge call failed: Pull Request has merge conflicts'],
+        recordedAt: 't'
+      }
+    ];
+    expect(hasMergeBlockedHalt(s, ['T-01'])).toBe(true);
+  });
 });

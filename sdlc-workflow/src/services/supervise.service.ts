@@ -213,7 +213,7 @@ export class SuperviseService implements ISuperviseService {
           );
           console.log(
             chalk.red(
-              '\n[supervise] merge blocked — fix envelope/reviewer (or other red gates), then resume'
+              '\n[supervise] merge blocked — fix red gates or PR conflicts, then resume'
             )
           );
           return {

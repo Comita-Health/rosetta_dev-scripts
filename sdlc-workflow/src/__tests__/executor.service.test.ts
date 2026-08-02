@@ -176,14 +176,60 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
       name: 'phase',
       taskId: 'T-01',
       inputsDigest: 'p',
-      completedAt: 'x'
+      completedAt: 'x',
+      verdict: {
+        gate: 'phase',
+        outcome: 'breach',
+        wouldEscalate: true,
+        reasons: ['failing gates: envelope'],
+        recordedAt: 'x'
+      }
     };
     stateMock.load.mockReturnValue(state);
 
     const pool = await executor.executeReady(INPUT);
 
-    // T-01 is done (phase landed) but unmerged: T-02 stays ineligible.
+    // T-01 phase breach + unmerged: T-02 stays ineligible; T-01 not retried.
     expect(pool.kind).toBe('no-ready-task');
+    expect(agentRun).not.toHaveBeenCalled();
+  });
+
+  it('re-selects a green-phase unmerged task so enforce can retry merge', async () => {
+    const state = baseState();
+    const digest = implementationDigest(makeSpec().tasks[0], 'base-sha');
+    state.taskResults['T-01'] = {
+      taskId: 'T-01',
+      status: 'completed',
+      branch: 'sdlc/run-1/T-01',
+      inputsDigest: digest,
+      recordedAt: 'x'
+    };
+    state.steps[stepKey('implementation', 'T-01', digest)] = {
+      name: 'implementation',
+      taskId: 'T-01',
+      inputsDigest: digest,
+      completedAt: 'x'
+    };
+    state.steps[stepKey('phase', 'T-01', 'p')] = {
+      name: 'phase',
+      taskId: 'T-01',
+      inputsDigest: 'p',
+      completedAt: 'x',
+      verdict: {
+        gate: 'phase',
+        outcome: 'pass',
+        wouldEscalate: false,
+        reasons: [],
+        recordedAt: 'x'
+      }
+    };
+    stateMock.load.mockReturnValue(state);
+
+    const pool = await executor.executeReady(INPUT);
+
+    expect(pool.kind).toBe('executed');
+    expect(pool.outcomes[0].task.id).toBe('T-01');
+    expect(pool.outcomes[0].cached).toBe(true);
     expect(agentRun).not.toHaveBeenCalled();
   });
 
