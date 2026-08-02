@@ -6,6 +6,13 @@ Addi / bot-authored PRs), or the user asks you to watch for approval:
 - Follow the **`pr-approve-watch`** skill.
 - Arm `scripts/watch-pr-approve.sh` in the background with agent wake on
   `AGENT_LOOP_WAKE_pr_approve`.
-- On wake: verify Approve + green checks, merge, pull `main`, report.
+- On wake: verify Approve + green checks, resolve `CONFLICTING` if needed,
+  **triage review comments** (reply + resolve threads; fix before merge if
+  actionable), then merge, pull the default branch, report.
 - Do **not** treat chat "approved" as the proceed signal when a GitHub Approve
   path exists.
+- Do **not** merge on Approve alone while unaddressed review comments remain.
+- **Chat `notify_on_output` is best-effort.** Drain
+  `AGENT_LOOP_WAKE_pr_approve` lines from the watcher terminal even when the
+  chat stays quiet; treat user “I approved” / “check watchers” as a nudge to
+  drain wakes immediately.

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **team-setup:** document watch wake **delivery gap** — Cursor
+  `notify_on_output` is best-effort after the arming turn ends; agents must
+  drain `AGENT_LOOP_WAKE_*` from watcher terminals (and treat “I approved” /
+  “check watchers” as a drain nudge). Applies to `pr-approve-watch` and
+  `issue-resolve-watch` skills/rules/commands + wake prompts.
 - **team-setup:** `pr-approve-watch` wake path must resolve `mergeable=CONFLICTING` PRs (rebase/merge onto base, push, re-check CI) before comment triage + merge — do not stop after Approve on a dirty tip.
 - **team-setup:** add `issue-resolve-watch` skill — background-watch GitHub
   issues (kickoff / human comments / linked PRs / closed) and wake the agent
