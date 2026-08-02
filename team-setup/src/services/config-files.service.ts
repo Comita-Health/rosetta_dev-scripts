@@ -44,7 +44,9 @@ const mirrorClaudeRulesToCursor = (
               ? 'TSDoc / JSDoc bar for backend HSR classes and frontend exports (SDLC)'
               : stem === 'sdlc-run-supervise'
                 ? 'Default: background-supervise sdlc-workflow runs (--supervise --detach + heartbeat)'
-                : `Rosetta rule: ${stem}`;
+                : stem === 'pr-approve-watch'
+                  ? 'Default: background-watch PRs for human Approve proceed signal'
+                  : `Rosetta rule: ${stem}`;
       const contents = [
         '---',
         `description: ${yamlDoubleQuoted(description)}`,
