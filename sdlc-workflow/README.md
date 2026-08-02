@@ -68,6 +68,10 @@ bun run dev -- run --spec ../specs/PRD-0011/phase-3-spec.md --repo .. \
 #   --heartbeat       emit structured progress every N seconds (default: 30;
 #                     0 disables). Also appends <runsDir>/<runId>/heartbeat.jsonl
 
+# Operator default: detach with --supervise --detach + --heartbeat, then check
+# in on wakes — do not block the agent chat on sandbox waits.
+# See docs/operator-background-supervise.md (team-setup skill: sdlc-run-supervise).
+
 # Record a human-approved merge in the run's Chronicle artifact (T-08);
 # --task marks that task merged, which unblocks its dependents (P3 T-01)
 bun run dev -- record-merge --run-id <run-id> --sha <merged-sha> \

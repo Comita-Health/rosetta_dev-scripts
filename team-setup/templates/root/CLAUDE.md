@@ -31,6 +31,16 @@ See `comita_docs/docs/policies/healthcare-guardrails.md` once published.
 principles, glossary, and settled decisions. Read it before making architectural or product
 decisions. When implementation and philosophy conflict, philosophy wins.
 
+## SDLC runs (default supervise pattern)
+
+When kicking off or watching `sdlc-workflow` (`run` / shadow waves):
+
+- Follow **`sdlc-run-supervise`** — engine `--supervise --detach`, `--heartbeat`,
+  yield the agent turn, check in on wakes. Do **not** block the chat on
+  sandbox/CI waits.
+- Slash reminder: `/sdlc-run`. Scorecards: `/sdlc-status`.
+- Design note: `rosetta_dev-scripts/sdlc-workflow/docs/operator-background-supervise.md`.
+
 ## Package Manager
 
 Always use `bun` over `npm`/`yarn` (`bun install`, `bun run <script>`).
