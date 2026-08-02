@@ -9,9 +9,9 @@
 - **team-setup:** gold-standard **Addi PR automation** —
   `docs/addi-pr-automation-standard.md` + hardened
   `addi-merge-on-approve.yml` (repository_dispatch / workflow_run / schedule)
-  - `addi-merge-webhook` bridge; `pr-approve-watch` demoted to triage when GHA
-    is enabled. Comita and Rosetta each use their own Addi App Client ID + PEM
-    under the same Action variable names.
+  + `addi-merge-webhook` bridge; `pr-approve-watch` demoted to triage when GHA
+  is enabled. Comita and Rosetta each use their own Addi App Client ID + PEM
+  under the same Action variable names.
 - **team-setup:** add `addi-authorship` rule — agent PRs/issues must be created
   as the workspace GitHub App (Addi); verify `viewer.login` before create; never
   fall back to human `gh` on 403; recreate accidental human-authored PRs as Addi.
