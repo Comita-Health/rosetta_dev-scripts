@@ -34,5 +34,8 @@ export const WORKFLOW_TOKENS = {
   PullRequestRepository: Symbol.for('PullRequestRepository'),
   PrLifecycleService: Symbol.for('PrLifecycleService'),
   EscalationService: Symbol.for('EscalationService'),
-  HeartbeatService: Symbol.for('HeartbeatService')
+  HeartbeatService: Symbol.for('HeartbeatService'),
+  HeartbeatWatchService: Symbol.for('HeartbeatWatchService'),
+  ProcessDetachRepository: Symbol.for('ProcessDetachRepository'),
+  SuperviseService: Symbol.for('SuperviseService')
 } as const;

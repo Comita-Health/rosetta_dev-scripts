@@ -75,6 +75,14 @@ Hard rules on direction:
 - Pure functions live in `src/utils/` — never inline non-trivial pure logic in a handler/service.
 - Boundary/DTO/wire types live in `src/types.ts` — never duplicate them as local interfaces.
 
+## Inline documentation (mandatory with the pattern)
+
+New or substantially changed Handlers, Services, and Repositories carry **TSDoc** that
+states purpose and non-obvious invariants — not redundant `@param` lines that restate
+TypeScript types. Frontend packages prefer types for component props and short TSDoc on
+non-obvious platform/auth helpers. Full checklist:
+[`inline-docs.md`](./inline-docs.md) (mirrored to `.cursor/rules/inline-docs.mdc`).
+
 ## Required build config
 
 `tsconfig.json` must set (decorator metadata is required for `@inject` to work):
