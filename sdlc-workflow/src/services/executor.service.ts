@@ -99,6 +99,11 @@ const selectReadyTasks = (
   const ready: { task: SpecTask; implDigest: string; baseSha: string }[] = [];
   for (const task of spec.tasks) {
     if (ready.length >= maxParallel) break;
+    // Merged tasks are terminal — tip advances (#42/#44) change the
+    // implementation digest root, which must NOT reopen a task that
+    // already landed on the integration branch (Comita live-val shadow-2:
+    // re-running T-02 after record-merge → empty diff + reviewer breach).
+    if (isMerged(state, task.id)) continue;
     if (!task.dependsOn.every(dep => isMerged(state, dep))) continue;
     const tip = taskIntegrationTip(state, task);
     const digest = implementationDigest(task, tip);

@@ -69,6 +69,31 @@ describe('RunStateRepository', () => {
     expect(loaded?.taskResults['T-01'].status).toBe('completed');
   });
 
+  it('preserves mergedSha and prUrl when re-recording a task result', () => {
+    const state = makeState();
+    repo.recordTaskResult(dir, state, {
+      taskId: 'T-02',
+      status: 'completed',
+      mergedSha: 'merge-sha',
+      prUrl: 'https://example.com/pr/1',
+      inputsDigest: 'old',
+      recordedAt: 'x'
+    });
+    repo.recordTaskResult(dir, state, {
+      taskId: 'T-02',
+      status: 'completed',
+      inputsDigest: 'new-tip-digest',
+      recordedAt: 'y'
+    });
+
+    const loaded = repo.load(dir, 'run-1');
+    expect(loaded?.taskResults['T-02']).toMatchObject({
+      inputsDigest: 'new-tip-digest',
+      mergedSha: 'merge-sha',
+      prUrl: 'https://example.com/pr/1'
+    });
+  });
+
   it('records exception-ledger entries persistently', () => {
     const state = makeState();
     repo.recordExceptions(dir, state, [
