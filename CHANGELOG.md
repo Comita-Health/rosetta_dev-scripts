@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **team-setup:** `pr-approve-watch` also wakes on human **Request changes**
+  (`signal: changes_requested` in the wake JSON) — once per new non-bot review
+  id — so feedback can stay on the PR; agent fixes without merging and keeps
+  watching until Approve.
 - **team-setup:** Addi merge-on-approve uses GitHub **`merge-async`** for
   native stacked PRs (`pull.stack`); plain `gh pr merge` is rejected on stacks.
   Conflicts on a lower PR still require an agent resolve (GHA comments only).
