@@ -1,8 +1,9 @@
 import {
   allTasksMerged,
+  hasMergeBlockedHalt,
   hasUnmergedCompletedTasks
 } from '../utils/run-completion';
-import type { RunState, SpecDocument } from '../types';
+import type { RunState, SpecDocument, StepResult } from '../types';
 
 const spec = (ids: string[]): SpecDocument =>
   ({
@@ -74,5 +75,29 @@ describe('run-completion', () => {
     expect(hasUnmergedCompletedTasks(null)).toBe(false);
     expect(hasUnmergedCompletedTasks(state({ 'T-01': 'aaa' }))).toBe(false);
     expect(hasUnmergedCompletedTasks(state({ 'T-01': undefined }))).toBe(true);
+  });
+
+  it('hasMergeBlockedHalt detects unmerged completed tasks with phase breach', () => {
+    const s = state({ 'T-01': undefined });
+    s.steps = {
+      'phase:T-01': {
+        name: 'phase',
+        taskId: 'T-01',
+        inputsDigest: 'x',
+        verdict: {
+          gate: 'phase',
+          outcome: 'breach',
+          wouldEscalate: true,
+          reasons: ['failing gates: envelope'],
+          recordedAt: 't'
+        },
+        completedAt: 't'
+      } as StepResult
+    };
+    expect(hasMergeBlockedHalt(null, ['T-01'])).toBe(false);
+    expect(hasMergeBlockedHalt(s, ['T-01'])).toBe(true);
+    expect(hasMergeBlockedHalt(state({ 'T-01': 'merged' }), ['T-01'])).toBe(
+      false
+    );
   });
 });

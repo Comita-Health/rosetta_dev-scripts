@@ -35,3 +35,36 @@ export const hasUnmergedCompletedTasks = (state: RunState | null): boolean => {
     return completed && unmerged;
   });
 };
+
+/**
+ * Enforce-mode halt: implementation finished and phase/merge is red, so the
+ * task will not unlock dependents. Supervise should exit failed (not spin a
+ * "no ready task" wave).
+ */
+export const hasMergeBlockedHalt = (
+  state: RunState | null,
+  taskIds: readonly string[]
+): boolean => {
+  if (state === null || taskIds.length === 0) {
+    return false;
+  }
+  return taskIds.some(taskId => {
+    const result = state.taskResults[taskId];
+    if (result === undefined || result.status !== 'completed') {
+      return false;
+    }
+    if (result.mergedSha !== undefined && result.mergedSha.length > 0) {
+      return false;
+    }
+    const phaseBreach = Object.values(state.steps).some(
+      step =>
+        step.taskId === taskId &&
+        step.name === 'phase' &&
+        step.verdict?.outcome === 'breach'
+    );
+    const mergeBlocked = state.exceptions.some(
+      entry => entry.taskId === taskId && entry.trigger === 'merge-blocked'
+    );
+    return phaseBreach || mergeBlocked;
+  });
+};

@@ -127,6 +127,9 @@ export interface IRunHandler {
 
 @injectable()
 export class RunHandler implements IRunHandler {
+  /** Labels gate logs `shadow` vs `enforce` (was hard-coded `shadow`). */
+  private _gateMode: 'shadow' | 'enforce' = 'enforce';
+
   constructor(
     @inject(WORKFLOW_TOKENS.ExecutorService)
     private readonly _executor: IExecutorService,
@@ -170,6 +173,7 @@ export class RunHandler implements IRunHandler {
 
   async runTask(input: RunTaskInput): Promise<RunTaskResult> {
     console.log(chalk.bold(`\nRun ${input.runId} — ${input.specPath}\n`));
+    this._gateMode = input.shadow === true ? 'shadow' : 'enforce';
 
     const heartbeatSeconds =
       input.heartbeatSeconds === undefined ? 30 : input.heartbeatSeconds;
@@ -1319,7 +1323,7 @@ export class RunHandler implements IRunHandler {
     const color = verdict.outcome === 'pass' ? chalk.green : chalk.red;
     console.log(
       color(
-        `  [shadow] ${verdict.gate} gate: ${verdict.outcome}` +
+        `  [${this._gateMode}] ${verdict.gate} gate: ${verdict.outcome}` +
           (verdict.wouldEscalate ? ' (would escalate)' : '')
       )
     );
