@@ -13,6 +13,7 @@ import type {
 import { WORKFLOW_TOKENS } from '../tokens';
 import {
   allTasksMerged,
+  hasMergeBlockedHalt,
   hasUnmergedCompletedTasks
 } from '../utils/run-completion';
 import { buildSuperviseChildArgv } from '../utils/supervise-argv';
@@ -96,9 +97,7 @@ export class SuperviseService implements ISuperviseService {
     const monitorPath = input.monitorPath ?? path.join(runDir, 'monitor.log');
     const pidPath = path.join(runDir, 'supervise.pid');
 
-    const childArgv = buildSuperviseChildArgv(
-      input.detachArgv ?? process.argv
-    );
+    const childArgv = buildSuperviseChildArgv(input.detachArgv ?? process.argv);
     const { pid } = this._detachRepo.spawnDetached({
       command: process.execPath,
       args: childArgv,
@@ -199,6 +198,33 @@ export class SuperviseService implements ISuperviseService {
           };
         }
 
+        // Enforce: completed-but-unmerged after a red phase is a hard stop —
+        // do not spin another "no ready task" wave (Comita Phase 0b lesson).
+        if (
+          input.shadow !== true &&
+          hasMergeBlockedHalt(
+            state,
+            lastWave.tasks.map(task => task.taskId)
+          )
+        ) {
+          this._hbWatch.note(
+            monitorPath,
+            `[supervise] MERGE BLOCKED after wave ${waves} — escalate / fix gates, then resume`
+          );
+          console.log(
+            chalk.red(
+              '\n[supervise] merge blocked — fix red gates or PR conflicts, then resume'
+            )
+          );
+          return {
+            kind: 'failed',
+            waves,
+            lastWave,
+            monitorPath,
+            detail: 'merge-blocked'
+          };
+        }
+
         // Shadow mode: merges are human — stop after the wave for review.
         if (input.shadow === true && hasUnmergedCompletedTasks(state)) {
           this._hbWatch.note(
@@ -248,6 +274,10 @@ export class SuperviseService implements ISuperviseService {
         detail: `max-waves-${maxWaves}`
       };
     } finally {
+      this._hbWatch.note(
+        monitorPath,
+        `[hb-watch] stopped ${new Date().toISOString()}`
+      );
       this._hbWatch.stop();
     }
   }

@@ -62,6 +62,8 @@ export class HeartbeatWatchService implements IHeartbeatWatchService {
       clearInterval(this._timer);
       this._timer = null;
     }
+    // Clear path so a stray poll after stop cannot write; monitor path is
+    // kept only long enough for the supervise finally-note (call note first).
     this._heartbeatPath = '';
   }
 

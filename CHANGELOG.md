@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** supervise fails fast on enforce `merge-blocked` (no spurious
+  "no ready task" wave); gate logs label `[enforce]` vs `[shadow]`; monitor notes
+  when the heartbeat watch stops.
 - **sdlc-workflow:** `run --supervise` auto-resumes dependency waves and mirrors
   heartbeats to `monitor.log`; `run --detach` spawns a detached supervise child
   that survives agent shell teardown (#38 / #39). See

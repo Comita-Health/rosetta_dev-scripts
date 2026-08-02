@@ -255,6 +255,47 @@ describe('SuperviseService', () => {
     expect(result.detail).toBe('no-ready-task');
   });
 
+  it('fails immediately on enforce merge-blocked instead of spinning no-ready', async () => {
+    runTask.mockResolvedValue(wave('executed'));
+    load.mockReturnValue({
+      taskResults: {
+        'T-01': {
+          taskId: 'T-01',
+          status: 'completed',
+          recordedAt: 't'
+        }
+      },
+      steps: {
+        'phase:T-01': {
+          name: 'phase',
+          taskId: 'T-01',
+          inputsDigest: 'x',
+          verdict: {
+            gate: 'phase',
+            outcome: 'breach',
+            wouldEscalate: true,
+            reasons: ['failing gates: envelope'],
+            recordedAt: 't'
+          },
+          completedAt: 't'
+        }
+      },
+      exceptions: [
+        {
+          trigger: 'merge-blocked',
+          taskId: 'T-01',
+          context: ['failing gates: envelope'],
+          recordedAt: 't'
+        }
+      ]
+    } as unknown as RunState);
+
+    const result = await supervise.run(input());
+    expect(result.kind).toBe('failed');
+    expect(result.detail).toBe('merge-blocked');
+    expect(runTask).toHaveBeenCalledTimes(1);
+  });
+
   it('fails when max-waves is exhausted without full merge', async () => {
     runTask.mockResolvedValue(wave('executed'));
     load.mockReturnValue({
