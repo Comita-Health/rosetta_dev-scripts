@@ -1,31 +1,39 @@
-# Spike: merge Addi-authored PRs on human Approve, as Addi M. (GitHub App).
-# Disabled until ADDI_MERGE_ON_APPROVE=true and App credentials are configured.
-# See team-setup/docs/addi-merge-on-approve-spike.md
-# Comita: author filter includes app/addi-m; org vars ADDI_CLIENT_ID +
-# ADDI_APP_PRIVATE_KEY + ADDI_MERGE_ON_APPROVE.
+# Gold standard: merge Addi-authored PRs on human Approve, as Addi (GitHub App).
+# Opt-in: vars.ADDI_MERGE_ON_APPROVE=true + ADDI_CLIENT_ID + ADDI_APP_PRIVATE_KEY.
+# See team-setup/docs/addi-pr-automation-standard.md
 name: Addi merge on Approve
 
 on:
+  # Best-effort — delivery is flaky on some PRs; do not rely on this alone.
   pull_request_review:
     types: [submitted]
+  # Preferred reliable path: Addi App webhook bridge → repository_dispatch.
+  repository_dispatch:
+    types: [addi-merge-on-approve]
   workflow_dispatch:
     inputs:
       pr_number:
         description: Pull request number to attempt merge (as Addi)
         required: true
         type: string
-  # Reliability path: pull_request_review has been observed not to start runs
-  # in this repo (Approve creates no workflow_run). Poll while investigating.
+  # After CI/PR Checks complete, retry Approved Addi PRs (covers Approve-then-green).
+  workflow_run:
+    workflows: [CI, PR Checks]
+    types: [completed]
+  # Last-resort poll (GitHub may delay or skip schedules on quiet repos).
   schedule:
-    - cron: '*/5 * * * *'
+    - cron: '*/10 * * * *'
+
+concurrency:
+  group: addi-merge-${{ github.repository }}-${{ github.event.client_payload.pr_number || github.event.inputs.pr_number || github.event.pull_request.number || github.event.workflow_run.head_branch || 'poll' }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   merge:
-    # Opt-in only. Keep this if: simple — complex event filters previously made
-    # it hard to tell whether pull_request_review was delivering at all.
     if: ${{ vars.ADDI_MERGE_ON_APPROVE == 'true' }}
     runs-on: ubuntu-latest
     steps:
@@ -35,7 +43,7 @@ jobs:
           HAS_KEY: ${{ secrets.ADDI_APP_PRIVATE_KEY != '' }}
         run: |
           if [ -z "$CLIENT_ID" ] || [ "$HAS_KEY" != "true" ]; then
-            echo "::error::Set vars.ADDI_CLIENT_ID and secrets.ADDI_APP_PRIVATE_KEY (see team-setup/docs/addi-merge-on-approve-spike.md)"
+            echo "::error::Set vars.ADDI_CLIENT_ID and secrets.ADDI_APP_PRIVATE_KEY (see team-setup/docs/addi-pr-automation-standard.md)"
             exit 1
           fi
 
@@ -43,7 +51,6 @@ jobs:
         id: addi
         uses: actions/create-github-app-token@v3
         with:
-          # client-id preferred; app-id is deprecated on create-github-app-token@v3
           client-id: ${{ vars.ADDI_CLIENT_ID }}
           private-key: ${{ secrets.ADDI_APP_PRIVATE_KEY }}
 
@@ -56,6 +63,10 @@ jobs:
           REVIEW_STATE: ${{ github.event.review.state }}
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           DISPATCH_PR: ${{ inputs.pr_number }}
+          PAYLOAD_PR: ${{ github.event.client_payload.pr_number }}
+          WORKFLOW_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          WORKFLOW_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          WORKFLOW_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           REPO: ${{ github.repository }}
           ALLOW_ANY_AUTHOR: ${{ vars.ADDI_MERGE_ANY_AUTHOR }}
         run: |
@@ -65,6 +76,13 @@ jobs:
           numbers=""
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             numbers="$DISPATCH_PR"
+          elif [ "$EVENT_NAME" = "repository_dispatch" ]; then
+            numbers="${PAYLOAD_PR:-}"
+            if [ -z "$numbers" ]; then
+              echo "repository_dispatch missing client_payload.pr_number; nothing to do."
+              echo "numbers=" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
           elif [ "$EVENT_NAME" = "pull_request_review" ]; then
             if [ "${REVIEW_STATE:-}" != "approved" ]; then
               echo "Review state is '${REVIEW_STATE:-}' (want approved); nothing to do."
@@ -77,8 +95,26 @@ jobs:
               exit 0
             fi
             numbers="$REVIEW_PR"
+          elif [ "$EVENT_NAME" = "workflow_run" ]; then
+            if [ "${WORKFLOW_CONCLUSION:-}" != "success" ]; then
+              echo "workflow_run conclusion=${WORKFLOW_CONCLUSION:-}; skip."
+              echo "numbers=" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            # Map head branch/sha → open PR numbers.
+            numbers=$(
+              gh pr list -R "$REPO" --state open --limit 50 \
+                --json number,headRefName,headRefOid,author,reviewDecision,isDraft \
+                | jq -r --arg b "${WORKFLOW_HEAD_BRANCH:-}" --arg s "${WORKFLOW_HEAD_SHA:-}" '
+                  .[]
+                  | select(.isDraft == false)
+                  | select(.reviewDecision == "APPROVED")
+                  | select(.headRefName == $b or .headRefOid == $s)
+                  | .number' \
+                | tr '\n' ' ' | sed 's/[[:space:]]*$//'
+            )
           else
-            # schedule (and any future poll triggers)
+            # schedule
             jq_filter='.[]
               | select(.isDraft == false)
               | select(.reviewDecision == "APPROVED")
@@ -110,8 +146,6 @@ jobs:
           PRS: ${{ steps.prs.outputs.numbers }}
           REPO: ${{ github.repository }}
           ALLOW_ANY_AUTHOR: ${{ vars.ADDI_MERGE_ANY_AUTHOR }}
-          # Keep comment text in env — unindented heredoc bodies break YAML
-          # `run: |` block scalars (GitHub then never registers triggers).
           CONFLICT_BODY: |
             ## Addi merge-on-approve
 
@@ -121,9 +155,16 @@ jobs:
             (agent wake / local `pr-approve-watch` path), then re-Approve or
             re-run **Addi merge on Approve** via `workflow_dispatch`.
 
-            Spike docs: `team-setup/docs/addi-merge-on-approve-spike.md`
+            Docs: `team-setup/docs/addi-pr-automation-standard.md`
         run: |
           set -euo pipefail
+
+          is_addi_author() {
+            case "$1" in
+              app/rosetta-s-addi-m|rosetta-s-addi-m|rosetta-s-addi-m\[bot\]|app/addi-m|addi-m|addi-m\[bot\]) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
 
           process_pr() {
             local PR="$1"
@@ -150,17 +191,12 @@ jobs:
               return 0
             fi
 
-            # gh --json author.login is often "app/rosetta-s-addi-m"; REST may
-            # use "rosetta-s-addi-m[bot]". Accept both shapes.
             if [ "${ALLOW_ANY_AUTHOR:-}" != "true" ]; then
-              case "$author" in
-                app/rosetta-s-addi-m|rosetta-s-addi-m|rosetta-s-addi-m\[bot\]|app/addi-m|addi-m|addi-m\[bot\]) ;;
-                *)
-                  echo "Author '$author' is not Addi; skip (set ADDI_MERGE_ANY_AUTHOR=true to override)."
-                  echo "::endgroup::"
-                  return 0
-                  ;;
-              esac
+              if ! is_addi_author "$author"; then
+                echo "Author '$author' is not Addi; skip (set ADDI_MERGE_ANY_AUTHOR=true to override)."
+                echo "::endgroup::"
+                return 0
+              fi
             fi
 
             if [ "$decision" != "APPROVED" ]; then
@@ -182,15 +218,14 @@ jobs:
               return 0
             fi
 
-            # Do NOT use `gh pr checks --watch` — on pull_request_review this
-            # job is itself a pending check, so --watch deadlocks on self.
+            # Do NOT use `gh pr checks --watch` — this job can register as a
+            # pending check and deadlock on itself.
             echo "Waiting for checks (excluding this workflow)…"
             local deadline=$((SECONDS + 1200))
             local self_run="${GITHUB_RUN_ID:-}"
             while true; do
-              local rollup
+              local rollup pending failed
               rollup=$(gh pr view "$PR" -R "$REPO" --json statusCheckRollup)
-              local pending failed
               pending=$(echo "$rollup" | jq --argjson run "${self_run:-0}" '
                 [.statusCheckRollup[]?
                   | select((.workflowName // "") != "Addi merge on Approve")
