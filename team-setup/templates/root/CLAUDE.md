@@ -173,6 +173,14 @@ git push -u origin HEAD
 gh pr create --fill
 ```
 
+**No tool marketing in PR bodies or commits.** Never include `Made with Cursor`,
+`Made-with: Cursor`, or similar AI-tool footers/trailers. Prefer `--body` /
+`--body-file` HEREDOCs. If Cursor still injects a footer after create (known
+bug even with attribution off), strip it with `gh pr edit` before the PR is
+ready. Operators: turn off Cursor Settings → Attribution (commits + PRs) and
+keep `attribution.attributePRsToAgent: false` in `~/.cursor/cli-config.json`
+and workspace `.cursor/cli.json` (see rule `no-tool-attribution`).
+
 **Immediately after pushing, return to an up-to-date default branch** — do not linger on the
 feature branch:
 

@@ -40,5 +40,9 @@
       "Write(**/*.pem)",
       "Write(**/*.key)"
     ]
+  },
+  "attribution": {
+    "attributeCommitsToAgent": false,
+    "attributePRsToAgent": false
   }
 }
