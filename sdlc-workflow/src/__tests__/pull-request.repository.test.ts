@@ -71,6 +71,14 @@ describe('PullRequestRepository (P3 T-02)', () => {
     ).toThrow(expect.objectContaining({ code: 'GH_FAILED' }));
   });
 
+  it('throws typed when gh pr list returns unparseable JSON', () => {
+    execMock.mockReturnValue('gh: unexpected banner text');
+
+    expect(() => repo.findByBranch('/repo', 'b')).toThrow(
+      expect.objectContaining({ code: 'GH_FAILED' })
+    );
+  });
+
   it('throws typed when gh pr create returns no URL', () => {
     execMock.mockReturnValue('something unexpected');
 
@@ -147,6 +155,76 @@ describe('PullRequestRepository (P3 T-02)', () => {
       );
       await jest.advanceTimersByTimeAsync(5_000);
       await assertion;
+    });
+
+    it('throws typed when merge-async neither merges nor enqueues', async () => {
+      execMock
+        .mockReturnValueOnce('{"base":"f/parent"}\n')
+        .mockReturnValueOnce('{"status":"rejected"}');
+
+      await expect(repo.merge('/repo', 14)).rejects.toThrow(
+        expect.objectContaining({ code: 'GH_FAILED' })
+      );
+    });
+
+    it('throws typed when merge-async reports pending without a uuid', async () => {
+      execMock
+        .mockReturnValueOnce('{"base":"f/parent"}\n')
+        .mockReturnValueOnce('{"status":"pending","details":{}}');
+
+      await expect(repo.merge('/repo', 14)).rejects.toThrow(
+        expect.objectContaining({ code: 'GH_FAILED' })
+      );
+    });
+
+    it('gives up on merge-async rather than polling forever', async () => {
+      execMock
+        .mockReturnValueOnce('{"base":"f/parent"}\n')
+        .mockReturnValueOnce('{"status":"pending","details":{"uuid":"u-1"}}')
+        .mockReturnValue('{"status":"pending"}');
+
+      const assertion = expect(repo.merge('/repo', 14)).rejects.toThrow(
+        expect.objectContaining({ code: 'GH_FAILED' })
+      );
+      // Past the 10-minute ceiling; the loop must exit on the deadline check.
+      await jest.advanceTimersByTimeAsync(11 * 60_000);
+      await assertion;
+    });
+
+    it('treats a merge-async error status as failure', async () => {
+      execMock
+        .mockReturnValueOnce('{"base":"f/parent"}\n')
+        .mockReturnValueOnce('{"status":"pending","details":{"uuid":"u-1"}}')
+        .mockReturnValueOnce('{"status":"error"}');
+
+      const assertion = expect(repo.merge('/repo', 14)).rejects.toThrow(
+        expect.objectContaining({ code: 'GH_FAILED' })
+      );
+      await jest.advanceTimersByTimeAsync(5_000);
+      await assertion;
+    });
+
+    it('skips polling when merge-async lands the stack immediately', async () => {
+      execMock
+        .mockReturnValueOnce('{"base":"f/parent"}\n')
+        .mockReturnValueOnce('{"status":"merged"}')
+        .mockReturnValueOnce('abc123def4567890abc123def4567890abc123de\n');
+
+      await expect(repo.merge('/repo', 14)).resolves.toBe(
+        'abc123def4567890abc123def4567890abc123de'
+      );
+      expect(execMock).toHaveBeenCalledTimes(3);
+    });
+
+    it('treats a literal null stack field as unstacked', async () => {
+      execMock
+        .mockReturnValueOnce('null\n')
+        .mockReturnValueOnce('')
+        .mockReturnValueOnce('abc123def4567890abc123def4567890abc123de\n');
+
+      await repo.merge('/repo', 14);
+
+      expect(execMock.mock.calls[1][0]).toContain('--squash');
     });
 
     it('throws typed when the merge succeeds but the SHA cannot be resolved', async () => {
