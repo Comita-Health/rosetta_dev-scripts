@@ -151,11 +151,13 @@ jobs:
 
             Human Approve received, but this PR is `mergeable=CONFLICTING`.
 
-            I will not force-merge. Please resolve conflicts onto the base branch
-            (agent wake / local `pr-approve-watch` path), then re-Approve or
-            re-run **Addi merge on Approve** via `workflow_dispatch`.
+            I will not force-merge or auto-resolve. An agent must merge/rebase
+            onto the base, push, wait for checks, then re-Approve or re-run
+            **Addi merge on Approve** via `workflow_dispatch`.
 
-            Docs: `team-setup/docs/addi-pr-automation-standard.md`
+            Stacked PRs: fix the **bottom** (base ← trunk) PR first. Stack
+            merges use **merge commits** (never squash). See
+            `team-setup/docs/addi-pr-automation-standard.md`.
         run: |
           set -euo pipefail
 
@@ -265,6 +267,54 @@ jobs:
               echo "After checks, mergeable=$mergeable; not merging."
               echo "::endgroup::"
               return 1
+            fi
+
+            # GitHub native stacks require PUT .../merge-async (sync gh pr merge
+            # fails). Merging a stacked tip lands the whole stack up to that PR
+            # onto the stack base. Unstacked default-branch PRs stay squash.
+            # Docs: https://docs.github.com/en/rest/pulls/pulls#merge-a-pull-request-asynchronously
+            stack_json=$(gh api "repos/$REPO/pulls/$PR" --jq '.stack // empty')
+            if [ -n "$stack_json" ] && [ "$stack_json" != "null" ]; then
+              echo "Stacked PR detected: $stack_json"
+              echo "Using merge-async (merge commits) for the stack."
+              resp=$(gh api --method PUT "repos/$REPO/pulls/$PR/merge-async" \
+                -f merge_method=merge \
+                -f merge_action=direct_merge)
+              echo "$resp" | jq .
+              status=$(echo "$resp" | jq -r '.status // empty')
+              uuid=$(echo "$resp" | jq -r '.details.uuid // empty')
+              if [ "$status" = "merged" ]; then
+                echo "Stack already merged as Addi: $url"
+                echo "::endgroup::"
+                return 0
+              fi
+              if [ "$status" != "pending" ] || [ -z "$uuid" ]; then
+                echo "merge-async did not enqueue (status=$status); not merging."
+                echo "::endgroup::"
+                return 1
+              fi
+              local deadline=$((SECONDS + 600))
+              while true; do
+                poll=$(gh api "repos/$REPO/pulls/$PR/merge-async/$uuid")
+                echo "$poll" | jq .
+                pstatus=$(echo "$poll" | jq -r '.status // empty')
+                if [ "$pstatus" = "merged" ]; then
+                  echo "Stack merged as Addi: $url"
+                  echo "::endgroup::"
+                  return 0
+                fi
+                if [ "$pstatus" = "failed" ] || [ "$pstatus" = "error" ]; then
+                  echo "merge-async failed: $(echo "$poll" | jq -r '.details.message // empty')"
+                  echo "::endgroup::"
+                  return 1
+                fi
+                if [ "$SECONDS" -ge "$deadline" ]; then
+                  echo "Timed out waiting for merge-async $uuid"
+                  echo "::endgroup::"
+                  return 1
+                fi
+                sleep 5
+              done
             fi
 
             gh pr merge "$PR" -R "$REPO" --squash --delete-branch

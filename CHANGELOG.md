@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **team-setup:** Addi merge-on-approve uses GitHub **`merge-async`** for
+  native stacked PRs (`pull.stack`); plain `gh pr merge` is rejected on stacks.
+  Conflicts on a lower PR still require an agent resolve (GHA comments only).
 - **team-setup:** gold-standard **Addi PR automation** —
   `docs/addi-pr-automation-standard.md` + hardened
   `addi-merge-on-approve.yml` (repository_dispatch / workflow_run / schedule)
