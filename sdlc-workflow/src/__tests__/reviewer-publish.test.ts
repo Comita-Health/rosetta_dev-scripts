@@ -70,6 +70,25 @@ describe('reviewer-publish utils', () => {
     expect(body).toContain('- empty diff');
     expect(body).toContain('Would escalate under enforcement');
   });
+
+  it('formats enforce-mode comments with empty reasons and other outcomes', () => {
+    const body = formatReviewerPrComment({
+      runId: 'run-1',
+      taskId: 'T-01',
+      shadow: false,
+      verdict: {
+        gate: 'reviewer',
+        outcome: 'human-required',
+        wouldEscalate: false,
+        reasons: [],
+        recordedAt: '2026-08-02T00:00:00.000Z'
+      }
+    });
+    expect(body).toContain('reviewer (enforce)');
+    expect(body).toContain('**human-required**');
+    expect(body).toContain('_(no reasons recorded)_');
+    expect(body).not.toContain('Would escalate');
+  });
 });
 
 describe('ReviewerPublishService', () => {
@@ -188,5 +207,60 @@ describe('ReviewerPublishService', () => {
 
     expect(createStatus).toHaveBeenCalled();
     expect(comment).not.toHaveBeenCalled();
+  });
+
+  it('skips status when headSha is empty', () => {
+    service.markPending({
+      repoPath: '/repo',
+      prUrl: 'https://github.com/org/repo/pull/1',
+      headSha: '',
+      runId: 'run-1',
+      taskId: 'T-01',
+      shadow: true
+    });
+    expect(createStatus).not.toHaveBeenCalled();
+  });
+
+  it('swallows createStatus failures without throwing', () => {
+    createStatus.mockImplementation(() => {
+      throw 'raw failure';
+    });
+
+    expect(() =>
+      service.markPending({
+        repoPath: '/repo',
+        prUrl: 'https://github.com/org/repo/pull/1',
+        headSha: 'abc',
+        runId: 'run-1',
+        taskId: 'T-01',
+        shadow: true
+      })
+    ).not.toThrow();
+  });
+
+  it('uses first-reason fallback when reasons are empty', () => {
+    service.publishResult({
+      repoPath: '/repo',
+      prUrl: 'https://github.com/org/repo/pull/3',
+      headSha: 'sha',
+      runId: 'run-1',
+      taskId: 'T-03',
+      shadow: true,
+      verdict: {
+        gate: 'reviewer',
+        outcome: 'pass',
+        wouldEscalate: false,
+        reasons: [],
+        recordedAt: '2026-08-02T00:00:00.000Z'
+      }
+    });
+
+    expect(createStatus).toHaveBeenCalledWith(
+      '/repo',
+      'sha',
+      expect.objectContaining({
+        description: expect.stringContaining('T-03: pass — pass')
+      })
+    );
   });
 });

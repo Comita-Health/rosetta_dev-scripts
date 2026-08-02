@@ -97,6 +97,30 @@ describe('CiStatusRepository', () => {
     });
   });
 
+  it('omits empty optional status fields and wraps gh failures', () => {
+    execMock.mockReturnValue('{}');
+    repo.createStatus('/repo', 'sha', {
+      state: 'pending',
+      context: 'sdlc/reviewer',
+      description: '',
+      targetUrl: ''
+    });
+    expect(JSON.parse(execMock.mock.calls[0][1].input)).toEqual({
+      state: 'pending',
+      context: 'sdlc/reviewer'
+    });
+
+    execMock.mockImplementation(() => {
+      throw 'boom';
+    });
+    expect(() =>
+      repo.createStatus('/repo', 'sha', {
+        state: 'failure',
+        context: 'sdlc/reviewer'
+      })
+    ).toThrow(expect.objectContaining({ code: 'GH_FAILED' }));
+  });
+
   it('failedLogs is best effort: empty string on failure, partial on one bad run', () => {
     execMock.mockImplementation(() => {
       throw new Error('gh down');
