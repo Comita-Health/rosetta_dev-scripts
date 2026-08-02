@@ -21,10 +21,10 @@ PRs), arm this watcher so Approve can be acted on without a chat nudge.
 2. Do **not** redirect the watcher stdout away from the monitored terminal
    (or the wake sentinel will be swallowed).
 3. On wake: activate the workspace GitHub App, verify APPROVED + green checks,
-   **triage review comments (required — see below)**, then merge, pull the
-   repo default branch (`main` or `build-env/dev`), report. If multiple
-   targets remain, leave the watcher running (it exits only when all targets
-   have fired).
+   **resolve merge conflicts if `mergeable=CONFLICTING`**, **triage review
+   comments (required — see below)**, then merge, pull the repo default
+   branch (`main` or `build-env/dev`), report. If multiple targets remain,
+   leave the watcher running (it exits only when all targets have fired).
 4. Prefer human (non-bot) Approve. The script uses `reviewDecision == APPROVED`
    when present, else any non-bot `APPROVED` review.
 5. **Never merge on Approve alone while unresolved, unaddressed review
@@ -50,8 +50,21 @@ Cursor agent loop: background the command with
 ## On wake
 
 1. `eval "$(bash ~/.config/<rosetta|comita>/github-app-activate.sh)"` when present.
-2. `gh pr view <n> -R <owner/repo> --json state,reviewDecision,statusCheckRollup,mergeable`.
-3. **Review-comment cycle (before merge):**
+2. `gh pr view <n> -R <owner/repo> --json state,reviewDecision,statusCheckRollup,mergeable,mergeStateStatus`.
+
+3. **If `mergeable` is `CONFLICTING` (or mergeStateStatus is `DIRTY`):** do **not**
+   stop or wait for the human. Resolve on the PR branch:
+   1. `git fetch origin <base> && git checkout <head> && git rebase origin/<base>`
+      (or merge `origin/<base>` if rebase is inappropriate).
+   2. Resolve conflicts; keep the intentional PR change; drop duplicate history
+      that already landed on base (prefer a clean tip over replaying merged
+      parent stacks).
+   3. `git push` (force-with-lease only on the PR head branch after rebase).
+   4. Re-check CI; continue the review-comment cycle, then merge.
+   5. If conflicts need a human product decision, comment on the PR and ping —
+      otherwise auto-resolve mechanical conflicts.
+
+4. **Review-comment cycle (before merge):**
    1. Fetch inline threads:
       `gh api repos/{owner}/{repo}/pulls/{n}/comments`
    2. Fetch review bodies:
@@ -69,12 +82,12 @@ Cursor agent loop: background the command with
    7. If fixes were pushed, wait for CI green again before merge.
    8. Run this cycle **once** per wake; new bot comments on the fix commit
       → flag for human rather than looping.
-4. Merge when checks are green and comment triage is done (`gh pr merge` —
+5. Merge when checks are green and comment triage is done (`gh pr merge` —
    use the repo's normal merge method; stacked PRs need merge commits, never
    squash-merge a stack).
-5. `git checkout <default-branch> && git pull --ff-only` in the affected
+6. `git checkout <default-branch> && git pull --ff-only` in the affected
    local clone (`main` or `build-env/dev` as appropriate).
-6. Brief report: merged URL + what comments were addressed or waived.
+7. Brief report: merged URL + conflicts resolved (if any) + comments addressed or waived.
 
 ## Anti-patterns
 
@@ -82,4 +95,5 @@ Cursor agent loop: background the command with
 - Treating chat "LGTM" / "approved" as the proceed signal when an Addi PR exists.
 - Redirecting watcher stdout to a file without `tee` (breaks wake notifications).
 - Merging immediately on Approve without reading review comments / threads.
+- Giving up on `CONFLICTING` PRs after Approve — resolve (or ask only when product judgment is required), then merge.
 - Resolving threads without a reply when the human asked for a change.

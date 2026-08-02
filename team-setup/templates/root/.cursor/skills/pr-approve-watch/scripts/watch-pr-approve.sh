@@ -157,13 +157,7 @@ num = int(os.environ["NUM"])
 remaining = int(os.environ["REMAINING"])
 print(json.dumps({
   "prompt": (
-    f"PR approve proceed signal fired for {t}. "
-    "Activate the workspace GitHub App (Addi), verify APPROVED + green checks, "
-    "then triage all PR review comments and unresolved reviewThreads "
-    "(fix / reply with commit SHA / resolveReviewThread; do not merge with "
-    "unaddressed actionable comments). Re-check CI if you pushed fixes, then "
-    "merge, pull the repo default branch locally, and report. "
-    "Keep watching any remaining unapproved PRs from this same watch set."
+    f"PR approve proceed signal fired for {t}. Activate the workspace GitHub App (Addi), verify APPROVED + green checks, and if mergeable is CONFLICTING resolve conflicts on the PR branch (rebase/merge onto base, push, re-check CI). Then triage all PR review comments and unresolved reviewThreads (fix / reply with commit SHA / resolveReviewThread; do not merge with unaddressed actionable comments). Re-check CI if you pushed fixes, then merge, pull the repo default branch locally, and report. Keep watching any remaining unapproved PRs from this same watch set."
   ),
   "repo": repo,
   "number": num,
