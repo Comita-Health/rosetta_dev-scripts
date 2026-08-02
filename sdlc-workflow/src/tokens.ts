@@ -23,6 +23,7 @@ export const WORKFLOW_TOKENS = {
   SandboxDeployService: Symbol.for('SandboxDeployService'),
   VerificationService: Symbol.for('VerificationService'),
   ReviewerGateService: Symbol.for('ReviewerGateService'),
+  ReviewerPublishService: Symbol.for('ReviewerPublishService'),
   AggregatorService: Symbol.for('AggregatorService'),
   CiGateService: Symbol.for('CiGateService'),
   DigestService: Symbol.for('DigestService'),

@@ -82,6 +82,10 @@ import {
   ReviewerGateService,
   IReviewerGateService
 } from './services/reviewer-gate.service';
+import {
+  ReviewerPublishService,
+  IReviewerPublishService
+} from './services/reviewer-publish.service';
 import { ExecutorService, IExecutorService } from './services/executor.service';
 import {
   SandboxDeployService,
@@ -186,6 +190,9 @@ container
 container
   .bind<IReviewerGateService>(WORKFLOW_TOKENS.ReviewerGateService)
   .to(ReviewerGateService);
+container
+  .bind<IReviewerPublishService>(WORKFLOW_TOKENS.ReviewerPublishService)
+  .to(ReviewerPublishService);
 container
   .bind<IAggregatorService>(WORKFLOW_TOKENS.AggregatorService)
   .to(AggregatorService);

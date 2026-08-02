@@ -21,6 +21,7 @@ import type {
 } from '../services/executor.service';
 import type { IHeartbeatService } from '../services/heartbeat.service';
 import type { IReviewerGateService } from '../services/reviewer-gate.service';
+import type { IReviewerPublishService } from '../services/reviewer-publish.service';
 import type { ISandboxDeployService } from '../services/sandbox-deploy.service';
 import type { IVerificationService } from '../services/verification.service';
 import { WORKFLOW_TOKENS } from '../tokens';
@@ -250,6 +251,12 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
       .bind<IReviewerGateService>(WORKFLOW_TOKENS.ReviewerGateService)
       .toConstantValue({ review });
     container
+      .bind<IReviewerPublishService>(WORKFLOW_TOKENS.ReviewerPublishService)
+      .toConstantValue({
+        markPending: jest.fn(),
+        publishResult: jest.fn()
+      });
+    container
       .bind<IPrLifecycleService>(WORKFLOW_TOKENS.PrLifecycleService)
       .toConstantValue({ openTaskPr });
     container
@@ -257,7 +264,8 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
       .toConstantValue({
         findByBranch: jest.fn().mockReturnValue(null),
         create: prCreate,
-        merge: prMerge
+        merge: prMerge,
+        comment: jest.fn()
       });
     container
       .bind<IQueueRepository>(WORKFLOW_TOKENS.QueueRepository)

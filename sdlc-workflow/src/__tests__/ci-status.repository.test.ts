@@ -76,6 +76,27 @@ describe('CiStatusRepository', () => {
     expect(logs).toContain('jest failed');
   });
 
+  it('creates a commit status via gh api --input JSON', () => {
+    execMock.mockReturnValue('{}');
+
+    repo.createStatus('/repo', 'abc123', {
+      state: 'success',
+      context: 'sdlc/reviewer',
+      description: 'T-01: pass',
+      targetUrl: 'https://github.com/org/repo/pull/7'
+    });
+
+    const [command, options] = execMock.mock.calls[0];
+    expect(command).toContain('repos/{owner}/{repo}/statuses/abc123');
+    expect(command).toContain('--input -');
+    expect(JSON.parse(options.input)).toEqual({
+      state: 'success',
+      context: 'sdlc/reviewer',
+      description: 'T-01: pass',
+      target_url: 'https://github.com/org/repo/pull/7'
+    });
+  });
+
   it('failedLogs is best effort: empty string on failure, partial on one bad run', () => {
     execMock.mockImplementation(() => {
       throw new Error('gh down');

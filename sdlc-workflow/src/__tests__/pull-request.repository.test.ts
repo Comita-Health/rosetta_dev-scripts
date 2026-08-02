@@ -74,6 +74,16 @@ describe('PullRequestRepository (P3 T-02)', () => {
     ).toThrow(expect.objectContaining({ code: 'GH_FAILED' }));
   });
 
+  it('comments on a PR via body-file stdin', () => {
+    execMock.mockReturnValue('');
+
+    repo.comment('/repo', 12, '## reviewer\npass');
+
+    const [command, options] = execMock.mock.calls[0];
+    expect(command).toContain('gh pr comment 12 --body-file -');
+    expect(options.input).toBe('## reviewer\npass');
+  });
+
   describe('merge (P3 T-04)', () => {
     it('merges the PR with a merge commit and returns the merge SHA', () => {
       execMock

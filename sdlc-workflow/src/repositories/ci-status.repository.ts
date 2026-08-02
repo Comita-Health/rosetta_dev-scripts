@@ -1,10 +1,20 @@
 import { execSync } from 'child_process';
 import { injectable } from 'inversify';
+import { WorkflowError } from '../types';
 
 export interface CheckRunSummary {
   total: number;
   failed: string[]; // names of failed check runs
   pending: string[]; // names of queued/in-progress check runs
+}
+
+export type CommitStatusState = 'error' | 'failure' | 'pending' | 'success';
+
+export interface CommitStatusInput {
+  state: CommitStatusState;
+  context: string;
+  description?: string;
+  targetUrl?: string;
 }
 
 /**
@@ -20,6 +30,11 @@ export interface ICiStatusRepository {
    * agent's context. Best effort: returns '' when logs cannot be fetched.
    */
   failedLogs(repoPath: string, sha: string): string;
+  /**
+   * Create a commit status (Statuses API — works with `gh` user auth; Check
+   * Runs require a GitHub App). Used to surface the reviewer gate on the PR.
+   */
+  createStatus(repoPath: string, sha: string, input: CommitStatusInput): void;
 }
 
 const MAX_LOG_CHARS = 20_000;
@@ -92,6 +107,35 @@ export class CiStatusRepository implements ICiStatusRepository {
       return logs.join('\n').slice(-MAX_LOG_CHARS);
     } catch {
       return '';
+    }
+  }
+
+  createStatus(repoPath: string, sha: string, input: CommitStatusInput): void {
+    const payload: Record<string, string> = {
+      state: input.state,
+      context: input.context
+    };
+    if (input.description !== undefined && input.description.length > 0) {
+      payload.description = input.description;
+    }
+    if (input.targetUrl !== undefined && input.targetUrl.length > 0) {
+      payload.target_url = input.targetUrl;
+    }
+    try {
+      execSync(
+        `gh api --method POST "repos/{owner}/{repo}/statuses/${sha}" --input -`,
+        {
+          cwd: repoPath,
+          encoding: 'utf-8',
+          input: JSON.stringify(payload),
+          stdio: ['pipe', 'pipe', 'pipe']
+        }
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new WorkflowError(`gh api statuses/${sha} failed`, 'GH_FAILED', [
+        message.slice(0, 1000)
+      ]);
     }
   }
 }
