@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **team-setup:** spike **Addi merge-on-approve** via GitHub Actions (preserves
+  `rosetta-s-addi-m[bot]` identity). Cursor Automations cannot run as Addi —
+  see `team-setup/docs/addi-merge-on-approve-spike.md` + opt-in workflow
+  `.github/workflows/addi-merge-on-approve.yml`.
 - **team-setup:** document watch wake **delivery gap** — Cursor
   `notify_on_output` is best-effort after the arming turn ends; agents must
   drain `AGENT_LOOP_WAKE_*` from watcher terminals (and treat “I approved” /
