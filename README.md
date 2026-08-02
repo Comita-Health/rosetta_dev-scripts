@@ -62,7 +62,9 @@ and Cursor CLI (`.cursor/cli.json`) so agents can:
 - Cursor: matching `command-review` / `command-add-repo` / `command-sdlc-status`
   rules under `.cursor/rules/` — ask the agent to follow them
 - Skills: `sdlc-prd-progress` (PRD/spec shadow-run scorecard — where a PRD is in
-  `sdlc-workflow` implementation) under `.cursor/skills/` and `.claude/skills/`
+  `sdlc-workflow` implementation) and `pr-approve-watch` (Approve proceed signal
+  + review-comment triage before merge) under `.cursor/skills/` and
+  `.claude/skills/`
 
 **Multi-repo workspace** — One bootstrap gives you:
 

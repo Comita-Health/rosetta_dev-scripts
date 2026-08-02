@@ -21,6 +21,7 @@ import type {
 } from '../services/executor.service';
 import type { IHeartbeatService } from '../services/heartbeat.service';
 import type { IReviewerGateService } from '../services/reviewer-gate.service';
+import type { IReviewerPublishService } from '../services/reviewer-publish.service';
 import type { ISandboxDeployService } from '../services/sandbox-deploy.service';
 import type { IVerificationService } from '../services/verification.service';
 import { WORKFLOW_TOKENS } from '../tokens';
@@ -99,6 +100,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
   let revertMerge: jest.Mock;
   let prCreate: jest.Mock;
   let gitPush: jest.Mock;
+  let gitFetch: jest.Mock;
   let specRead: jest.Mock;
   let escalationPost: jest.Mock;
 
@@ -232,6 +234,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
     itemTags = jest.fn().mockReturnValue(null);
     revertMerge = jest.fn();
     gitPush = jest.fn();
+    gitFetch = jest.fn();
     prCreate = jest.fn().mockReturnValue({
       url: 'https://github.com/org/repo/pull/99',
       number: 99
@@ -250,6 +253,12 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
       .bind<IReviewerGateService>(WORKFLOW_TOKENS.ReviewerGateService)
       .toConstantValue({ review });
     container
+      .bind<IReviewerPublishService>(WORKFLOW_TOKENS.ReviewerPublishService)
+      .toConstantValue({
+        markPending: jest.fn(),
+        publishResult: jest.fn()
+      });
+    container
       .bind<IPrLifecycleService>(WORKFLOW_TOKENS.PrLifecycleService)
       .toConstantValue({ openTaskPr });
     container
@@ -257,7 +266,8 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
       .toConstantValue({
         findByBranch: jest.fn().mockReturnValue(null),
         create: prCreate,
-        merge: prMerge
+        merge: prMerge,
+        comment: jest.fn()
       });
     container
       .bind<IQueueRepository>(WORKFLOW_TOKENS.QueueRepository)
@@ -298,7 +308,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
         diffStat: jest.fn(),
         diffText: jest.fn(),
         push: gitPush,
-        fetch: jest.fn(),
+        fetch: gitFetch,
         resolveSha: jest.fn().mockReturnValue('main-sha'),
         defaultBranch: jest.fn().mockReturnValue('main'),
         revertMerge,
@@ -686,6 +696,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
       await handler.runTask({ ...INPUT, chronicleRepo: '/chronicle' });
 
       expect(prMerge).toHaveBeenCalledWith('/repo', 7);
+      expect(gitFetch).toHaveBeenCalledWith('/repo');
       expect(state.taskResults['T-01'].mergedSha).toBe('merged-sha-abc');
       expect(state.mergedSha).toBe('merged-sha-abc');
       // sdlc.merge.v1 artifact, attributed to the machine gates.

@@ -21,6 +21,7 @@ import type { IHeartbeatService } from '../services/heartbeat.service';
 import type { IPullRequestRepository } from '../repositories/pull-request.repository';
 import type { IPrLifecycleService } from '../services/pr-lifecycle.service';
 import type { IReviewerGateService } from '../services/reviewer-gate.service';
+import type { IReviewerPublishService } from '../services/reviewer-publish.service';
 import type { ISandboxDeployService } from '../services/sandbox-deploy.service';
 import type {
   IVerificationService,
@@ -126,6 +127,9 @@ export interface IRunHandler {
 
 @injectable()
 export class RunHandler implements IRunHandler {
+  /** Labels gate logs `shadow` vs `enforce` (was hard-coded `shadow`). */
+  private _gateMode: 'shadow' | 'enforce' = 'enforce';
+
   constructor(
     @inject(WORKFLOW_TOKENS.ExecutorService)
     private readonly _executor: IExecutorService,
@@ -133,6 +137,8 @@ export class RunHandler implements IRunHandler {
     private readonly _envelopeGate: IEnvelopeGateService,
     @inject(WORKFLOW_TOKENS.ReviewerGateService)
     private readonly _reviewerGate: IReviewerGateService,
+    @inject(WORKFLOW_TOKENS.ReviewerPublishService)
+    private readonly _reviewerPublish: IReviewerPublishService,
     @inject(WORKFLOW_TOKENS.PrLifecycleService)
     private readonly _prLifecycle: IPrLifecycleService,
     @inject(WORKFLOW_TOKENS.PullRequestRepository)
@@ -167,6 +173,7 @@ export class RunHandler implements IRunHandler {
 
   async runTask(input: RunTaskInput): Promise<RunTaskResult> {
     console.log(chalk.bold(`\nRun ${input.runId} — ${input.specPath}\n`));
+    this._gateMode = input.shadow === true ? 'shadow' : 'enforce';
 
     const heartbeatSeconds =
       input.heartbeatSeconds === undefined ? 30 : input.heartbeatSeconds;
@@ -353,6 +360,18 @@ export class RunHandler implements IRunHandler {
       task.id,
       inputsDigest({ ...chain, task, baseRef: gateBaseRef }),
       async () => {
+        const prUrl = state.taskResults[task.id]?.prUrl;
+        const publishBase = {
+          repoPath: input.repoPath,
+          prUrl,
+          headSha: this._gitRepo.headSha(worktreePath),
+          runId: input.runId,
+          taskId: task.id,
+          shadow: input.shadow === true
+        };
+        // Surfaces reviewer on the PR (commit status + comment). Only runs
+        // when the gate is not satisfied from step cache — avoids spam on resume.
+        this._reviewerPublish.markPending(publishBase);
         const verdict = await this._reviewerGate.review({
           repoPath: input.repoPath,
           baseRef: gateBaseRef,
@@ -370,6 +389,7 @@ export class RunHandler implements IRunHandler {
           );
           verdict.evidenceIds = [evidenceId];
         }
+        this._reviewerPublish.publishResult({ ...publishBase, verdict });
         return verdict;
       }
     );
@@ -552,6 +572,9 @@ export class RunHandler implements IRunHandler {
 
     try {
       const mergedSha = this._prRepo.merge(input.repoPath, Number(prNumber));
+      // Bring the merge commit into the local object store before the next
+      // wave's worktree add (Comita Phase 0b: gh merge SHA is remote-only).
+      this._gitRepo.fetch(input.repoPath);
       this._runStateRepo.recordTaskMerged(
         input.runsDir,
         state,
@@ -1303,7 +1326,7 @@ export class RunHandler implements IRunHandler {
     const color = verdict.outcome === 'pass' ? chalk.green : chalk.red;
     console.log(
       color(
-        `  [shadow] ${verdict.gate} gate: ${verdict.outcome}` +
+        `  [${this._gateMode}] ${verdict.gate} gate: ${verdict.outcome}` +
           (verdict.wouldEscalate ? ' (would escalate)' : '')
       )
     );

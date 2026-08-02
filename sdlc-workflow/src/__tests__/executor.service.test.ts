@@ -176,14 +176,60 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
       name: 'phase',
       taskId: 'T-01',
       inputsDigest: 'p',
-      completedAt: 'x'
+      completedAt: 'x',
+      verdict: {
+        gate: 'phase',
+        outcome: 'breach',
+        wouldEscalate: true,
+        reasons: ['failing gates: envelope'],
+        recordedAt: 'x'
+      }
     };
     stateMock.load.mockReturnValue(state);
 
     const pool = await executor.executeReady(INPUT);
 
-    // T-01 is done (phase landed) but unmerged: T-02 stays ineligible.
+    // T-01 phase breach + unmerged: T-02 stays ineligible; T-01 not retried.
     expect(pool.kind).toBe('no-ready-task');
+    expect(agentRun).not.toHaveBeenCalled();
+  });
+
+  it('re-selects a green-phase unmerged task so enforce can retry merge', async () => {
+    const state = baseState();
+    const digest = implementationDigest(makeSpec().tasks[0], 'base-sha');
+    state.taskResults['T-01'] = {
+      taskId: 'T-01',
+      status: 'completed',
+      branch: 'sdlc/run-1/T-01',
+      inputsDigest: digest,
+      recordedAt: 'x'
+    };
+    state.steps[stepKey('implementation', 'T-01', digest)] = {
+      name: 'implementation',
+      taskId: 'T-01',
+      inputsDigest: digest,
+      completedAt: 'x'
+    };
+    state.steps[stepKey('phase', 'T-01', 'p')] = {
+      name: 'phase',
+      taskId: 'T-01',
+      inputsDigest: 'p',
+      completedAt: 'x',
+      verdict: {
+        gate: 'phase',
+        outcome: 'pass',
+        wouldEscalate: false,
+        reasons: [],
+        recordedAt: 'x'
+      }
+    };
+    stateMock.load.mockReturnValue(state);
+
+    const pool = await executor.executeReady(INPUT);
+
+    expect(pool.kind).toBe('executed');
+    expect(pool.outcomes[0].task.id).toBe('T-01');
+    expect(pool.outcomes[0].cached).toBe(true);
     expect(agentRun).not.toHaveBeenCalled();
   });
 
@@ -304,6 +350,7 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
     const expectedBranch = taskBranch('run-1', 'T-01');
     expect(expectedBranch).toBe('sdlc/run-1/T-01');
     const expectedWorktree = path.join('/runs', 'run-1', 'worktrees', 'T-01');
+    expect(gitMock.fetch).toHaveBeenCalledWith('/repo');
     expect(gitMock.addWorktree).toHaveBeenCalledWith(
       '/repo',
       expectedWorktree,
@@ -314,6 +361,15 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
     expect(agentRun.mock.calls[0][0]).toBe(expectedWorktree);
     expect(agentRun.mock.calls[0][1]).toContain('T-01');
     expect(agentRun.mock.calls[0][1]).toContain('Blast-radius envelope');
+  });
+
+  it('fetches origin before creating worktrees so post-merge tip SHAs resolve', async () => {
+    await executor.executeReady(INPUT);
+
+    expect(gitMock.fetch).toHaveBeenCalledWith('/repo');
+    expect(gitMock.fetch.mock.invocationCallOrder[0]).toBeLessThan(
+      gitMock.addWorktree.mock.invocationCallOrder[0]
+    );
   });
 
   it('records a failure result instead of throwing when the agent fails', async () => {
@@ -628,6 +684,49 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
       const pool = await executor.executeReady(INPUT);
 
       expect(pool.outcomes[0].task.id).toBe('T-01');
+      expect(agentRun).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not reopen a merged task when the integration tip advances (#44 tip digest)', async () => {
+      // Live-val shadow-2: after record-merge of T-02, state.mergedSha moves
+      // to the merge tip → implementationDigest(T-02, tip) changes → without
+      // an isMerged guard T-02 was re-selected, produced an empty diff, and
+      // blocked T-03.
+      const t01 = makeTask();
+      const t02 = makeTask({ id: 'T-02', dependsOn: ['T-01'] });
+      const t03 = makeTask({ id: 'T-03', dependsOn: ['T-02'] });
+      specRead.mockReturnValue(makeSpec({ tasks: [t01, t02, t03] }));
+
+      const oldTip = 'merge-t01';
+      const newTip = 'merge-t02';
+      const state = baseState();
+      state.mergedSha = newTip;
+      state.taskResults['T-01'] = {
+        taskId: 'T-01',
+        status: 'completed',
+        mergedSha: oldTip,
+        inputsDigest: implementationDigest(t01, 'base-sha'),
+        recordedAt: 'x'
+      };
+      state.taskResults['T-02'] = {
+        taskId: 'T-02',
+        status: 'completed',
+        mergedSha: newTip,
+        // Digest rooted at the tip used when T-02 originally ran.
+        inputsDigest: implementationDigest(t02, oldTip),
+        recordedAt: 'x'
+      };
+      state.steps[stepKey('phase', 'T-02', 'old-phase')] = {
+        name: 'phase',
+        taskId: 'T-02',
+        inputsDigest: 'old-phase',
+        completedAt: 'x'
+      };
+      stateMock.load.mockReturnValue(state);
+
+      const pool = await executor.executeReady(INPUT);
+
+      expect(pool.outcomes.map(o => o.task.id)).toEqual(['T-03']);
       expect(agentRun).toHaveBeenCalledTimes(1);
     });
   });

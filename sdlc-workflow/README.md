@@ -68,7 +68,7 @@ bun run dev -- run --spec ../specs/PRD-0011/phase-3-spec.md --repo .. \
 #   --heartbeat       emit structured progress every N seconds (default: 30;
 #                     0 disables). Also appends <runsDir>/<runId>/heartbeat.jsonl
 
-# Operator default: detach with OS nohup + --heartbeat, then check in on
+# Operator default: --supervise --detach + --heartbeat, then check in on
 # wakes — do not block the agent chat on sandbox waits.
 # See docs/operator-background-supervise.md (team-setup skill: sdlc-run-supervise).
 
@@ -115,8 +115,9 @@ path unblocks multi-task runs. CI still validates the PR.
 `[heartbeat] {json}` lines with `runId`, `taskId`, `step`, `stepElapsedMs`,
 `agentAlive`, `worktreeDirty`, `worktreeHead`, and `lastLine`, and appends
 the same records to `<runsDir>/<runId>/heartbeat.jsonl`. Pass `--heartbeat 0`
-to disable. Prefer OS `nohup` for long detached runs (see #38 / #43 F2) —
-do not rely on IDE harness backgrounding.
+to disable. Prefer `--supervise --detach` for long detached runs (see #38 /
+#43 F2 and `docs/operator-background-supervise.md`) — do not rely on IDE
+harness backgrounding.
 
 ## Repo-owned `.sdlc/` contracts
 
@@ -231,6 +232,8 @@ Handler / Service / Repository with InversifyJS (workspace rule):
   test-tier via the repo's scripted check, agent-tier via an independent
   verifier agent driving the sandbox, manual-tier forces human-required;
   every criterion verdict references its evidence artifact (T-04).
+- `services/reviewer-publish.service.ts` — surfaces reviewer on the task PR
+  (commit status context `sdlc/reviewer` + overview comment); best-effort
 - `services/reviewer-gate.service.ts` — independent reviewer agent over the
   diff + task + envelope only; concur/disagree with cited reasons and the
   full transcript attached (T-05).

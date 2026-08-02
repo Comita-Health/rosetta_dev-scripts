@@ -43,7 +43,7 @@ describe('layDownRootConfig', () => {
     mockReaddirSync.mockImplementation((p: string) => {
       if (p.endsWith('.cursor')) return ['cli.json', 'skills'];
       if (p.endsWith(`${path.sep}rules`))
-        return ['architecture-hsr.md', 'code-style.md'];
+        return ['architecture-hsr.md', 'code-style.md', 'inline-docs.md'];
       if (p.endsWith(`${path.sep}commands`))
         return ['review.md', 'add-repo.md', 'sdlc-status.md', 'sdlc-run.md'];
       return [];
@@ -73,6 +73,10 @@ describe('layDownRootConfig', () => {
     expect(mockWriteFileSync).toHaveBeenCalledWith(
       path.join('/base', '.cursor', 'rules', 'architecture-hsr.mdc'),
       expect.stringContaining('alwaysApply: true')
+    );
+    expect(mockWriteFileSync).toHaveBeenCalledWith(
+      path.join('/base', '.cursor', 'rules', 'inline-docs.mdc'),
+      expect.stringContaining('TSDoc / JSDoc bar')
     );
     expect(mockWriteFileSync).toHaveBeenCalledWith(
       path.join('/base', '.cursor', 'rules', 'command-review.mdc'),

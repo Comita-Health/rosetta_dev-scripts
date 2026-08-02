@@ -35,9 +35,9 @@ decisions. When implementation and philosophy conflict, philosophy wins.
 
 When kicking off or watching `sdlc-workflow` (`run` / shadow waves):
 
-- Follow **`sdlc-run-supervise`** — OS `nohup`, `--heartbeat`, yield the
-  agent turn, check in on wakes. Do **not** block the chat on sandbox/CI
-  waits.
+- Follow **`sdlc-run-supervise`** — `--supervise --detach`, `--heartbeat`,
+  yield the agent turn, check in on wakes. Do **not** block the chat on
+  sandbox/CI waits.
 - Slash reminder: `/sdlc-run`. Scorecards: `/sdlc-status`.
 - Design note: `rosetta_dev-scripts/sdlc-workflow/docs/operator-background-supervise.md`.
 

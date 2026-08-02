@@ -95,6 +95,55 @@ describe('parseSpec', () => {
     );
   });
 
+  it('parses Prettier-folded multiline envelope arrays', () => {
+    // Matches what `prettier --write` emits on long allowedPaths lists —
+    // previously left forbiddenSurfaces unset (SPEC_MALFORMED on resume).
+    const markdown = [
+      '---',
+      'id: SPEC-X-P1',
+      'prd: PRD-X',
+      'phase: 1',
+      'status: Approved',
+      'envelope:',
+      '  allowedPaths:',
+      '    [',
+      "      'packages/app/frontend/src/auth.ts',",
+      "      'packages/app/frontend/src/auth/**',",
+      "      'specs/PRD-0004/**',",
+      '    ]',
+      '  forbiddenSurfaces:',
+      "    ['payments-phi-boundary', 'production-deploy', 'ci-config']",
+      '  maxDiffLines: 450',
+      '  budgetK: 160',
+      '---',
+      '',
+      '# SPEC-X-P1: Multiline envelope.',
+      '',
+      '## Task T-01: Wire cookies',
+      '',
+      '- **Complexity:** S',
+      '',
+      '### Acceptance criteria',
+      '',
+      '- [ ] test: cookies set'
+    ].join('\n');
+
+    const doc = parseSpec(markdown);
+    expect(doc.status).toBe('Approved');
+    expect(doc.envelope.allowedPaths).toEqual([
+      'packages/app/frontend/src/auth.ts',
+      'packages/app/frontend/src/auth/**',
+      'specs/PRD-0004/**'
+    ]);
+    expect(doc.envelope.forbiddenSurfaces).toEqual([
+      'payments-phi-boundary',
+      'production-deploy',
+      'ci-config'
+    ]);
+    expect(doc.envelope.maxDiffLines).toBe(450);
+    expect(doc.envelope.budgetK).toBe(160);
+  });
+
   it('tolerates sparse task metadata and wrapped criteria', () => {
     const markdown = [
       '---',

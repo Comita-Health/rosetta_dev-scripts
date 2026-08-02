@@ -152,24 +152,25 @@ flip spec `Draft → Approved`.
 
 ## Heartbeat (while `run` is in flight)
 
-**Default:** follow the **`sdlc-run-supervise`** skill — OS `nohup`,
-`--heartbeat`, end the agent turn, check in on wakes. Do **not** block the
-chat with multi-minute `sleep`/poll loops (sandbox alone is often 7+ min).
-See `sdlc-workflow/docs/operator-background-supervise.md` and `/sdlc-run`.
+**Default:** follow the **`sdlc-run-supervise`** skill — `--supervise
+--detach`, `--heartbeat`, end the agent turn, check in on wakes. Do **not**
+block the chat with multi-minute `sleep`/poll loops (sandbox alone is often
+7+ min). See `sdlc-workflow/docs/operator-background-supervise.md` and
+`/sdlc-run`.
 
 ```bash
-nohup bunx tsx src/index.ts run … --heartbeat 30 > /tmp/sdlc-run.log 2>&1 &
-echo $! > /tmp/sdlc-run.pid
+bunx tsx src/index.ts run … --heartbeat 30 --supervise --detach
 ```
 
 On each wake (e.g. `/loop` 2–5m), cheap pulse only:
 
 ```bash
-PID=$(cat /tmp/sdlc-run.pid)
-ps -p "$PID" -o etime=,command=
+RUN="$HOME/.rosetta/sdlc-runs/<run-id>"
+ps -p "$(cat "$RUN/supervise.pid")" -o etime=,command= || echo DEAD
 bunx tsx src/index.ts status --run-id <run-id> | head -40
-tail -20 /tmp/sdlc-run.log
-tail -3 ~/.rosetta/sdlc-runs/<run-id>/heartbeat.jsonl
+tail -20 "$RUN/monitor.log"
+tail -15 "$RUN/supervise.log"
+tail -3 "$RUN/heartbeat.jsonl"
 gh pr list --head "sdlc/<run-id>/<taskId>" --json number,url,state
 ```
 

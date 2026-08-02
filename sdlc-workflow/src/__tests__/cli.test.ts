@@ -9,5 +9,7 @@ describe('CLI (T-01)', () => {
     });
     expect(output).toContain('decompose');
     expect(output).toContain('human gate');
+    expect(output).toContain('supervise');
+    expect(output).toContain('detach');
   });
 });

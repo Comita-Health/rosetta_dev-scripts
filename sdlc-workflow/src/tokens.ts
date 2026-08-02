@@ -23,6 +23,7 @@ export const WORKFLOW_TOKENS = {
   SandboxDeployService: Symbol.for('SandboxDeployService'),
   VerificationService: Symbol.for('VerificationService'),
   ReviewerGateService: Symbol.for('ReviewerGateService'),
+  ReviewerPublishService: Symbol.for('ReviewerPublishService'),
   AggregatorService: Symbol.for('AggregatorService'),
   CiGateService: Symbol.for('CiGateService'),
   DigestService: Symbol.for('DigestService'),
@@ -33,5 +34,8 @@ export const WORKFLOW_TOKENS = {
   PullRequestRepository: Symbol.for('PullRequestRepository'),
   PrLifecycleService: Symbol.for('PrLifecycleService'),
   EscalationService: Symbol.for('EscalationService'),
-  HeartbeatService: Symbol.for('HeartbeatService')
+  HeartbeatService: Symbol.for('HeartbeatService'),
+  HeartbeatWatchService: Symbol.for('HeartbeatWatchService'),
+  ProcessDetachRepository: Symbol.for('ProcessDetachRepository'),
+  SuperviseService: Symbol.for('SuperviseService')
 } as const;

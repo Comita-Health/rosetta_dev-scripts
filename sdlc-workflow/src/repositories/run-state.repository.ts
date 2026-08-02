@@ -107,7 +107,14 @@ export class RunStateRepository implements IRunStateRepository {
     state: RunState,
     result: TaskRunResult
   ): void {
-    state.taskResults[result.taskId] = result;
+    // Preserve merge / PR metadata across re-records so a tip-driven
+    // digest reopen cannot wipe `mergedSha` (live-val shadow-2).
+    const prior = state.taskResults[result.taskId];
+    state.taskResults[result.taskId] = {
+      ...result,
+      mergedSha: result.mergedSha ?? prior?.mergedSha,
+      prUrl: result.prUrl ?? prior?.prUrl
+    };
     this.save(runsDir, state);
   }
 

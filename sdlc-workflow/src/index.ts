@@ -82,6 +82,10 @@ import {
   ReviewerGateService,
   IReviewerGateService
 } from './services/reviewer-gate.service';
+import {
+  ReviewerPublishService,
+  IReviewerPublishService
+} from './services/reviewer-publish.service';
 import { ExecutorService, IExecutorService } from './services/executor.service';
 import {
   SandboxDeployService,
@@ -117,6 +121,18 @@ import {
   HeartbeatService,
   IHeartbeatService
 } from './services/heartbeat.service';
+import {
+  HeartbeatWatchService,
+  IHeartbeatWatchService
+} from './services/heartbeat-watch.service';
+import {
+  ProcessDetachRepository,
+  IProcessDetachRepository
+} from './repositories/process-detach.repository';
+import {
+  SuperviseService,
+  ISuperviseService
+} from './services/supervise.service';
 import { WORKFLOW_TOKENS } from './tokens';
 import { WorkflowError } from './types';
 import { resolveInferenceBackend } from './utils/backend-select';
@@ -187,6 +203,9 @@ container
   .bind<IReviewerGateService>(WORKFLOW_TOKENS.ReviewerGateService)
   .to(ReviewerGateService);
 container
+  .bind<IReviewerPublishService>(WORKFLOW_TOKENS.ReviewerPublishService)
+  .to(ReviewerPublishService);
+container
   .bind<IAggregatorService>(WORKFLOW_TOKENS.AggregatorService)
   .to(AggregatorService);
 container
@@ -220,7 +239,16 @@ container
 container
   .bind<IHeartbeatService>(WORKFLOW_TOKENS.HeartbeatService)
   .to(HeartbeatService);
+container
+  .bind<IHeartbeatWatchService>(WORKFLOW_TOKENS.HeartbeatWatchService)
+  .to(HeartbeatWatchService);
+container
+  .bind<IProcessDetachRepository>(WORKFLOW_TOKENS.ProcessDetachRepository)
+  .to(ProcessDetachRepository);
 container.bind<IRunHandler>(WORKFLOW_TOKENS.RunHandler).to(RunHandler);
+container
+  .bind<ISuperviseService>(WORKFLOW_TOKENS.SuperviseService)
+  .to(SuperviseService);
 
 yargs(hideBin(process.argv))
   .command(
@@ -280,7 +308,7 @@ yargs(hideBin(process.argv))
   )
   .command(
     'run',
-    'Execute all ready tasks from an Approved spec in parallel worktrees (shadow-mode gates, halts for human review)',
+    'Execute ready tasks from an Approved spec (use --supervise to auto-resume waves; --detach to background)',
     y =>
       y
         .option('spec', {
@@ -325,16 +353,40 @@ yargs(hideBin(process.argv))
           default: 30,
           describe:
             'Emit structured progress lines every N seconds (0 disables) — #39'
+        })
+        .option('supervise', {
+          type: 'boolean',
+          default: false,
+          describe:
+            'Auto-resume dependency waves + live heartbeat monitor (recommended; likely future default)'
+        })
+        .option('detach', {
+          type: 'boolean',
+          default: false,
+          describe:
+            'Spawn a detached supervise child and exit (survives agent shell teardown — #38)'
+        })
+        .option('max-waves', {
+          type: 'number',
+          default: 20,
+          describe: 'Supervise: max wave iterations before giving up'
+        })
+        .option('monitor', {
+          type: 'string',
+          describe:
+            'Supervise: path for the live heartbeat monitor log (default: <runsDir>/<runId>/monitor.log)'
         }),
     async argv => {
-      const handler = container.get<IRunHandler>(WORKFLOW_TOKENS.RunHandler);
+      const supervise = container.get<ISuperviseService>(
+        WORKFLOW_TOKENS.SuperviseService
+      );
       const runId =
         argv['run-id'] ??
         `${path
           .basename(argv.spec)
           .replace(/\.md$/, '')}-${new Date().toISOString().slice(0, 10)}`;
       try {
-        const result = await handler.runTask({
+        const result = await supervise.run({
           specPath: argv.spec,
           repoPath: argv.repo,
           runId,
@@ -342,11 +394,24 @@ yargs(hideBin(process.argv))
           chronicleRepo: argv['chronicle-repo'],
           maxParallel: argv['max-parallel'],
           shadow: argv.shadow,
-          heartbeatSeconds: argv.heartbeat
+          heartbeatSeconds: argv.heartbeat,
+          supervise: argv.supervise === true || argv.detach === true,
+          detach: argv.detach === true,
+          maxWaves: argv['max-waves'],
+          monitorPath: argv.monitor
         });
-        const anyFailed = result.tasks.some(task => task.kind === 'failed');
-        if (result.outcome === 'blocked' || anyFailed) {
+        if (result.kind === 'detached') {
+          process.exit(0);
+        }
+        if (result.kind === 'failed') {
           process.exit(1);
+        }
+        const last = result.lastWave;
+        if (last !== undefined) {
+          const anyFailed = last.tasks.some(task => task.kind === 'failed');
+          if (last.outcome === 'blocked' || anyFailed) {
+            process.exit(1);
+          }
         }
       } catch (err) {
         if (err instanceof WorkflowError) {
