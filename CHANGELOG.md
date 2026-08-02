@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **team-setup:** add `pr-approve-watch` skill (Cursor + Claude) — background-watch
+  for human GitHub Approve, then **triage review comments** (reply +
+  `resolveReviewThread`) before merge; `/watch-pr-approve` command + always-on
+  rule. Wake prompt updated so agents do not merge on Approve alone.
 - **sdlc-workflow:** supervise fails fast on enforce `merge-blocked` (no spurious
   "no ready task" wave); gate logs label `[enforce]` vs `[shadow]`; monitor notes
   when the heartbeat watch stops.
