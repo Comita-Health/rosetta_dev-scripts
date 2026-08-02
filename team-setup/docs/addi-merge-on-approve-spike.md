@@ -27,11 +27,11 @@ the unreliable `notify_on_output` wake for merge execution.
 
 ## Secrets / vars (repo or org)
 
-| Name | Kind | Purpose |
-| ---- | ---- | ------- |
-| `ADDI_APP_ID` | variable | Numeric GitHub App id (e.g. `4464370`) — `app-id` input |
-| `ADDI_APP_PRIVATE_KEY` | secret | PEM private key for App `addi-m` |
-| `ADDI_MERGE_ON_APPROVE` | variable | Set to `true` to enable the job |
+| Name                    | Kind     | Purpose                                                 |
+| ----------------------- | -------- | ------------------------------------------------------- |
+| `ADDI_APP_ID`           | variable | Numeric GitHub App id (e.g. `4464370`) — `app-id` input |
+| `ADDI_APP_PRIVATE_KEY`  | secret   | PEM private key for App `addi-m`                        |
+| `ADDI_MERGE_ON_APPROVE` | variable | Set to `true` to enable the job                         |
 
 App needs installation permissions on the repo: **contents** (write),
 **pull requests** (write), **checks** (read), **workflows** (if merging
@@ -43,14 +43,25 @@ workflow file changes — usually already covered by contents).
 
 - Triggers: `pull_request_review` (`submitted`), plus `workflow_dispatch`
   for dry runs.
-- Filters: review state `approved`; head repo is not a fork; PR user is
-  `rosetta-s-addi-m[bot]` (or `ADDI_MERGE_ANY_AUTHOR=true` for testing).
+- Filters: review state `approved`; head repo is not a fork; PR author login
+  is Addi (`app/rosetta-s-addi-m` from `gh`, or `rosetta-s-addi-m[bot]`),
+  unless `ADDI_MERGE_ANY_AUTHOR=true`.
 - Auth: `actions/create-github-app-token@v3` → `GH_TOKEN`.
 - Gate: `reviewDecision==APPROVED`, checks green (`gh pr checks --watch`),
   `mergeable==MERGEABLE`.
 - Action: `gh pr merge --squash --delete-branch` (matches recent
   `rosetta_dev-scripts` practice). Stacked PRs that require merge commits
   should stay on the local watch path or set merge method later.
+
+### Troubleshooting: workflow never runs on Approve
+
+If Actions shows the workflow **name as the file path**, `workflow_dispatch`
+returns HTTP 422 (“does not have workflow_dispatch trigger”), and every push
+creates a **startup-failure** run with **zero jobs**, the YAML failed to
+parse. A common cause is a bash heredoc body at column 0 inside `run: |` —
+that terminates the YAML block scalar early. Keep multiline comment text in
+an `env:` literal (as the workflow does for `CONFLICT_BODY`), or indent every
+heredoc line to the block’s content indent.
 
 ## Operator checklist
 

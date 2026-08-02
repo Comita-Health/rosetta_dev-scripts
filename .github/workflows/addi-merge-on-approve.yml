@@ -66,6 +66,18 @@ jobs:
           PR: ${{ steps.pr.outputs.number }}
           REPO: ${{ github.repository }}
           ALLOW_ANY_AUTHOR: ${{ vars.ADDI_MERGE_ANY_AUTHOR }}
+          # Keep comment text in env — unindented heredoc bodies break YAML
+          # `run: |` block scalars (GitHub then never registers triggers).
+          CONFLICT_BODY: |
+            ## Addi merge-on-approve
+
+            Human Approve received, but this PR is `mergeable=CONFLICTING`.
+
+            I will not force-merge. Please resolve conflicts onto the base branch
+            (agent wake / local `pr-approve-watch` path), then re-Approve or
+            re-run **Addi merge on Approve** via `workflow_dispatch`.
+
+            Spike docs: `team-setup/docs/addi-merge-on-approve-spike.md`
         run: |
           set -euo pipefail
 
@@ -89,10 +101,11 @@ jobs:
             exit 0
           fi
 
-          # Default: only Addi-authored PRs (bot login may include [bot] suffix).
+          # gh --json author.login is often "app/rosetta-s-addi-m"; REST may
+          # use "rosetta-s-addi-m[bot]". Accept both shapes.
           if [ "${ALLOW_ANY_AUTHOR:-}" != "true" ]; then
             case "$author" in
-              rosetta-s-addi-m|rosetta-s-addi-m\[bot\]|addi-m\[bot\]) ;;
+              app/rosetta-s-addi-m|rosetta-s-addi-m|rosetta-s-addi-m\[bot\]|addi-m\[bot\]) ;;
               *)
                 echo "Author '$author' is not Addi; skip (set ADDI_MERGE_ANY_AUTHOR=true to override)."
                 exit 0
@@ -106,19 +119,7 @@ jobs:
           fi
 
           if [ "$mergeable" = "CONFLICTING" ]; then
-            body=$(cat <<'EOF'
-## Addi merge-on-approve
-
-Human Approve received, but this PR is `mergeable=CONFLICTING`.
-
-I will not force-merge. Please resolve conflicts onto the base branch
-(agent wake / local `pr-approve-watch` path), then re-Approve or
-re-run **Addi merge on Approve** via `workflow_dispatch`.
-
-Spike docs: `team-setup/docs/addi-merge-on-approve-spike.md`
-EOF
-)
-            gh pr comment "$PR" -R "$REPO" --body "$body"
+            gh pr comment "$PR" -R "$REPO" --body "$CONFLICT_BODY"
             echo "Commented on conflicting PR; exiting 0."
             exit 0
           fi
