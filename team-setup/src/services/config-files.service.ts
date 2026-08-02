@@ -42,7 +42,9 @@ const mirrorClaudeRulesToCursor = (
             ? 'TypeScript and Prettier code style for Rosetta'
             : stem === 'inline-docs'
               ? 'TSDoc / JSDoc bar for backend HSR classes and frontend exports (SDLC)'
-              : `Rosetta rule: ${stem}`;
+              : stem === 'no-tool-attribution'
+                ? 'Never add Made with Cursor or similar tool marketing to commits/PRs'
+                : `Rosetta rule: ${stem}`;
       const contents = [
         '---',
         `description: ${yamlDoubleQuoted(description)}`,
