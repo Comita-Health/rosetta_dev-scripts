@@ -572,6 +572,9 @@ export class RunHandler implements IRunHandler {
 
     try {
       const mergedSha = this._prRepo.merge(input.repoPath, Number(prNumber));
+      // Bring the merge commit into the local object store before the next
+      // wave's worktree add (Comita Phase 0b: gh merge SHA is remote-only).
+      this._gitRepo.fetch(input.repoPath);
       this._runStateRepo.recordTaskMerged(
         input.runsDir,
         state,

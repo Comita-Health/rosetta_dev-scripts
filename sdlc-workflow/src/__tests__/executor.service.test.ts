@@ -350,6 +350,7 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
     const expectedBranch = taskBranch('run-1', 'T-01');
     expect(expectedBranch).toBe('sdlc/run-1/T-01');
     const expectedWorktree = path.join('/runs', 'run-1', 'worktrees', 'T-01');
+    expect(gitMock.fetch).toHaveBeenCalledWith('/repo');
     expect(gitMock.addWorktree).toHaveBeenCalledWith(
       '/repo',
       expectedWorktree,
@@ -360,6 +361,15 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
     expect(agentRun.mock.calls[0][0]).toBe(expectedWorktree);
     expect(agentRun.mock.calls[0][1]).toContain('T-01');
     expect(agentRun.mock.calls[0][1]).toContain('Blast-radius envelope');
+  });
+
+  it('fetches origin before creating worktrees so post-merge tip SHAs resolve', async () => {
+    await executor.executeReady(INPUT);
+
+    expect(gitMock.fetch).toHaveBeenCalledWith('/repo');
+    expect(gitMock.fetch.mock.invocationCallOrder[0]).toBeLessThan(
+      gitMock.addWorktree.mock.invocationCallOrder[0]
+    );
   });
 
   it('records a failure result instead of throwing when the agent fails', async () => {

@@ -207,6 +207,16 @@ export class ExecutorService implements IExecutorService {
       branch: taskBranch(input.runId, task.id),
       worktreePath: path.join(input.runsDir, input.runId, 'worktrees', task.id)
     }));
+    const needsWorktree = wave.some(
+      entry =>
+        !this.isImplementationCached(state, entry.task.id, entry.implDigest)
+    );
+    // Belt-and-suspenders with post-merge fetch in enforcement: a resume
+    // after an older engine tip (or external record-merge) may still lack
+    // the tip object locally.
+    if (needsWorktree) {
+      this._gitRepo.fetch(input.repoPath);
+    }
     for (const entry of wave) {
       if (!this.isImplementationCached(state, entry.task.id, entry.implDigest))
         this._gitRepo.addWorktree(
