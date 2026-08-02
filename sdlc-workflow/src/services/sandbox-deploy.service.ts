@@ -9,6 +9,14 @@ export interface SandboxDeployInput {
   worktreePath: string;
   /** Commit SHA being deployed; exported as SDLC_SANDBOX_SHA. */
   sha: string;
+  /**
+   * Gate base the task is measured against; exported as
+   * SDLC_SANDBOX_BASE_SHA when known. Repo-owned deploy scripts use it to
+   * diff `base..head` and decide whether a ship is needed at all. Omitted
+   * when the caller has no meaningful base — scripts then fall back to their
+   * own `git merge-base`.
+   */
+  baseSha?: string;
   /** Prior sandbox record from run state, for SHA idempotency. */
   previous?: SandboxRecord;
 }
@@ -61,7 +69,10 @@ export class SandboxDeployService implements ISandboxDeployService {
       };
     }
 
-    const env = { SDLC_SANDBOX_SHA: input.sha };
+    const env: Record<string, string> = { SDLC_SANDBOX_SHA: input.sha };
+    if (input.baseSha !== undefined) {
+      env.SDLC_SANDBOX_BASE_SHA = input.baseSha;
+    }
     const timeoutMs = contract.timeoutMinutes * 60_000;
     const alreadyDeployed =
       input.previous?.sha === input.sha && input.previous.status === 'healthy';

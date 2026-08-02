@@ -109,10 +109,14 @@ export class GitRepository implements IGitRepository {
   }
 
   defaultBranch(repoPath: string): string {
+    const prefix = 'refs/remotes/origin/';
     try {
       const ref = git(repoPath, 'symbolic-ref refs/remotes/origin/HEAD').trim();
-      const name = ref.split('/').pop();
-      return name !== undefined && name.length > 0 ? name : 'main';
+      // Strip the prefix rather than taking the last path segment: branch
+      // names may contain slashes (comita_admissions defaults to
+      // `build-env/dev`, which a `.pop()` would truncate to `dev`).
+      const name = ref.startsWith(prefix) ? ref.slice(prefix.length) : '';
+      return name.length > 0 ? name : 'main';
     } catch {
       return 'main';
     }

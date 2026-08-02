@@ -71,6 +71,18 @@ export class AggregatorService implements IAggregatorService {
       });
     }
 
+    // A `manual:` criterion is a deliberate opt-out of the evidence gate
+    // (ADR-0008), not a defect — but it still blocks the merge. Recording it
+    // as an exception is what turns an invisible stall into an escalation.
+    if (input.gates.verification.outcome === 'human-required') {
+      exceptions.push({
+        trigger: 'manual-criterion',
+        taskId: input.taskId,
+        context: input.gates.verification.reasons,
+        recordedAt: now
+      });
+    }
+
     const attempts = input.state.ciFixAttempts[input.taskId] ?? 0;
     if (attempts >= CI_FIX_ATTEMPT_LIMIT) {
       exceptions.push({

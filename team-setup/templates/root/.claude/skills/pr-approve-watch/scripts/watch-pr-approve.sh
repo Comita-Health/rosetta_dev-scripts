@@ -56,6 +56,17 @@ if [[ ${#TARGETS[@]} -eq 0 ]]; then
   exit 2
 fi
 
+# Durable wake inbox, when this checkout has one (workspace root scripts/).
+for candidate in \
+  "$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../../scripts" 2>/dev/null && pwd)/wake-inbox.sh" \
+  "$HOME/.rosetta/scripts/wake-inbox.sh"; do
+  if [[ -f "$candidate" ]]; then
+    # shellcheck disable=SC1090
+    source "$candidate"
+    break
+  fi
+done
+
 resolve_activate() {
   if [[ -n "$ACTIVATE" ]]; then
     printf '%s' "$ACTIVATE"
@@ -88,6 +99,10 @@ resolve_activate() {
 
 ACTIVATE_SCRIPT=$(resolve_activate)
 
+LAST_ACTIVATE_AT=0
+# App installation tokens expire after 60 minutes; refresh well inside that.
+ACTIVATE_TTL=1800
+
 activate() {
   if [[ -z "$ACTIVATE_SCRIPT" ]]; then
     return 0
@@ -98,6 +113,26 @@ activate() {
   fi
   # shellcheck disable=SC1090
   eval "$(bash "$ACTIVATE_SCRIPT")"
+  LAST_ACTIVATE_AT=$SECONDS
+
+  # Verify rather than assume: a silently-expired token is what turns this
+  # watcher into a process that runs forever and never fires.
+  if ! gh api rate_limit >/dev/null 2>&1; then
+    echo "watch-pr-approve: token failed verification after activate" >&2
+    return 1
+  fi
+}
+
+# Refresh on elapsed wall-clock, not tick count — tick count drifts with the
+# interval and with how long each poll takes, so a slow tick could let the
+# token expire between refreshes.
+maybe_reactivate() {
+  if [[ -z "$ACTIVATE_SCRIPT" ]]; then
+    return 0
+  fi
+  if (( SECONDS - LAST_ACTIVATE_AT >= ACTIVATE_TTL )); then
+    activate || true
+  fi
 }
 
 # Prints: approved | changes_requested | none
@@ -116,21 +151,39 @@ classify_review_signal() {
 
   # Fallback when branch protection does not set reviewDecision.
   local approved_count changes_count
-  approved_count=$(gh api "repos/${repo}/pulls/${num}/reviews" --paginate \
-    --jq '[.[] | select(.state=="APPROVED" and (.user.type // "User") != "Bot")] | length' \
-    2>/dev/null || echo 0)
-  if [[ "${approved_count:-0}" -gt 0 ]]; then
+  approved_count=$(count_reviews "$repo" "$num" APPROVED)
+  if [[ "$approved_count" -gt 0 ]]; then
     echo approved
     return
   fi
-  changes_count=$(gh api "repos/${repo}/pulls/${num}/reviews" --paginate \
-    --jq '[.[] | select(.state=="CHANGES_REQUESTED" and (.user.type // "User") != "Bot")] | length' \
-    2>/dev/null || echo 0)
-  if [[ "${changes_count:-0}" -gt 0 ]]; then
+  changes_count=$(count_reviews "$repo" "$num" CHANGES_REQUESTED)
+  if [[ "$changes_count" -gt 0 ]]; then
     echo changes_requested
     return
   fi
   echo none
+}
+
+# Non-bot reviews in the given state, or 0 when the call fails.
+#
+# `gh` writes its API error body to stdout, so on a 401 the raw JSON would be
+# captured as the "count" and poison the `-gt` comparison below — under
+# `set -e` that aborts the tick, and the watcher then spins forever without
+# ever firing. Discard stdout on failure and insist on digits.
+count_reviews() {
+  local repo="$1" num="$2" state="$3" out
+  if ! out=$(gh api "repos/${repo}/pulls/${num}/reviews" --paginate \
+    --jq "[.[] | select(.state==\"${state}\" and (.user.type // \"User\") != \"Bot\")] | length" \
+    2>/dev/null); then
+    echo 0
+    return
+  fi
+  out=$(printf '%s' "$out" | tr -d '[:space:]')
+  if [[ "$out" =~ ^[0-9]+$ ]]; then
+    echo "$out"
+  else
+    echo 0
+  fi
 }
 
 # Latest non-bot CHANGES_REQUESTED review id (empty if none).
@@ -183,7 +236,15 @@ print(json.dumps({
 }))
 PY
   )
-  printf 'AGENT_LOOP_WAKE_pr_approve %s\n' "$payload"
+  # Durable first: a wake written to the inbox survives this terminal dying,
+  # and wake_emit prints the stdout sentinel too for any live listener.
+  if declare -F wake_emit >/dev/null 2>&1; then
+    local prompt
+    prompt=$(printf '%s' "$payload" | python3 -c 'import json,sys; print(json.load(sys.stdin)["prompt"])')
+    wake_emit pr_approve "${t}-${signal}" "$prompt" "$payload"
+  else
+    printf 'AGENT_LOOP_WAKE_pr_approve %s\n' "$payload"
+  fi
   echo "watch-pr-approve: ${signal} → $t (remaining=$remaining)" >&2
 }
 
@@ -196,16 +257,31 @@ for _ in "${TARGETS[@]}"; do
   LAST_CR_ID+=("")
 done
 
-activate
+# PID registry: re-arming the same target set must not stack a second watcher
+# on top of a live one (that is how eleven of these accumulated).
+REGISTRY_DIR="${ROSETTA_WAKE_DIR:-$HOME/.rosetta/wake}/watchers"
+mkdir -p "$REGISTRY_DIR"
+REGISTRY_KEY=$(printf 'pr-approve-%s' "${TARGETS[*]}" | tr -c 'A-Za-z0-9._-' '-' | cut -c1-96)
+REGISTRY_FILE="$REGISTRY_DIR/${REGISTRY_KEY}.pid"
+
+if [[ -f "$REGISTRY_FILE" ]]; then
+  existing=$(cat "$REGISTRY_FILE" 2>/dev/null || true)
+  if [[ -n "$existing" ]] && kill -0 "$existing" 2>/dev/null; then
+    echo "watch-pr-approve: already watching ${TARGETS[*]} as PID $existing — exiting" >&2
+    exit 0
+  fi
+fi
+printf '%s' "$$" >"$REGISTRY_FILE"
+trap 'rm -f "$REGISTRY_FILE"' EXIT
+
+activate || echo "watch-pr-approve: initial activate failed; continuing with ambient gh" >&2
 REMAINING=${#TARGETS[@]}
 TICK=0
-echo "watch-pr-approve: watching ${TARGETS[*]} every ${INTERVAL}s for Approve or Request changes (activate=${ACTIVATE_SCRIPT:-ambient-gh})" >&2
+echo "watch-pr-approve: watching ${TARGETS[*]} every ${INTERVAL}s for Approve or Request changes (activate=${ACTIVATE_SCRIPT:-ambient-gh}, pid=$$)" >&2
 
 while [[ "$REMAINING" -gt 0 ]]; do
   TICK=$((TICK + 1))
-  if (( TICK % 90 == 0 )); then
-    activate
-  fi
+  maybe_reactivate
 
   i=0
   while [[ $i -lt ${#TARGETS[@]} ]]; do

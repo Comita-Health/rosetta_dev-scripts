@@ -172,4 +172,63 @@ describe('SandboxDeployService (T-03)', () => {
     expect(outcome.verdict.outcome).toBe('breach');
     expect(outcome.verdict.reasons).toEqual(['health command failed']);
   });
+
+  // SPEC-PRD-0011-P4 T-01: the engine stays path-agnostic and only hands the
+  // gate base to the repo-owned scripts, which decide whether to ship.
+  describe('SDLC_SANDBOX_BASE_SHA (P4 T-01)', () => {
+    it('exports the base SHA to both the deploy and health commands', async () => {
+      await service.deploy({
+        worktreePath: '/wt',
+        sha: 'abc123',
+        baseSha: 'base999'
+      });
+
+      const expectedEnv = {
+        SDLC_SANDBOX_SHA: 'abc123',
+        SDLC_SANDBOX_BASE_SHA: 'base999'
+      };
+      expect(run).toHaveBeenNthCalledWith(
+        1,
+        '/wt',
+        CONTRACT.deployCommand,
+        expectedEnv,
+        5 * 60_000
+      );
+      expect(run).toHaveBeenNthCalledWith(
+        2,
+        '/wt',
+        CONTRACT.healthCommand,
+        expectedEnv,
+        5 * 60_000
+      );
+    });
+
+    it('exports only SDLC_SANDBOX_SHA when no base is supplied', async () => {
+      await service.deploy({ worktreePath: '/wt', sha: 'abc123' });
+
+      for (const call of run.mock.calls) {
+        expect(call[2]).toEqual({ SDLC_SANDBOX_SHA: 'abc123' });
+        expect(call[2]).not.toHaveProperty('SDLC_SANDBOX_BASE_SHA');
+      }
+    });
+
+    it('still skips the deploy for an already-healthy SHA, base or not', async () => {
+      const outcome = await service.deploy({
+        worktreePath: '/wt',
+        sha: 'abc123',
+        baseSha: 'base999',
+        previous: { sha: 'abc123', status: 'healthy', recordedAt: 'x' }
+      });
+
+      expect(run).toHaveBeenCalledTimes(1);
+      expect(run).toHaveBeenCalledWith(
+        '/wt',
+        CONTRACT.healthCommand,
+        { SDLC_SANDBOX_SHA: 'abc123', SDLC_SANDBOX_BASE_SHA: 'base999' },
+        expect.any(Number)
+      );
+      expect(outcome.verdict.outcome).toBe('pass');
+      expect(outcome.verdict.reasons[0]).toContain('already deployed');
+    });
+  });
 });

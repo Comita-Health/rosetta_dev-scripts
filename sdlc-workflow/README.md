@@ -135,7 +135,33 @@ declares them:
     "timeoutMinutes": 45 // default
   }
 }
+```
 
+Both commands run with these variables exported:
+
+| Variable                | Always set | Meaning                                             |
+| ----------------------- | ---------- | --------------------------------------------------- |
+| `SDLC_SANDBOX_SHA`      | yes        | The SHA being deployed. Health output must echo it. |
+| `SDLC_SANDBOX_BASE_SHA` | no         | The gate base the task is measured against.         |
+
+`SDLC_SANDBOX_BASE_SHA` (SPEC-PRD-0011-P4) is the task's integration tip —
+the same `baseRef` the envelope and reviewer gates diff against — so a repo
+can run `git diff $SDLC_SANDBOX_BASE_SHA..$SDLC_SANDBOX_SHA` and decide
+whether the change is worth shipping. At the phase boundary it is the run's
+frozen base, so the diff covers everything the phase merged. It is omitted
+where no base is meaningful (notably the `check-veto` redeploy, where the
+relevant diff is the revert itself); scripts should then fall back to their
+own `git merge-base`.
+
+**Path policy is repo-owned.** The engine stays path-agnostic: it exports the
+base and nothing more. Whether a given diff means skip, a partial deploy, or
+a full one is decided entirely by the repo's `deployCommand` — see
+`comita_admissions` (`.sdlc/sandbox-deploy-ignore.yml` plus
+`scripts/sdlc/sandbox-path-decision.py`) for the first implementation. A
+skipping repo must still echo `SDLC_SANDBOX_SHA` from its health command;
+that contract is unconditional.
+
+```jsonc
 // .sdlc/verification.json — scripted check for test-tier criteria.
 { "testCommand": "bun test" }
 

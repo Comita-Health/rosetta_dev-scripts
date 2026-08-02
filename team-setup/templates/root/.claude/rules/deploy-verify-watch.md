@@ -5,7 +5,7 @@ merge (auth/logout/`redirect_uri`, cookie SSO, multi-SPA cutover, Deploy Org
 wiring), or the user asks to watch deploy-verify:
 
 - Follow the **`deploy-verify-watch`** skill.
-- Arm `scripts/watch-deploy-verify.sh` in the background with agent wake on
+- Arm `.cursor/skills/deploy-verify-watch/scripts/watch-deploy-verify.sh` in the background with agent wake on
   `AGENT_LOOP_WAKE_deploy_verify` (use `--dispatch-on-arm` so the current head
   deploys without waiting for another push).
 - On `deploy_green`: tell the human to re-smoke; do **not** merge on green alone.

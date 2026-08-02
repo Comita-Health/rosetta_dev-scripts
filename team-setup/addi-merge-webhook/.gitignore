@@ -1,3 +1,5 @@
 node_modules/
 dist/
 coverage/
+# Lambda packaging output (bundled deps + function.zip) — rebuilt by deploy.
+.deploy/

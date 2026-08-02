@@ -137,7 +137,23 @@ export type ExceptionTrigger =
   | 'envelope-breach'
   | 'budget-exhaustion'
   /** P3 T-04: a red phase gate blocked an enforced merge. */
-  | 'merge-blocked';
+  | 'merge-blocked'
+  /**
+   * A `manual:` acceptance criterion forced a human-required verification
+   * verdict. Without this trigger the phase gate blocks the merge with no
+   * ledger entry and no escalation — the task stalls invisibly.
+   */
+  | 'manual-criterion'
+  /** The implementation agent finished but left the worktree clean. */
+  | 'no-commit'
+  /** The agent process exceeded its wall-clock budget and was killed. */
+  | 'agent-timeout'
+  /** Push or `gh pr create` failed, so downstream gates have no PR. */
+  | 'pr-open-failed'
+  /** A detached supervisor died with the run still incomplete. */
+  | 'supervisor-died'
+  /** The phase boundary cannot run because some task is still unmerged. */
+  | 'phase-blocked-on-unmerged';
 
 /**
  * An exception-ledger entry (SPEC-PRD-0011-P2 T-06): a would-escalate

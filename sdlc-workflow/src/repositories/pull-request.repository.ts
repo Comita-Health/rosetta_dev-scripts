@@ -20,13 +20,22 @@ export interface IPullRequestRepository {
     input: { branch: string; title: string; body: string }
   ): PrRef;
   /**
-   * Merge the PR (merge commit, P3 T-04) and return the merge commit SHA.
-   * Only ever called by the enforcement path when every gate is green.
+   * Merge the PR (P3 T-04) and return the merge commit SHA. Only ever called
+   * by the enforcement path when every gate is green. The method matches
+   * `addi-merge-on-approve.yml` so engine merges and Approve-driven merges
+   * cannot leave a repo with two different histories: GitHub native stacks
+   * go through `merge-async` with merge commits, everything else squashes.
    */
-  merge(repoPath: string, number: number): string;
+  merge(repoPath: string, number: number): Promise<string>;
   /** Post an issue-style comment on the PR (reviewer overview surface). */
   comment(repoPath: string, number: number, body: string): void;
 }
+
+const MERGE_ASYNC_TIMEOUT_MS = 10 * 60_000;
+const MERGE_ASYNC_POLL_MS = 5_000;
+
+const sleep = (ms: number): Promise<void> =>
+  new Promise(resolve => setTimeout(resolve, ms));
 
 const gh = (repoPath: string, command: string, stdin?: string): string => {
   try {
@@ -85,8 +94,12 @@ export class PullRequestRepository implements IPullRequestRepository {
     return { url, number: Number(match[1]) };
   }
 
-  merge(repoPath: string, number: number): string {
-    gh(repoPath, `gh pr merge ${number} --merge`);
+  async merge(repoPath: string, number: number): Promise<string> {
+    if (this.isStacked(repoPath, number)) {
+      await this.mergeStack(repoPath, number);
+    } else {
+      gh(repoPath, `gh pr merge ${number} --squash --delete-branch`);
+    }
     const sha = gh(
       repoPath,
       `gh pr view ${number} --json mergeCommit --jq ".mergeCommit.oid"`
@@ -103,5 +116,65 @@ export class PullRequestRepository implements IPullRequestRepository {
 
   comment(repoPath: string, number: number, body: string): void {
     gh(repoPath, `gh pr comment ${number} --body-file -`, body);
+  }
+
+  private isStacked(repoPath: string, number: number): boolean {
+    const raw = gh(
+      repoPath,
+      `gh api "repos/{owner}/{repo}/pulls/${number}" --jq ".stack // empty"`
+    ).trim();
+    return raw.length > 0 && raw !== 'null';
+  }
+
+  /**
+   * A synchronous `gh pr merge` is rejected on GitHub native stacks, so the
+   * stack tip is enqueued and polled instead. Merging the tip lands every PR
+   * up to it onto the stack base.
+   */
+  private async mergeStack(repoPath: string, number: number): Promise<void> {
+    const enqueued = JSON.parse(
+      gh(
+        repoPath,
+        `gh api --method PUT "repos/{owner}/{repo}/pulls/${number}/merge-async" -f merge_method=merge -f merge_action=direct_merge`
+      )
+    ) as { status?: string; details?: { uuid?: string } };
+
+    if (enqueued.status === 'merged') return;
+
+    const uuid = enqueued.details?.uuid;
+    if (enqueued.status !== 'pending' || uuid === undefined) {
+      throw new WorkflowError(
+        `merge-async did not enqueue PR #${number}`,
+        'GH_FAILED',
+        [`status: ${enqueued.status ?? 'unknown'}`]
+      );
+    }
+
+    const deadline = Date.now() + MERGE_ASYNC_TIMEOUT_MS;
+    for (;;) {
+      const poll = JSON.parse(
+        gh(
+          repoPath,
+          `gh api "repos/{owner}/{repo}/pulls/${number}/merge-async/${uuid}"`
+        )
+      ) as { status?: string; details?: { message?: string } };
+
+      if (poll.status === 'merged') return;
+      if (poll.status === 'failed' || poll.status === 'error') {
+        throw new WorkflowError(
+          `merge-async failed for PR #${number}`,
+          'GH_FAILED',
+          [poll.details?.message ?? 'no message']
+        );
+      }
+      if (Date.now() >= deadline) {
+        throw new WorkflowError(
+          `timed out waiting for merge-async on PR #${number}`,
+          'GH_FAILED',
+          [`uuid: ${uuid}`]
+        );
+      }
+      await sleep(MERGE_ASYNC_POLL_MS);
+    }
   }
 }

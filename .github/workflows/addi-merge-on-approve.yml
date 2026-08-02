@@ -16,9 +16,11 @@ on:
         description: Pull request number to attempt merge (as Addi)
         required: true
         type: string
-  # After CI/PR Checks complete, retry Approved Addi PRs (covers Approve-then-green).
+  # After checks complete, retry Approved Addi PRs (covers Approve-then-green).
+  # Names not present in a given repo simply never fire, so this list is the
+  # union across repos — DCO is the only required check on the docs repos.
   workflow_run:
-    workflows: [CI, PR Checks]
+    workflows: [CI, PR Checks, DCO]
     types: [completed]
   # Last-resort poll (GitHub may delay or skip schedules on quiet repos).
   schedule:

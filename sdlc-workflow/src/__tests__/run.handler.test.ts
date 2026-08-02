@@ -240,7 +240,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
       number: 99
     });
     specRead = jest.fn().mockReturnValue(SPEC);
-    escalationPost = jest.fn().mockReturnValue({ posted: [] });
+    escalationPost = jest.fn().mockReturnValue({ posted: [], issueUrls: [] });
 
     const container = new Container();
     container
@@ -410,9 +410,13 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
   it('deploys the task branch head to the sandbox and hands the health report to verification', async () => {
     await handler.runTask(INPUT);
 
+    // P4 T-01: baseSha is the same integration tip the envelope and reviewer
+    // gates diff against, so a repo-owned script sees the task's own change
+    // set rather than everything since the run started.
     expect(deploy).toHaveBeenCalledWith({
       worktreePath: '/runs/run-1/worktrees/T-01',
       sha: 'head-sha',
+      baseSha: 'base-sha',
       previous: undefined
     });
     expect(verify).toHaveBeenCalledWith(

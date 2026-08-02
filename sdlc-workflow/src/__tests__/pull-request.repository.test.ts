@@ -10,7 +10,12 @@ const execMock = execSync as jest.Mock;
 describe('PullRequestRepository (P3 T-02)', () => {
   const repo = new PullRequestRepository();
 
-  afterEach(() => execMock.mockReset());
+  // merge-async polls on a 5s timer; fake timers keep the suite instant.
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => {
+    jest.useRealTimers();
+    execMock.mockReset();
+  });
 
   it('finds the open PR for a branch', () => {
     execMock.mockReturnValue(
@@ -85,32 +90,82 @@ describe('PullRequestRepository (P3 T-02)', () => {
   });
 
   describe('merge (P3 T-04)', () => {
-    it('merges the PR with a merge commit and returns the merge SHA', () => {
+    it('squashes an unstacked PR and returns the merge SHA', async () => {
       execMock
+        .mockReturnValueOnce('') // gh api .stack -> empty
         .mockReturnValueOnce('') // gh pr merge
         .mockReturnValueOnce('abc123def4567890abc123def4567890abc123de\n');
 
-      const sha = repo.merge('/repo', 14);
+      const sha = await repo.merge('/repo', 14);
 
       expect(sha).toBe('abc123def4567890abc123def4567890abc123de');
-      expect(execMock.mock.calls[0][0]).toContain('gh pr merge 14 --merge');
-      expect(execMock.mock.calls[1][0]).toContain('gh pr view 14');
+      expect(execMock.mock.calls[1][0]).toContain(
+        'gh pr merge 14 --squash --delete-branch'
+      );
+      expect(execMock.mock.calls[2][0]).toContain('gh pr view 14');
     });
 
-    it('throws typed when the merge succeeds but the SHA cannot be resolved', () => {
-      execMock.mockReturnValueOnce('').mockReturnValueOnce('null\n');
+    it('merges a stacked PR via merge-async with merge commits', async () => {
+      execMock
+        .mockReturnValueOnce('{"base":"f/parent"}\n') // .stack present
+        .mockReturnValueOnce('{"status":"merged"}')
+        .mockReturnValueOnce('abc123def4567890abc123def4567890abc123de\n');
 
-      expect(() => repo.merge('/repo', 14)).toThrow(
+      const sha = await repo.merge('/repo', 14);
+
+      expect(sha).toBe('abc123def4567890abc123def4567890abc123de');
+      expect(execMock.mock.calls[1][0]).toContain('merge-async');
+      expect(execMock.mock.calls[1][0]).toContain('merge_method=merge');
+    });
+
+    it('polls merge-async until the stack lands', async () => {
+      execMock
+        .mockReturnValueOnce('{"base":"f/parent"}\n')
+        .mockReturnValueOnce('{"status":"pending","details":{"uuid":"u-1"}}')
+        .mockReturnValueOnce('{"status":"merged"}')
+        .mockReturnValueOnce('abc123def4567890abc123def4567890abc123de\n');
+
+      const merged = repo.merge('/repo', 14);
+      await jest.advanceTimersByTimeAsync(5_000);
+
+      expect(await merged).toBe('abc123def4567890abc123def4567890abc123de');
+      expect(execMock.mock.calls[2][0]).toContain('merge-async/u-1');
+    });
+
+    it('throws typed when merge-async reports failure', async () => {
+      execMock
+        .mockReturnValueOnce('{"base":"f/parent"}\n')
+        .mockReturnValueOnce('{"status":"pending","details":{"uuid":"u-1"}}')
+        .mockReturnValueOnce(
+          '{"status":"failed","details":{"message":"conflict"}}'
+        );
+
+      // Attach the rejection handler before advancing so the failure is
+      // never an unhandled rejection.
+      const assertion = expect(repo.merge('/repo', 14)).rejects.toThrow(
+        expect.objectContaining({ code: 'GH_FAILED' })
+      );
+      await jest.advanceTimersByTimeAsync(5_000);
+      await assertion;
+    });
+
+    it('throws typed when the merge succeeds but the SHA cannot be resolved', async () => {
+      execMock
+        .mockReturnValueOnce('')
+        .mockReturnValueOnce('')
+        .mockReturnValueOnce('null\n');
+
+      await expect(repo.merge('/repo', 14)).rejects.toThrow(
         expect.objectContaining({ code: 'GH_FAILED' })
       );
     });
 
-    it('throws typed when gh pr merge fails', () => {
+    it('throws typed when gh pr merge fails', async () => {
       execMock.mockImplementation(() => {
         throw new Error('gh: merge conflict');
       });
 
-      expect(() => repo.merge('/repo', 14)).toThrow(
+      await expect(repo.merge('/repo', 14)).rejects.toThrow(
         expect.objectContaining({ code: 'GH_FAILED' })
       );
     });

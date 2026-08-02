@@ -1,9 +1,11 @@
 import 'reflect-metadata';
 import { Container } from 'inversify';
+import type { IGitHubIssueRepository } from '../repositories/github-issue.repository';
 import type { IQueueRepository } from '../repositories/queue.repository';
 import {
   EscalationService,
   IEscalationService,
+  NEEDS_HUMAN_LABEL,
   escalationTitle
 } from '../services/escalation.service';
 import { WORKFLOW_TOKENS } from '../tokens';
@@ -22,13 +24,27 @@ const entry = (
 describe('EscalationService (P3 T-06)', () => {
   let service: IEscalationService;
   let appendItem: jest.Mock;
+  let upsert: jest.Mock;
 
   beforeEach(() => {
     appendItem = jest.fn().mockReturnValue(true);
+    upsert = jest.fn().mockReturnValue({
+      number: 7,
+      url: 'https://github.com/o/r/issues/7',
+      state: 'OPEN'
+    });
     const container = new Container();
     container
       .bind<IQueueRepository>(WORKFLOW_TOKENS.QueueRepository)
       .toConstantValue({ appendItem, itemTags: jest.fn() });
+    container
+      .bind<IGitHubIssueRepository>(WORKFLOW_TOKENS.GitHubIssueRepository)
+      .toConstantValue({
+        upsert,
+        findOpenByLabel: jest.fn(),
+        isResolved: jest.fn(),
+        ensureLabel: jest.fn()
+      });
     container
       .bind<IEscalationService>(WORKFLOW_TOKENS.EscalationService)
       .to(EscalationService);
@@ -88,5 +104,67 @@ describe('EscalationService (P3 T-06)', () => {
     });
     expect(first.posted).toHaveLength(1);
     expect(second.posted).toHaveLength(0);
+  });
+
+  it('files a needs-human issue keyed by run/task/trigger with the unblock command', () => {
+    const outcome = service.post({
+      repoPath: '/repo',
+      runId: 'run-1',
+      entries: [entry('envelope-breach')],
+      evidenceIds: ['T-01-diff']
+    });
+
+    expect(outcome.issueUrls).toEqual(['https://github.com/o/r/issues/7']);
+    const [call] = upsert.mock.calls;
+    expect(call[0].key).toBe('run-1/T-01/envelope-breach');
+    expect(call[0].labels).toEqual(
+      expect.arrayContaining([
+        NEEDS_HUMAN_LABEL,
+        'sdlc-run:run-1',
+        'trigger:envelope-breach',
+        'task:T-01'
+      ])
+    );
+    expect(call[0].body).toContain('envelope-breach detail');
+    expect(call[0].body).toContain('allowedPaths');
+    expect(call[0].body).toContain('Close this issue');
+  });
+
+  it('carries a task-specific remedy for manual-criterion stalls', () => {
+    service.post({
+      repoPath: '/repo',
+      runId: 'run-1',
+      entries: [entry('manual-criterion')]
+    });
+
+    expect(upsert.mock.calls[0][0].body).toContain('record-merge');
+  });
+
+  it('skips the issue surface without a repo path', () => {
+    const outcome = service.post({
+      chronicleRepo: '/chronicle',
+      runId: 'run-1',
+      entries: [entry('no-commit')]
+    });
+
+    expect(upsert).not.toHaveBeenCalled();
+    expect(outcome.issueUrls).toEqual([]);
+    expect(outcome.posted).toHaveLength(1);
+  });
+
+  it('keeps the queue item when GitHub is unreachable', () => {
+    upsert.mockImplementation(() => {
+      throw new Error('gh issue create failed');
+    });
+
+    const outcome = service.post({
+      chronicleRepo: '/chronicle',
+      repoPath: '/repo',
+      runId: 'run-1',
+      entries: [entry('agent-timeout')]
+    });
+
+    expect(outcome.posted).toHaveLength(1);
+    expect(outcome.issueUrls).toEqual([]);
   });
 });

@@ -107,6 +107,23 @@ describe('AggregatorService (T-06)', () => {
     );
   });
 
+  it('writes a manual-criterion ledger entry when verification needs a human', () => {
+    const gates = allGreen();
+    gates.verification = verdict('verification', 'human-required', [
+      'human required: manual: a human signs this off'
+    ]);
+
+    const { exceptions } = aggregate(gates);
+
+    expect(exceptions).toContainEqual(
+      expect.objectContaining({
+        trigger: 'manual-criterion',
+        taskId: 'T-01',
+        context: ['human required: manual: a human signs this off']
+      })
+    );
+  });
+
   it('writes a ci-fix-attempts ledger entry with attempt history at the third attempt', () => {
     const state = makeState({ ciFixAttempts: { 'T-01': 3 } });
 

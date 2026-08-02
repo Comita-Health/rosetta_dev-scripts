@@ -90,6 +90,36 @@ export class SuperviseService implements ISuperviseService {
     return this.loop(input);
   }
 
+  /**
+   * Record how this run was launched so an external supervisor (the launchd
+   * continuity daemon) can relaunch it after a crash. Without this the run
+   * directory has a dead `supervise.pid` and no way to reconstruct the
+   * invocation, so a died supervisor can only be restarted by a human who
+   * remembers the original command.
+   */
+  private writeLaunchRecord(input: SuperviseInput, childArgv: string[]): void {
+    const runDir = path.join(input.runsDir, input.runId);
+    writeFileSync(
+      path.join(runDir, 'launch.json'),
+      JSON.stringify(
+        {
+          runId: input.runId,
+          specPath: input.specPath,
+          repoPath: input.repoPath,
+          chronicleRepo: input.chronicleRepo,
+          runsDir: input.runsDir,
+          shadow: input.shadow === true,
+          cwd: process.cwd(),
+          execPath: process.execPath,
+          argv: childArgv,
+          recordedAt: new Date().toISOString()
+        },
+        null,
+        2
+      ) + '\n'
+    );
+  }
+
   private detach(input: SuperviseInput): SuperviseResult {
     const runDir = path.join(input.runsDir, input.runId);
     mkdirSync(runDir, { recursive: true });
@@ -98,6 +128,7 @@ export class SuperviseService implements ISuperviseService {
     const pidPath = path.join(runDir, 'supervise.pid');
 
     const childArgv = buildSuperviseChildArgv(input.detachArgv ?? process.argv);
+    this.writeLaunchRecord(input, childArgv);
     const { pid } = this._detachRepo.spawnDetached({
       command: process.execPath,
       args: childArgv,
@@ -145,6 +176,9 @@ export class SuperviseService implements ISuperviseService {
     const heartbeatPath = path.join(runDir, 'heartbeat.jsonl');
 
     writeFileSync(path.join(runDir, 'supervise.pid'), `${process.pid}\n`);
+    // The detached child re-enters here; re-record so the launch metadata
+    // reflects the process that actually owns the pidfile.
+    this.writeLaunchRecord(input, (process.argv ?? []).slice(1));
     this._hbWatch.start({
       heartbeatPath,
       monitorPath,
