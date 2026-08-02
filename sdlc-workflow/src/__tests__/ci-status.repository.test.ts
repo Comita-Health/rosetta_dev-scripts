@@ -76,6 +76,51 @@ describe('CiStatusRepository', () => {
     expect(logs).toContain('jest failed');
   });
 
+  it('creates a commit status via gh api --input JSON', () => {
+    execMock.mockReturnValue('{}');
+
+    repo.createStatus('/repo', 'abc123', {
+      state: 'success',
+      context: 'sdlc/reviewer',
+      description: 'T-01: pass',
+      targetUrl: 'https://github.com/org/repo/pull/7'
+    });
+
+    const [command, options] = execMock.mock.calls[0];
+    expect(command).toContain('repos/{owner}/{repo}/statuses/abc123');
+    expect(command).toContain('--input -');
+    expect(JSON.parse(options.input)).toEqual({
+      state: 'success',
+      context: 'sdlc/reviewer',
+      description: 'T-01: pass',
+      target_url: 'https://github.com/org/repo/pull/7'
+    });
+  });
+
+  it('omits empty optional status fields and wraps gh failures', () => {
+    execMock.mockReturnValue('{}');
+    repo.createStatus('/repo', 'sha', {
+      state: 'pending',
+      context: 'sdlc/reviewer',
+      description: '',
+      targetUrl: ''
+    });
+    expect(JSON.parse(execMock.mock.calls[0][1].input)).toEqual({
+      state: 'pending',
+      context: 'sdlc/reviewer'
+    });
+
+    execMock.mockImplementation(() => {
+      throw 'boom';
+    });
+    expect(() =>
+      repo.createStatus('/repo', 'sha', {
+        state: 'failure',
+        context: 'sdlc/reviewer'
+      })
+    ).toThrow(expect.objectContaining({ code: 'GH_FAILED' }));
+  });
+
   it('failedLogs is best effort: empty string on failure, partial on one bad run', () => {
     execMock.mockImplementation(() => {
       throw new Error('gh down');

@@ -24,6 +24,8 @@ export interface IPullRequestRepository {
    * Only ever called by the enforcement path when every gate is green.
    */
   merge(repoPath: string, number: number): string;
+  /** Post an issue-style comment on the PR (reviewer overview surface). */
+  comment(repoPath: string, number: number, body: string): void;
 }
 
 const gh = (repoPath: string, command: string, stdin?: string): string => {
@@ -97,5 +99,9 @@ export class PullRequestRepository implements IPullRequestRepository {
       );
     }
     return sha;
+  }
+
+  comment(repoPath: string, number: number, body: string): void {
+    gh(repoPath, `gh pr comment ${number} --body-file -`, body);
   }
 }

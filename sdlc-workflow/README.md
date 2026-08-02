@@ -227,6 +227,8 @@ Handler / Service / Repository with InversifyJS (workspace rule):
   test-tier via the repo's scripted check, agent-tier via an independent
   verifier agent driving the sandbox, manual-tier forces human-required;
   every criterion verdict references its evidence artifact (T-04).
+- `services/reviewer-publish.service.ts` — surfaces reviewer on the task PR
+  (commit status context `sdlc/reviewer` + overview comment); best-effort
 - `services/reviewer-gate.service.ts` — independent reviewer agent over the
   diff + task + envelope only; concur/disagree with cited reasons and the
   full transcript attached (T-05).
