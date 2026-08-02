@@ -29,6 +29,18 @@ const parseInlineArray = (raw: string): string[] => {
 const stripComment = (value: string): string =>
   value.replace(/\s*#.*$/, '').trim();
 
+/** True when `raw` contains a balanced `[...]` array (inline or folded). */
+const hasBalancedArray = (raw: string): boolean => {
+  const opens = (raw.match(/\[/g) ?? []).length;
+  const closes = (raw.match(/\]/g) ?? []).length;
+  return opens > 0 && opens === closes;
+};
+
+/**
+ * Parse YAML frontmatter. Envelope arrays may be inline (`key: ['a']`) or
+ * Prettier-folded multiline (`key:\n    [\n      'a',\n    ]`) — both are
+ * common after `prettier --write` on `*.md` specs.
+ */
 const parseFrontmatter = (
   markdown: string
 ): { fields: Record<string, string>; envelope: Envelope } => {
@@ -43,22 +55,58 @@ const parseFrontmatter = (
   const fields: Record<string, string> = {};
   const envelopeFields: Record<string, string> = {};
   let inEnvelope = false;
+  let collectingKey: string | null = null;
+  let collectingBuf = '';
+
+  const flushCollecting = (): void => {
+    if (collectingKey === null) return;
+    envelopeFields[collectingKey] = stripComment(collectingBuf.trim());
+    collectingKey = null;
+    collectingBuf = '';
+  };
+
   for (const line of match[1].split('\n')) {
     if (/^envelope:\s*$/.test(line)) {
+      flushCollecting();
       inEnvelope = true;
       continue;
     }
     const nested = line.match(/^ {2}([A-Za-z]+):\s*(.*)$/);
     if (inEnvelope && nested) {
-      envelopeFields[nested[1]] = stripComment(nested[2]);
+      flushCollecting();
+      const key = nested[1];
+      const rest = stripComment(nested[2]);
+      // Prettier may fold arrays as `key:\n    [\n ... ]` (empty rest) or
+      // leave an unclosed `[` on the key line. Scalars stay inline.
+      if (
+        rest.length === 0 ||
+        (rest.includes('[') && !hasBalancedArray(rest))
+      ) {
+        collectingKey = key;
+        collectingBuf = rest;
+      } else {
+        envelopeFields[key] = rest;
+      }
       continue;
     }
+    if (inEnvelope && collectingKey !== null && /^\s+\S/.test(line)) {
+      const piece = stripComment(line.trim());
+      if (piece.length === 0) continue;
+      collectingBuf =
+        collectingBuf.length === 0 ? piece : `${collectingBuf} ${piece}`;
+      if (hasBalancedArray(collectingBuf)) {
+        flushCollecting();
+      }
+      continue;
+    }
+    flushCollecting();
     inEnvelope = false;
     const kv = line.match(/^([A-Za-z_]+):\s*(.*)$/);
     if (kv) {
       fields[kv[1]] = stripComment(kv[2]);
     }
   }
+  flushCollecting();
 
   const required = [
     'allowedPaths',
