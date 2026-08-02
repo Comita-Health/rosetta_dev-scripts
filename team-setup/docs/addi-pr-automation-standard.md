@@ -14,8 +14,8 @@ which path owns what.
 | ------------------------------------------------------------------------- | ------------------------------ | ------------------------------------------------------------------------------- |
 | Human **Approves** an **Addi-authored** topic PR; checks green; mergeable | **GHA (gold)**                 | `addi-merge-on-approve.yml` merges as Addi                                      |
 | Same, but `mergeable=CONFLICTING`                                         | **GHA + Agent**                | GHA comments only (no force-merge). **Agent** merges/rebases onto base, pushes  |
-| Stacked PR (base ≠ default branch), Approved + mergeable                  | **GHA (gold)**                 | **Merge commit** (never squash) into the parent branch                          |
-| Stack blocked because a **lower** PR is CONFLICTING / unapproved          | **Agent / human**              | Fix bottom-up; GitHub stack merge cannot land until the trunk PR is clean       |
+| Stacked PR (`pull.stack` set), Approved + mergeable                       | **GHA (gold)**                 | `PUT .../merge-async` with `merge_method=merge` (sync `gh pr merge` fails)      |
+| Stack blocked because a **lower** PR is CONFLICTING                       | **Agent / human**              | Fix bottom-up; GHA comments only — does not auto-resolve conflicts              |
 | Human **Requests changes**                                                | **Agent / `pr-approve-watch`** | Fix, push, reply; **do not merge** until Approve                                |
 | Review-comment triage (Copilot / human threads)                           | **Agent / `pr-approve-watch`** | Reply + resolve; GHA does not triage comments                                   |
 | Agent opens a PR                                                          | **Addi identity**              | `addi-github-identity` / `addi-authorship` — activate App before `gh pr create` |
