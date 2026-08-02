@@ -1,3 +1,8 @@
+---
+description: "Default: watch Addi PRs for human Approve or Request changes; triage comments; merge only on Approve"
+alwaysApply: true
+---
+
 # PR review watch (default)
 
 When you open a pull request that needs a human proceed signal (especially

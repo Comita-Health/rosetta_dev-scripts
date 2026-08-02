@@ -1,17 +1,21 @@
 ---
 name: pr-approve-watch
 description: >-
-  Background-watch Addi-authored (or other agent) PRs for a human GitHub
-  Approve proceed signal, then wake the agent to triage review comments,
-  merge, and continue. Use when opening PRs that await human Approve, or
-  when the user asks to watch for approval / proceed-on-approve.
+  Background-watch Addi-authored (or other agent) PRs for human GitHub review
+  signals — Approve (merge path) or Request changes (fix path) — then wake
+  the agent. Use when opening PRs that await human review, or when the user
+  asks to watch for approval / request-changes / proceed-on-approve.
 ---
 
-# PR Approve watch (proceed signal)
+# PR review watch (Approve + Request changes)
 
-**Proceed signal for agent work is GitHub PR Approve** — not chat "approved".
-When you open a PR that needs a human proceed (especially Addi / bot-authored
-PRs), arm this watcher so Approve can be acted on without a chat nudge.
+**Human feedback on agent PRs lives on the PR** — not in chat. Arm this watcher
+so Approve **or** Request changes wakes the agent without a chat nudge.
+
+| Signal | Wake | After wake |
+| ------ | ---- | ---------- |
+| **Approve** | Once | Triage comments → merge when green |
+| **Request changes** | Once per new human review id | Fix / reply / push — **do not merge**; keep watching for Approve or another Request changes |
 
 ## Hard rules
 
@@ -20,16 +24,14 @@ PRs), arm this watcher so Approve can be acted on without a chat nudge.
    `notify_on_output` on `^AGENT_LOOP_WAKE_pr_approve`.
 2. Do **not** redirect the watcher stdout away from the monitored terminal
    (or the wake sentinel will be swallowed).
-3. On wake: activate the workspace GitHub App, verify APPROVED + green checks,
-   **triage review comments (required — see below)**, then merge, pull the
-   repo default branch (`main` or `build-env/dev`), report. If multiple
-   targets remain, leave the watcher running (it exits only when all targets
-   have fired).
-4. Prefer human (non-bot) Approve. The script uses `reviewDecision == APPROVED`
-   when present, else any non-bot `APPROVED` review.
+3. Read the wake JSON `signal` field: `"approved"` or `"changes_requested"`.
+4. Prefer human (non-bot) reviews. The script uses `reviewDecision` when set,
+   else non-bot `APPROVED` / `CHANGES_REQUESTED` reviews.
 5. **Never merge on Approve alone while unresolved, unaddressed review
-   comments remain** (human or bot). Approve means “proceed with the merge
-   workflow,” which includes comment hygiene.
+   comments remain.** Approve means “proceed with the merge workflow,” which
+   includes comment hygiene.
+6. **Never merge on `changes_requested`.** Fix the feedback, leave the PR open,
+   and keep the watcher armed for the next human signal.
 
 ## Launch template
 
@@ -47,7 +49,18 @@ picks from cwd / `ROSETTA_GH_ACTIVATE` / those defaults, else ambient `gh` auth.
 Cursor agent loop: background the command with
 `notify_on_output` pattern `^AGENT_LOOP_WAKE_pr_approve`.
 
-## On wake
+## On wake — `signal: changes_requested`
+
+1. Activate the workspace GitHub App.
+2. Fetch the Request changes review body + inline comments + unresolved
+   `reviewThreads`.
+3. Fix actionable items on the PR branch; commit; push.
+4. Reply on each thread with the fix SHA; `resolveReviewThread` when done.
+5. Wait for CI green after pushes.
+6. **Do not merge.** Report what you fixed and that the PR awaits re-review.
+7. Leave the watcher running (it already keeps the target until Approve).
+
+## On wake — `signal: approved`
 
 1. `eval "$(bash ~/.config/<rosetta|comita>/github-app-activate.sh)"` when present.
 2. `gh pr view <n> -R <owner/repo> --json state,reviewDecision,statusCheckRollup,mergeable`.
@@ -78,8 +91,10 @@ Cursor agent loop: background the command with
 
 ## Anti-patterns
 
-- Blocking the chat with a foreground `sleep`/poll loop waiting for Approve.
-- Treating chat "LGTM" / "approved" as the proceed signal when an Addi PR exists.
+- Blocking the chat with a foreground `sleep`/poll loop waiting for review.
+- Treating chat "LGTM" / "approved" / paste-of-feedback as the signal when a
+  GitHub review exists on the PR.
 - Redirecting watcher stdout to a file without `tee` (breaks wake notifications).
-- Merging immediately on Approve without reading review comments / threads.
+- Merging on Approve without reading review comments / threads.
+- Merging (or closing) after Request changes without addressing the review.
 - Resolving threads without a reply when the human asked for a change.
