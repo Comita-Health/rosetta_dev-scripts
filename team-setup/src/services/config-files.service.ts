@@ -46,7 +46,9 @@ const mirrorClaudeRulesToCursor = (
                 ? 'Default: background-supervise sdlc-workflow runs (--supervise --detach + heartbeat)'
                 : stem === 'pr-approve-watch'
                   ? 'Default: background-watch PRs for human Approve proceed signal'
-                  : `Rosetta rule: ${stem}`;
+                  : stem === 'no-tool-attribution'
+                    ? 'Never add Made with Cursor or similar tool marketing to commits/PRs'
+                    : `Rosetta rule: ${stem}`;
       const contents = [
         '---',
         `description: ${yamlDoubleQuoted(description)}`,
