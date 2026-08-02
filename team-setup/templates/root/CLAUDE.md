@@ -35,11 +35,21 @@ decisions. When implementation and philosophy conflict, philosophy wins.
 
 When kicking off or watching `sdlc-workflow` (`run` / shadow waves):
 
-- Follow **`sdlc-run-supervise`** — `--supervise --detach`, `--heartbeat`,
+- Follow **`sdlc-run-supervise`** — engine `--supervise --detach`, `--heartbeat`,
   yield the agent turn, check in on wakes. Do **not** block the chat on
   sandbox/CI waits.
 - Slash reminder: `/sdlc-run`. Scorecards: `/sdlc-status`.
 - Design note: `rosetta_dev-scripts/sdlc-workflow/docs/operator-background-supervise.md`.
+
+## PR Approve watch (proceed signal)
+
+When you open a PR that needs a human proceed (especially Addi / bot-authored
+PRs): follow **`pr-approve-watch`** — arm the background Approve watcher, wake
+on `AGENT_LOOP_WAKE_pr_approve`, triage review comments. If the repo enables
+**Addi merge on Approve** (GHA), do **not** merge from the agent — pull the
+default branch after GHA merges. Otherwise merge as Addi, then pull. Do **not**
+treat chat "approved" as the proceed signal. Slash: `/watch-pr-approve`. See
+`rosetta_dev-scripts/team-setup/docs/addi-pr-automation-standard.md`.
 
 ## Package Manager
 
