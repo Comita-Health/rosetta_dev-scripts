@@ -51,7 +51,7 @@ const mirrorClaudeRulesToCursor = (
                     : stem === 'deploy-verify-watch'
                       ? 'Default: live-verify PRs auto-dispatch deploy on push; re-smoke before Approve'
                       : stem === 'pr-approve-watch'
-                        ? 'Default: watch Addi PRs for human Approve, then triage comments and merge'
+                        ? 'Default: watch Addi PRs for human Approve or Request changes; merge only on Approve'
                         : stem === 'addi-authorship'
                           ? 'Mandatory: open PRs and issues as Addi (GitHub App), never as the human gh user'
                           : `Rosetta rule: ${stem}`;

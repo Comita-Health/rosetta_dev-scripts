@@ -53,3 +53,6 @@ AI assistance. Git hooks and Conventional Commits apply regardless of agent.
 - **PRs and issues as Addi** — activate the workspace GitHub App before
   `gh pr create` / `gh issue create`; never open them as the human `gh` user
   (humans must Approve Addi PRs). See `addi-authorship`.
+- **Human PR feedback on the PR** — arm `pr-approve-watch` for Approve **and**
+  Request changes (`/watch-pr-approve`); prefer GitHub reviews over chat for
+  in-flight agent work.

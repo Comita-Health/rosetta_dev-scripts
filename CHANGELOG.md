@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **team-setup:** `pr-approve-watch` also wakes on human **Request changes**
+  (`signal: changes_requested` in the wake JSON) — once per new non-bot review
+  id — so feedback can stay on the PR; agent fixes without merging and keeps
+  watching until Approve. Approve path unchanged.
 - **team-setup:** add `addi-authorship` rule — agent PRs/issues must be created
   as the workspace GitHub App (Addi); verify `viewer.login` before create; never
   fall back to human `gh` on 403; recreate accidental human-authored PRs as Addi.
