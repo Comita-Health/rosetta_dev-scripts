@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **team-setup:** Comita rollout of Addi merge-on-approve GHA (workflow + spike docs; `app/addi-m` author filter).
 - **team-setup:** add `issue-resolve-watch` skill — background-watch GitHub
   issues (kickoff / human comments / linked PRs / closed) and wake the agent
   to drive Done-when → close; `/watch-issue-resolve` + always-on rule.
