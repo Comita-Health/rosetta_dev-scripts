@@ -41,6 +41,13 @@ When kicking off or watching `sdlc-workflow` (`run` / shadow waves):
 - Slash reminder: `/sdlc-run`. Scorecards: `/sdlc-status`.
 - Design note: `rosetta_dev-scripts/sdlc-workflow/docs/operator-background-supervise.md`.
 
+## PR Approve watch (proceed signal)
+
+When you open a PR that needs a human proceed (especially Addi / bot-authored
+PRs): follow **`pr-approve-watch`** — arm the background Approve watcher, wake
+on `AGENT_LOOP_WAKE_pr_approve`, then merge + pull `main`. Do **not** treat chat
+"approved" as the proceed signal. Slash: `/watch-pr-approve`.
+
 ## Package Manager
 
 Always use `bun` over `npm`/`yarn` (`bun install`, `bun run <script>`).
