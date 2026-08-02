@@ -48,7 +48,11 @@ const mirrorClaudeRulesToCursor = (
                   ? 'Never add Made with Cursor or similar tool marketing to commits/PRs'
                   : stem === 'issue-resolve-watch'
                     ? 'Default: watch owned GitHub issues toward resolution (Done-when → close)'
-                    : `Rosetta rule: ${stem}`;
+                    : stem === 'deploy-verify-watch'
+                      ? 'Default: live-verify PRs auto-dispatch deploy on push; re-smoke before Approve'
+                      : stem === 'pr-approve-watch'
+                        ? 'Default: watch Addi PRs for human Approve, then triage comments and merge'
+                        : `Rosetta rule: ${stem}`;
       const contents = [
         '---',
         `description: ${yamlDoubleQuoted(description)}`,

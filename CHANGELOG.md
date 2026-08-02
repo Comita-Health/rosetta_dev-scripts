@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **team-setup:** add `deploy-verify-watch` skill — classify live-verify PRs
+  (auth / multi-SPA / Deploy Org paths), auto-dispatch the deploy workflow on
+  each new head SHA, and wake on `deploy_green` / `deploy_failed` so humans
+  re-smoke before Approve; `/watch-deploy-verify` + always-on rule. Pair with
+  `pr-approve-watch`.
 - **team-setup:** add `issue-resolve-watch` skill — background-watch GitHub
   issues (kickoff / human comments / linked PRs / closed) and wake the agent
   to drive Done-when → close; `/watch-issue-resolve` + always-on rule.

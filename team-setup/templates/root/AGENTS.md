@@ -47,3 +47,6 @@ AI assistance. Git hooks and Conventional Commits apply regardless of agent.
 - **Watched issues drive to resolution** — see `issue-resolve-watch`
   (`/watch-issue-resolve`); arm after taking ownership (recreate as Addi when
   asked).
+- **Live-verify PRs redeploy on push** — see `deploy-verify-watch`
+  (`/watch-deploy-verify`); arm for auth/multi-SPA/deploy-path PRs so each head
+  SHA dispatches a host deploy and wakes for human re-smoke before Approve.
