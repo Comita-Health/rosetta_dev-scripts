@@ -79,7 +79,11 @@ describe('CiGateService (P3 T-03 live monitor + bounded fix cycle)', () => {
     const container = new Container();
     container
       .bind<ICiStatusRepository>(WORKFLOW_TOKENS.CiStatusRepository)
-      .toConstantValue({ checkRuns, failedLogs });
+      .toConstantValue({
+        checkRuns,
+        failedLogs,
+        createStatus: jest.fn()
+      });
     container
       .bind<IAgentRunnerRepository>(WORKFLOW_TOKENS.AgentRunnerRepository)
       .toConstantValue({ run: agentRun });
