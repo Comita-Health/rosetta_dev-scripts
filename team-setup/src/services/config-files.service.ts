@@ -45,7 +45,7 @@ const mirrorClaudeRulesToCursor = (
               : stem === 'sdlc-run-supervise'
                 ? 'Default: background-supervise sdlc-workflow runs (--supervise --detach + heartbeat)'
                 : stem === 'pr-approve-watch'
-                  ? 'Default: watch Addi PRs for human Approve or Request changes; merge only on Approve'
+                  ? 'Default: background-watch PRs for human Approve proceed signal (GHA merges when enabled)'
                   : stem === 'no-tool-attribution'
                     ? 'Never add Made with Cursor or similar tool marketing to commits/PRs'
                     : stem === 'issue-resolve-watch'

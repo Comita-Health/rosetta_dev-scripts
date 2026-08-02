@@ -115,7 +115,9 @@ print(json.dumps({
     "resolution: read title/body/Done-when, triage new comments, implement "
     "or open/land PRs as needed, update checkboxes, and close when Done-when "
     "is met. Do not leave a watched issue idle without a next step or a clear "
-    "human blocker noted on the issue. Keep watching remaining open targets."
+    "human blocker noted on the issue. Chat notify is best-effort — drain "
+    "this wake from the watcher terminal even if the chat stayed quiet. "
+    "Keep watching remaining open targets."
   ),
   "repo": os.environ["REPO"],
   "number": int(os.environ["NUM"]),
@@ -127,6 +129,7 @@ PY
   )
   printf 'AGENT_LOOP_WAKE_issue_resolve %s\n' "$payload"
   echo "watch-issue-resolve: $reason → $target (remaining=$remaining)" >&2
+  echo "watch-issue-resolve: NOTE chat notify is best-effort; agent must drain AGENT_LOOP_WAKE_issue_resolve from this terminal if the chat stays quiet." >&2
 }
 
 STATE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/issue-resolve-watch.XXXXXX")

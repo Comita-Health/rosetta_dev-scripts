@@ -5,7 +5,16 @@
 - **team-setup:** `pr-approve-watch` also wakes on human **Request changes**
   (`signal: changes_requested` in the wake JSON) — once per new non-bot review
   id — so feedback can stay on the PR; agent fixes without merging and keeps
-  watching until Approve. Approve path unchanged.
+  watching until Approve.
+- **team-setup:** Addi merge-on-approve uses GitHub **`merge-async`** for
+  native stacked PRs (`pull.stack`); plain `gh pr merge` is rejected on stacks.
+  Conflicts on a lower PR still require an agent resolve (GHA comments only).
+- **team-setup:** gold-standard **Addi PR automation** —
+  `docs/addi-pr-automation-standard.md` + hardened
+  `addi-merge-on-approve.yml` (repository_dispatch / workflow_run / schedule)
+  + `addi-merge-webhook` bridge; `pr-approve-watch` demoted to triage when GHA
+  is enabled. Comita and Rosetta each use their own Addi App Client ID + PEM
+  under the same Action variable names.
 - **team-setup:** add `addi-authorship` rule — agent PRs/issues must be created
   as the workspace GitHub App (Addi); verify `viewer.login` before create; never
   fall back to human `gh` on 403; recreate accidental human-authored PRs as Addi.
@@ -14,6 +23,19 @@
   each new head SHA, and wake on `deploy_green` / `deploy_failed` so humans
   re-smoke before Approve; `/watch-deploy-verify` + always-on rule. Pair with
   `pr-approve-watch`.
+- **team-setup:** Addi merge-on-approve uses `client-id` (`ADDI_CLIENT_ID`) instead of deprecated `app-id`.
+- **team-setup:** fix Addi merge-on-approve self-deadlock — do not `gh pr checks --watch` our own pending check on `pull_request_review`.
+- **team-setup:** prove Addi merge-on-approve clean path v2 (Approve → bot squash-merge via GHA schedule).
+- **team-setup:** prove Addi merge-on-approve GHA path (human Approve → `rosetta-s-addi-m[bot]` squash-merge).
+- **team-setup:** spike **Addi merge-on-approve** via GitHub Actions (preserves
+  `rosetta-s-addi-m[bot]` identity). Cursor Automations cannot run as Addi —
+  see `team-setup/docs/addi-merge-on-approve-spike.md` + opt-in workflow
+  `.github/workflows/addi-merge-on-approve.yml`.
+- **team-setup:** document watch wake **delivery gap** — Cursor
+  `notify_on_output` is best-effort after the arming turn ends; agents must
+  drain `AGENT_LOOP_WAKE_*` from watcher terminals (and treat “I approved” /
+  “check watchers” as a drain nudge). Applies to `pr-approve-watch` and
+  `issue-resolve-watch` skills/rules/commands + wake prompts.
 - **team-setup:** `pr-approve-watch` wake path must resolve `mergeable=CONFLICTING` PRs (rebase/merge onto base, push, re-check CI) before comment triage + merge — do not stop after Approve on a dirty tip.
 - **team-setup:** add `issue-resolve-watch` skill — background-watch GitHub
   issues (kickoff / human comments / linked PRs / closed) and wake the agent
