@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **team-setup:** add `issue-resolve-watch` skill — background-watch GitHub
+  issues (kickoff / human comments / linked PRs / closed) and wake the agent
+  to drive Done-when → close; `/watch-issue-resolve` + always-on rule.
 - **team-setup:** ban Cursor/tool marketing footers in commits and PR bodies
   (`no-tool-attribution` rule + `attribution.attributePRsToAgent: false` in
   workspace `.cursor/cli.json`); agents must strip injected "Made with Cursor"
