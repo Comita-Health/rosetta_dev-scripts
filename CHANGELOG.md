@@ -11,6 +11,14 @@
   + `addi-merge-webhook` bridge; `pr-approve-watch` demoted to triage when GHA
   is enabled. Comita and Rosetta each use their own Addi App Client ID + PEM
   under the same Action variable names.
+- **team-setup:** add `addi-authorship` rule — agent PRs/issues must be created
+  as the workspace GitHub App (Addi); verify `viewer.login` before create; never
+  fall back to human `gh` on 403; recreate accidental human-authored PRs as Addi.
+- **team-setup:** add `deploy-verify-watch` skill — classify live-verify PRs
+  (auth / multi-SPA / Deploy Org paths), auto-dispatch the deploy workflow on
+  each new head SHA, and wake on `deploy_green` / `deploy_failed` so humans
+  re-smoke before Approve; `/watch-deploy-verify` + always-on rule. Pair with
+  `pr-approve-watch`.
 - **team-setup:** Addi merge-on-approve uses `client-id` (`ADDI_CLIENT_ID`) instead of deprecated `app-id`.
 - **team-setup:** fix Addi merge-on-approve self-deadlock — do not `gh pr checks --watch` our own pending check on `pull_request_review`.
 - **team-setup:** prove Addi merge-on-approve clean path v2 (Approve → bot squash-merge via GHA schedule).
