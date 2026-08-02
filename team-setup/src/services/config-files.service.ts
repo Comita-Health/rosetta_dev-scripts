@@ -42,11 +42,13 @@ const mirrorClaudeRulesToCursor = (
             ? 'TypeScript and Prettier code style for Rosetta'
             : stem === 'inline-docs'
               ? 'TSDoc / JSDoc bar for backend HSR classes and frontend exports (SDLC)'
-              : stem === 'no-tool-attribution'
-                ? 'Never add Made with Cursor or similar tool marketing to commits/PRs'
-                : stem === 'issue-resolve-watch'
-                  ? 'Default: watch owned GitHub issues toward resolution (Done-when → close)'
-                  : `Rosetta rule: ${stem}`;
+              : stem === 'sdlc-run-supervise'
+                ? 'Default: background-supervise sdlc-workflow runs (--supervise --detach + heartbeat)'
+                : stem === 'no-tool-attribution'
+                  ? 'Never add Made with Cursor or similar tool marketing to commits/PRs'
+                  : stem === 'issue-resolve-watch'
+                    ? 'Default: watch owned GitHub issues toward resolution (Done-when → close)'
+                    : `Rosetta rule: ${stem}`;
       const contents = [
         '---',
         `description: ${yamlDoubleQuoted(description)}`,
