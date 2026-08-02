@@ -40,7 +40,9 @@ const mirrorClaudeRulesToCursor = (
           ? 'Mandatory Handler / Service / Repository + InversifyJS architecture'
           : stem === 'code-style'
             ? 'TypeScript and Prettier code style for Rosetta'
-            : `Rosetta rule: ${stem}`;
+            : stem === 'inline-docs'
+              ? 'TSDoc / JSDoc bar for backend HSR classes and frontend exports (SDLC)'
+              : `Rosetta rule: ${stem}`;
       const contents = [
         '---',
         `description: ${yamlDoubleQuoted(description)}`,

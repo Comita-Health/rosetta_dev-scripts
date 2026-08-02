@@ -5,6 +5,9 @@ import { Envelope, SpecTask } from '../types';
  * structural: the prompt is built from exactly three inputs — the diff, the
  * spec task, and the envelope — never from implementation-agent
  * conversation state.
+ *
+ * Includes the workspace documentation bar (TSDoc/JSDoc) so reviews catch
+ * missing or hollow docs on new HSR classes and non-obvious helpers.
  */
 export const buildReviewerPrompt = (
   task: SpecTask,
@@ -37,7 +40,22 @@ export const buildReviewerPrompt = (
     diff,
     '```',
     '',
+    '## Documentation bar (TSDoc / JSDoc)',
+    '',
+    'Treat useful inline docs as part of correctness for new or substantially',
+    'changed exports — same bar as a missing test when the surface warrants it.',
+    '',
+    '- Backend / engine: new `@injectable()` Handler, Service, or Repository',
+    '  classes and their new public methods need TSDoc covering purpose and',
+    '  non-obvious invariants (authz, PHI/PII, idempotency, failure modes).',
+    '  Do not require `@param` / `@returns` that only restate TypeScript types.',
+    '- Frontend: types/props are the primary API docs; require short TSDoc on',
+    '  non-obvious platform/auth/session/entitlement helpers. Do not fail solely',
+    '  for missing prop JSDoc on presentational components when types are clear.',
+    '- Disagree on placeholder noise (`/** Service */`) or missing docs on a new',
+    '  HSR class / non-obvious public helper introduced in the diff.',
+    '',
     'Return your verdict: "concur" only if the diff implements the task',
-    'within the envelope with no correctness or safety concerns; otherwise',
-    '"disagree" with every concern cited as a reason.'
+    'within the envelope with no correctness, safety, or documentation-bar',
+    'concerns; otherwise "disagree" with every concern cited as a reason.'
   ].join('\n');
