@@ -1,0 +1,295 @@
+# Gold standard: merge Addi-authored PRs on human Approve, as Addi (GitHub App).
+# Opt-in: vars.ADDI_MERGE_ON_APPROVE=true + ADDI_CLIENT_ID + ADDI_APP_PRIVATE_KEY.
+# See team-setup/docs/addi-pr-automation-standard.md
+name: Addi merge on Approve
+
+on:
+  # Best-effort — delivery is flaky on some PRs; do not rely on this alone.
+  pull_request_review:
+    types: [submitted]
+  # Preferred reliable path: Addi App webhook bridge → repository_dispatch.
+  repository_dispatch:
+    types: [addi-merge-on-approve]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number to attempt merge (as Addi)
+        required: true
+        type: string
+  # After CI/PR Checks complete, retry Approved Addi PRs (covers Approve-then-green).
+  workflow_run:
+    workflows: [CI, PR Checks]
+    types: [completed]
+  # Last-resort poll (GitHub may delay or skip schedules on quiet repos).
+  schedule:
+    - cron: '*/10 * * * *'
+
+concurrency:
+  group: addi-merge-${{ github.repository }}-${{ github.event.client_payload.pr_number || github.event.inputs.pr_number || github.event.pull_request.number || github.event.workflow_run.head_branch || 'poll' }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  merge:
+    if: ${{ vars.ADDI_MERGE_ON_APPROVE == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require Addi App credentials
+        env:
+          CLIENT_ID: ${{ vars.ADDI_CLIENT_ID }}
+          HAS_KEY: ${{ secrets.ADDI_APP_PRIVATE_KEY != '' }}
+        run: |
+          if [ -z "$CLIENT_ID" ] || [ "$HAS_KEY" != "true" ]; then
+            echo "::error::Set vars.ADDI_CLIENT_ID and secrets.ADDI_APP_PRIVATE_KEY (see team-setup/docs/addi-pr-automation-standard.md)"
+            exit 1
+          fi
+
+      - name: Mint Addi installation token
+        id: addi
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.ADDI_CLIENT_ID }}
+          private-key: ${{ secrets.ADDI_APP_PRIVATE_KEY }}
+
+      - name: Resolve PR numbers
+        id: prs
+        env:
+          GH_TOKEN: ${{ steps.addi.outputs.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          REVIEW_PR: ${{ github.event.pull_request.number }}
+          REVIEW_STATE: ${{ github.event.review.state }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          DISPATCH_PR: ${{ inputs.pr_number }}
+          PAYLOAD_PR: ${{ github.event.client_payload.pr_number }}
+          WORKFLOW_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          WORKFLOW_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          WORKFLOW_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          REPO: ${{ github.repository }}
+          ALLOW_ANY_AUTHOR: ${{ vars.ADDI_MERGE_ANY_AUTHOR }}
+        run: |
+          set -euo pipefail
+          echo "event_name=$EVENT_NAME review_state=${REVIEW_STATE:-}"
+
+          numbers=""
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            numbers="$DISPATCH_PR"
+          elif [ "$EVENT_NAME" = "repository_dispatch" ]; then
+            numbers="${PAYLOAD_PR:-}"
+            if [ -z "$numbers" ]; then
+              echo "repository_dispatch missing client_payload.pr_number; nothing to do."
+              echo "numbers=" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          elif [ "$EVENT_NAME" = "pull_request_review" ]; then
+            if [ "${REVIEW_STATE:-}" != "approved" ]; then
+              echo "Review state is '${REVIEW_STATE:-}' (want approved); nothing to do."
+              echo "numbers=" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            if [ "${HEAD_REPO:-}" != "$REPO" ]; then
+              echo "Fork PR (${HEAD_REPO:-unknown}); skip."
+              echo "numbers=" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            numbers="$REVIEW_PR"
+          elif [ "$EVENT_NAME" = "workflow_run" ]; then
+            if [ "${WORKFLOW_CONCLUSION:-}" != "success" ]; then
+              echo "workflow_run conclusion=${WORKFLOW_CONCLUSION:-}; skip."
+              echo "numbers=" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            # Map head branch/sha → open PR numbers.
+            numbers=$(
+              gh pr list -R "$REPO" --state open --limit 50 \
+                --json number,headRefName,headRefOid,author,reviewDecision,isDraft \
+                | jq -r --arg b "${WORKFLOW_HEAD_BRANCH:-}" --arg s "${WORKFLOW_HEAD_SHA:-}" '
+                  .[]
+                  | select(.isDraft == false)
+                  | select(.reviewDecision == "APPROVED")
+                  | select(.headRefName == $b or .headRefOid == $s)
+                  | .number' \
+                | tr '\n' ' ' | sed 's/[[:space:]]*$//'
+            )
+          else
+            # schedule
+            jq_filter='.[]
+              | select(.isDraft == false)
+              | select(.reviewDecision == "APPROVED")
+              | select(
+                  ($any == "true")
+                  or (.author.login == "app/rosetta-s-addi-m")
+                  or (.author.login == "rosetta-s-addi-m")
+                  or (.author.login == "rosetta-s-addi-m[bot]")
+                  or (.author.login == "app/addi-m")
+                  or (.author.login == "addi-m")
+                  or (.author.login == "addi-m[bot]")
+                )
+              | .number'
+            numbers=$(
+              gh pr list -R "$REPO" --state open --limit 50 \
+                --json number,author,reviewDecision,isDraft \
+                | jq -r --arg any "${ALLOW_ANY_AUTHOR:-}" "$jq_filter" \
+                | tr '\n' ' ' | sed 's/[[:space:]]*$//'
+            )
+          fi
+
+          echo "numbers=${numbers}"
+          echo "numbers=${numbers}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify author + gates, then merge as Addi
+        if: ${{ steps.prs.outputs.numbers != '' }}
+        env:
+          GH_TOKEN: ${{ steps.addi.outputs.token }}
+          PRS: ${{ steps.prs.outputs.numbers }}
+          REPO: ${{ github.repository }}
+          ALLOW_ANY_AUTHOR: ${{ vars.ADDI_MERGE_ANY_AUTHOR }}
+          CONFLICT_BODY: |
+            ## Addi merge-on-approve
+
+            Human Approve received, but this PR is `mergeable=CONFLICTING`.
+
+            I will not force-merge or auto-resolve. An agent must merge/rebase
+            onto the base, push, wait for checks, then re-Approve or re-run
+            **Addi merge on Approve** via `workflow_dispatch`.
+
+            Stacked PRs: fix the **bottom** (base ← trunk) PR first. Stack
+            merges use **merge commits** (never squash). See
+            `team-setup/docs/addi-pr-automation-standard.md`.
+        run: |
+          set -euo pipefail
+
+          is_addi_author() {
+            case "$1" in
+              app/rosetta-s-addi-m|rosetta-s-addi-m|rosetta-s-addi-m\[bot\]|app/addi-m|addi-m|addi-m\[bot\]) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+
+          process_pr() {
+            local PR="$1"
+            echo "::group::PR #$PR"
+            meta=$(gh pr view "$PR" -R "$REPO" --json \
+              author,state,isDraft,reviewDecision,mergeable,mergeStateStatus,baseRefName,url)
+            echo "$meta" | jq .
+
+            author=$(echo "$meta" | jq -r '.author.login // empty')
+            state=$(echo "$meta" | jq -r '.state')
+            draft=$(echo "$meta" | jq -r '.isDraft')
+            decision=$(echo "$meta" | jq -r '.reviewDecision // empty')
+            mergeable=$(echo "$meta" | jq -r '.mergeable // empty')
+            base_ref=$(echo "$meta" | jq -r '.baseRefName // empty')
+            url=$(echo "$meta" | jq -r '.url')
+            default_ref=$(gh repo view "$REPO" --json defaultBranchRef \
+              --jq '.defaultBranchRef.name')
+
+            if [ "$state" != "OPEN" ]; then
+              echo "PR not OPEN ($state); nothing to do."
+              echo "::endgroup::"
+              return 0
+            fi
+            if [ "$draft" = "true" ]; then
+              echo "Draft PR; refusing merge."
+              echo "::endgroup::"
+              return 0
+            fi
+
+            if [ "${ALLOW_ANY_AUTHOR:-}" != "true" ]; then
+              if ! is_addi_author "$author"; then
+                echo "Author '$author' is not Addi; skip (set ADDI_MERGE_ANY_AUTHOR=true to override)."
+                echo "::endgroup::"
+                return 0
+              fi
+            fi
+
+            if [ "$decision" != "APPROVED" ]; then
+              echo "reviewDecision is '$decision' (want APPROVED); skip."
+              echo "::endgroup::"
+              return 0
+            fi
+
+            if [ "$mergeable" = "CONFLICTING" ]; then
+              if gh api "repos/$REPO/issues/$PR/comments" --jq '.[].body' \
+                | grep -Fq '## Addi merge-on-approve'; then
+                echo "Conflict comment already present; skip."
+                echo "::endgroup::"
+                return 0
+              fi
+              gh pr comment "$PR" -R "$REPO" --body "$CONFLICT_BODY"
+              echo "Commented on conflicting PR; exiting 0."
+              echo "::endgroup::"
+              return 0
+            fi
+
+            # Do NOT use `gh pr checks --watch` — this job can register as a
+            # pending check and deadlock on itself.
+            echo "Waiting for checks (excluding this workflow)…"
+            local deadline=$((SECONDS + 1200))
+            local self_run="${GITHUB_RUN_ID:-}"
+            while true; do
+              local rollup pending failed
+              rollup=$(gh pr view "$PR" -R "$REPO" --json statusCheckRollup)
+              pending=$(echo "$rollup" | jq --argjson run "${self_run:-0}" '
+                [.statusCheckRollup[]?
+                  | select((.workflowName // "") != "Addi merge on Approve")
+                  | select((.detailsUrl // "") | contains("/runs/\($run)/") | not)
+                  | select(.status != "COMPLETED")]
+                | length')
+              failed=$(echo "$rollup" | jq --argjson run "${self_run:-0}" '
+                [.statusCheckRollup[]?
+                  | select((.workflowName // "") != "Addi merge on Approve")
+                  | select((.detailsUrl // "") | contains("/runs/\($run)/") | not)
+                  | select(.status == "COMPLETED")
+                  | select(.conclusion != "SUCCESS"
+                      and .conclusion != "SKIPPED"
+                      and .conclusion != "NEUTRAL")]
+                | length')
+              if [ "$failed" -gt 0 ]; then
+                echo "Checks failed; not merging $url"
+                echo "$rollup" | jq .
+                echo "::endgroup::"
+                return 1
+              fi
+              if [ "$pending" -eq 0 ]; then
+                echo "Non-self checks complete."
+                break
+              fi
+              if [ "$SECONDS" -ge "$deadline" ]; then
+                echo "Timed out waiting for checks; not merging $url"
+                echo "::endgroup::"
+                return 1
+              fi
+              echo "pending=$pending — sleep 15s"
+              sleep 15
+            done
+
+            mergeable=$(gh pr view "$PR" -R "$REPO" --json mergeable --jq '.mergeable // empty')
+            if [ "$mergeable" != "MERGEABLE" ]; then
+              echo "After checks, mergeable=$mergeable; not merging."
+              echo "::endgroup::"
+              return 1
+            fi
+
+            # Stacked PRs (base ≠ default branch) require merge commits.
+            # Default-branch PRs keep squash for a linear trunk.
+            if [ -n "$base_ref" ] && [ -n "$default_ref" ] \
+              && [ "$base_ref" != "$default_ref" ]; then
+              echo "Stacked PR (base=$base_ref ≠ $default_ref); merge commit."
+              gh pr merge "$PR" -R "$REPO" --merge --delete-branch
+            else
+              gh pr merge "$PR" -R "$REPO" --squash --delete-branch
+            fi
+            echo "Merged as Addi: $url"
+            echo "::endgroup::"
+            return 0
+          }
+
+          fail=0
+          for PR in $PRS; do
+            if ! process_pr "$PR"; then
+              fail=1
+            fi
+          done
+          exit "$fail"

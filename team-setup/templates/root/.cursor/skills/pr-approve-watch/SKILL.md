@@ -2,9 +2,10 @@
 name: pr-approve-watch
 description: >-
   Background-watch Addi-authored (or other agent) PRs for human GitHub review
-  signals — Approve (merge path) or Request changes (fix path) — then wake
-  the agent. Use when opening PRs that await human review, or when the user
-  asks to watch for approval / request-changes / proceed-on-approve.
+  signals — Approve or Request changes — then wake the agent to triage comments
+  (and merge only when GHA Addi merge-on-approve is not enabled). Use when
+  opening PRs that await human review, or when the user asks to watch for
+  approval / request-changes / proceed-on-approve.
 ---
 
 # PR review watch (Approve + Request changes)
@@ -14,8 +15,21 @@ so Approve **or** Request changes wakes the agent without a chat nudge.
 
 | Signal | Wake | After wake |
 | ------ | ---- | ---------- |
-| **Approve** | Once | Triage comments → merge when green |
-| **Request changes** | Once per new human review id | Fix / reply / push — **do not merge**; keep watching for Approve or another Request changes |
+| **Approve** | Once | Triage comments; merge only if GHA merge-on-approve is **not** enabled |
+| **Request changes** | Once per new human review id | Fix / reply / push — **do not merge**; keep watching |
+
+## Merge authority (gold standard)
+
+When the repo has **Addi merge on Approve** enabled
+(`vars.ADDI_MERGE_ON_APPROVE=true` — see
+`team-setup/docs/addi-pr-automation-standard.md`):
+
+- **GHA merges** on Approve (as Addi). Do **not** `gh pr merge` from this watch.
+- This watch still arms for **Request changes**, **comment triage**, and
+  conflict follow-up the agent must resolve before the next Approve.
+
+When GHA is **not** enabled for the repo, keep the legacy wake → triage →
+merge path below.
 
 ## Hard rules
 
@@ -27,11 +41,34 @@ so Approve **or** Request changes wakes the agent without a chat nudge.
 3. Read the wake JSON `signal` field: `"approved"` or `"changes_requested"`.
 4. Prefer human (non-bot) reviews. The script uses `reviewDecision` when set,
    else non-bot `APPROVED` / `CHANGES_REQUESTED` reviews.
-5. **Never merge on Approve alone while unresolved, unaddressed review
-   comments remain.** Approve means “proceed with the merge workflow,” which
-   includes comment hygiene.
-6. **Never merge on `changes_requested`.** Fix the feedback, leave the PR open,
-   and keep the watcher armed for the next human signal.
+5. **Never merge on `changes_requested`.** Fix the feedback and keep watching.
+6. **Never merge on Approve alone while unresolved, unaddressed review
+   comments remain** (human or bot).
+7. **Drain wakes even when chat notify is silent** — see Wake delivery below.
+
+## Wake delivery (chat notify is best-effort)
+
+`notify_on_output` often does **not** start a new agent turn after the turn
+that armed the watcher has ended. The sentinel still prints to the watcher
+terminal:
+
+```text
+AGENT_LOOP_WAKE_pr_approve {"target":"Owner/repo#N","signal":"approved",...}
+```
+
+**Agent duties while a watcher is armed:**
+
+- Before ending a turn: skim armed watcher terminal output (Cursor terminals
+  folder / the background shell) for unconsumed `AGENT_LOOP_WAKE_pr_approve`
+  lines and process each **now**.
+- When the user says they approved, “check watchers”, “process wakes”, or
+  similar: that is a proceed nudge — read watcher terminals **and**
+  `gh pr view` / `reviewDecision`, then drain any fired or missed wakes.
+- Do not claim “no activity” without checking the watcher terminal; silent
+  chat ≠ idle watcher.
+
+**Human mitigations:** after Approve, ping the agent (“process watcher wakes”)
+if nothing happens within a minute.
 
 ## Launch template
 
@@ -58,13 +95,19 @@ Cursor agent loop: background the command with
 4. Reply on each thread with the fix SHA; `resolveReviewThread` when done.
 5. Wait for CI green after pushes.
 6. **Do not merge.** Report what you fixed and that the PR awaits re-review.
-7. Leave the watcher running (it already keeps the target until Approve).
+7. Leave the watcher running (it keeps the target until Approve).
 
 ## On wake — `signal: approved`
 
 1. `eval "$(bash ~/.config/<rosetta|comita>/github-app-activate.sh)"` when present.
 2. `gh pr view <n> -R <owner/repo> --json state,reviewDecision,statusCheckRollup,mergeable`.
-3. **Review-comment cycle (before merge):**
+3. If `mergeable` is `CONFLICTING` (or merge fails on conflicts): update the PR
+   branch onto its base (merge `origin/<base>` into the head, or rebase when
+   appropriate), resolve conflicts, commit with DCO (`-s`), push (use
+   force-with-lease only after rebase on a topic branch), wait for CI green
+   again. Prefer merge-into-branch when force-push is blocked. Stacked PRs:
+   fix the **bottom** PR first; use **merge commits** (never squash a stack).
+4. **Review-comment cycle (before merge / before yielding to GHA):**
    1. Fetch inline threads:
       `gh api repos/{owner}/{repo}/pulls/{n}/comments`
    2. Fetch review bodies:
@@ -79,22 +122,29 @@ Cursor agent loop: background the command with
    6. For noise / false positives: reply briefly why no change, then resolve
       (or leave open only if the human must decide — and **do not merge**
       until they do).
-   7. If fixes were pushed, wait for CI green again before merge.
+   7. If fixes were pushed, wait for CI green again before merge (legacy path)
+      or before the next GHA merge attempt.
    8. Run this cycle **once** per wake; new bot comments on the fix commit
       → flag for human rather than looping.
-4. Merge when checks are green and comment triage is done (`gh pr merge` —
-   use the repo's normal merge method; stacked PRs need merge commits, never
-   squash-merge a stack).
-5. `git checkout <default-branch> && git pull --ff-only` in the affected
+5. **Merge authority:** if `vars.ADDI_MERGE_ON_APPROVE=true` for the repo,
+   **stop after triage** — do not `gh pr merge`; GHA merges as Addi. Otherwise
+   merge when checks are green and triage is done (`gh pr merge` — stacked PRs
+   need merge commits, never squash-merge a stack).
+6. After a successful merge (agent or GHA):
+   `git checkout <default-branch> && git pull --ff-only` in the affected
    local clone (`main` or `build-env/dev` as appropriate).
-6. Brief report: merged URL + what comments were addressed or waived.
+7. Brief report: merge owner (GHA vs agent) + URL + comments addressed/waived.
 
 ## Anti-patterns
 
-- Blocking the chat with a foreground `sleep`/poll loop waiting for review.
-- Treating chat "LGTM" / "approved" / paste-of-feedback as the signal when a
-  GitHub review exists on the PR.
+- Blocking the chat with a foreground `sleep`/poll loop waiting for Approve.
+- Treating chat "LGTM" / "approved" as the proceed signal when an Addi PR exists.
 - Redirecting watcher stdout to a file without `tee` (breaks wake notifications).
-- Merging on Approve without reading review comments / threads.
-- Merging (or closing) after Request changes without addressing the review.
+- Merging from the agent when GHA Addi merge-on-approve is enabled for the repo.
+- Merging on `changes_requested`.
+- Merging immediately on Approve without reading review comments / threads.
 - Resolving threads without a reply when the human asked for a change.
+- Ending a turn while wakes sit unprocessed in the watcher terminal because
+  chat notify did not fire.
+- Stopping after Approve when `mergeable=CONFLICTING` — resolve tip conflicts
+  so GHA (or legacy merge) can proceed.
