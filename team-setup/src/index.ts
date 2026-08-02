@@ -62,8 +62,44 @@ const listTracks = (): string[] => {
     .map(f => f.replace('.json', ''));
 };
 
-const resolveBaseDir = (baseDir: string): string => {
-  return baseDir.replace(/^~/, process.env.HOME || '~');
+const expandHome = (dir: string): string => {
+  return dir.replace(/^~/, process.env.HOME || '~');
+};
+
+/**
+ * A provisioned workspace is identifiable by the engine checkout at its root.
+ * Anything else (a bare `~/projects`, a repo inside the workspace) is not a
+ * workspace root and must not be written to.
+ */
+const isWorkspaceRoot = (dir: string): boolean => {
+  return existsSync(path.join(dir, 'rosetta_dev-scripts'));
+};
+
+const detectWorkspaceRoot = (start: string): string | undefined => {
+  let dir = path.resolve(start);
+  for (;;) {
+    if (isWorkspaceRoot(dir)) return dir;
+    const parent = path.dirname(dir);
+    if (parent === dir) return undefined;
+    dir = parent;
+  }
+};
+
+/**
+ * Resolution order: `--base-dir`, then the workspace enclosing the cwd, then
+ * `shared.baseDir`.
+ *
+ * The cwd step exists because `shared.baseDir` is a single hard-coded path,
+ * and every checkout of this repo carries the same one. Without it, running
+ * `update-config` from a second workspace silently rewrites the first — which
+ * is how the two workspaces drifted apart while both appeared to be synced.
+ */
+const resolveBaseDir = (
+  explicit: string | undefined,
+  fallback: string
+): string => {
+  if (explicit) return expandHome(explicit);
+  return detectWorkspaceRoot(process.cwd()) ?? expandHome(fallback);
 };
 
 const resolveSharedWithPersonalChronicle = (
@@ -136,7 +172,7 @@ yargs(hideBin(process.argv))
     argv => {
       const shared = loadSharedConfig();
       const track = loadTrackConfig(argv.track);
-      const baseDir = resolveBaseDir(argv['base-dir'] || shared.baseDir);
+      const baseDir = resolveBaseDir(argv['base-dir'], shared.baseDir);
 
       console.log(
         chalk.bold.blue(
@@ -217,11 +253,12 @@ yargs(hideBin(process.argv))
     argv => {
       const shared = loadSharedConfig();
       const track = loadTrackConfig(argv.track);
-      const baseDir = resolveBaseDir(argv['base-dir'] || shared.baseDir);
+      const baseDir = resolveBaseDir(argv['base-dir'], shared.baseDir);
 
       console.log(
-        chalk.bold.blue(`\nUpdating config for track: ${track.track}\n`)
+        chalk.bold.blue(`\nUpdating config for track: ${track.track}`)
       );
+      console.log(chalk.gray(`Workspace: ${baseDir}\n`));
 
       layDownRootConfig(baseDir);
       layDownProjectConfig(baseDir, track.projects);
@@ -248,7 +285,7 @@ yargs(hideBin(process.argv))
     argv => {
       const shared = loadSharedConfig();
       const track = loadTrackConfig(argv.track);
-      const baseDir = resolveBaseDir(argv['base-dir'] || shared.baseDir);
+      const baseDir = resolveBaseDir(argv['base-dir'], shared.baseDir);
       verifySetup(baseDir, track.projects, shared);
     }
   )

@@ -28,7 +28,7 @@ Exit when every target has closed (after a `closed` wake).
 ## Hard rules
 
 1. After taking ownership of an issue (or when the user asks to watch), start
-   `scripts/watch-issue-resolve.sh` in the **background** with agent
+   `.cursor/skills/issue-resolve-watch/scripts/watch-issue-resolve.sh` in the **background** with agent
    `notify_on_output` on `^AGENT_LOOP_WAKE_issue_resolve`.
 2. Do **not** redirect watcher stdout away from the monitored terminal.
 3. On wake: activate the workspace GitHub App, read the issue, **make

@@ -4,7 +4,7 @@ When you open a pull request that needs a human proceed signal (especially
 Addi / bot-authored PRs), or the user asks you to watch for approval:
 
 - Follow the **`pr-approve-watch`** skill.
-- Arm `scripts/watch-pr-approve.sh` in the background with agent wake on
+- Arm `.cursor/skills/pr-approve-watch/scripts/watch-pr-approve.sh` in the background with agent wake on
   `AGENT_LOOP_WAKE_pr_approve` (fires on Approve **or** Request changes).
 - On wake: read `signal`. On **Request changes**: fix/push/reply — **never
   merge**. On **Approve**: triage review comments; if the repo has **Addi

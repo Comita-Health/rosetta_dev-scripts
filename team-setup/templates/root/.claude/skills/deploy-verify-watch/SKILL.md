@@ -33,7 +33,7 @@ When unsure, arm anyway and/or add the `verify-live` label.
 ## Hard rules
 
 1. After opening or pushing to a live-verify PR (or when the user asks), start
-   `scripts/watch-deploy-verify.sh` in the **background** with agent
+   `.claude/skills/deploy-verify-watch/scripts/watch-deploy-verify.sh` in the **background** with agent
    `notify_on_output` on `^AGENT_LOOP_WAKE_deploy_verify`.
 2. Do **not** redirect watcher stdout away from the monitored terminal.
 3. Prefer `--dispatch-on-arm` (or default `--auto-dispatch`) so the **current**

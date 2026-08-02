@@ -34,7 +34,7 @@ merge path below.
 ## Hard rules
 
 1. After `gh pr create` (or when the user asks to watch), start
-   `scripts/watch-pr-approve.sh` in the **background** with agent
+   `.claude/skills/pr-approve-watch/scripts/watch-pr-approve.sh` in the **background** with agent
    `notify_on_output` on `^AGENT_LOOP_WAKE_pr_approve`.
 2. Do **not** redirect the watcher stdout away from the monitored terminal
    (or the wake sentinel will be swallowed).

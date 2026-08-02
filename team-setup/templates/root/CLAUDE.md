@@ -197,7 +197,8 @@ See `.claude/rules/addi-authorship.md`. Same rule for `gh issue create`.
 bug even with attribution off), strip it with `gh pr edit` before the PR is
 ready. Operators: turn off Cursor Settings → Attribution (commits + PRs) and
 keep `attribution.attributePRsToAgent: false` in `~/.cursor/cli-config.json`
-and workspace `.cursor/cli.json` (see rule `no-tool-attribution`).
+only (project `.cursor/cli.json` may contain `permissions` only — see rule
+`no-tool-attribution`).
 
 **Immediately after pushing, return to an up-to-date default branch** — do not linger on the
 feature branch:
