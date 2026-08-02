@@ -41,19 +41,25 @@ workflow file changes — usually already covered by contents).
 
 `.github/workflows/addi-merge-on-approve.yml`
 
-- Triggers: `pull_request_review` (`submitted`), plus `workflow_dispatch`
-  for dry runs.
-- Filters: review state `approved`; head repo is not a fork; PR author login
-  is Addi (`app/rosetta-s-addi-m` from `gh`, or `rosetta-s-addi-m[bot]`),
-  unless `ADDI_MERGE_ANY_AUTHOR=true`.
+- Triggers:
+  - `pull_request_review` (`submitted`) — preferred, when GitHub delivers it
+  - `schedule` every 5 minutes — **reliability path** (see troubleshooting)
+  - `workflow_dispatch` with `pr_number` — manual / proof runs
+- Filters: review state `approved` (event) or `reviewDecision==APPROVED`
+  (poll); head repo is not a fork; PR author login is Addi
+  (`app/rosetta-s-addi-m` from `gh`, or `rosetta-s-addi-m[bot]`), unless
+  `ADDI_MERGE_ANY_AUTHOR=true`.
 - Auth: `actions/create-github-app-token@v3` → `GH_TOKEN`.
 - Gate: `reviewDecision==APPROVED`, checks green (`gh pr checks --watch`),
   `mergeable==MERGEABLE`.
 - Action: `gh pr merge --squash --delete-branch` (matches recent
   `rosetta_dev-scripts` practice). Stacked PRs that require merge commits
   should stay on the local watch path or set merge method later.
+- Conflict comments are idempotent (marker `## Addi merge-on-approve`).
 
 ### Troubleshooting: workflow never runs on Approve
+
+**A — Invalid YAML (startup failure)**
 
 If Actions shows the workflow **name as the file path**, `workflow_dispatch`
 returns HTTP 422 (“does not have workflow_dispatch trigger”), and every push
@@ -62,6 +68,17 @@ parse. A common cause is a bash heredoc body at column 0 inside `run: |` —
 that terminates the YAML block scalar early. Keep multiline comment text in
 an `env:` literal (as the workflow does for `CONFLICT_BODY`), or indent every
 heredoc line to the block’s content indent.
+
+**B — `pull_request_review` delivers no runs**
+
+Observed on `rosetta_dev-scripts` (2026-08-02): human Approve on Addi PRs
+#66/#67 created **zero** `pull_request_review` workflow runs, even after the
+YAML parse fix and dismiss/re-approve via API. `workflow_dispatch` worked.
+Until that is explained (GitHub delivery vs repo/org filter), the **5-minute
+`schedule` poll** is the automatic path: it lists open APPROVED Addi PRs and
+merges or posts the conflict comment. Prefer fixing event delivery later
+(App webhook → `workflow_dispatch`, or GitHub support) over shortening the
+cron further.
 
 ## Operator checklist
 

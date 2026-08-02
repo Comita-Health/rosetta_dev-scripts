@@ -12,22 +12,19 @@ on:
         description: Pull request number to attempt merge (as Addi)
         required: true
         type: string
+  # Reliability path: pull_request_review has been observed not to start runs
+  # in this repo (Approve creates no workflow_run). Poll while investigating.
+  schedule:
+    - cron: '*/5 * * * *'
 
 permissions:
   contents: read
 
 jobs:
   merge:
-    if: >-
-      ${{
-        vars.ADDI_MERGE_ON_APPROVE == 'true'
-        && (
-          (github.event_name == 'pull_request_review'
-            && github.event.review.state == 'approved'
-            && github.event.pull_request.head.repo.full_name == github.repository)
-          || github.event_name == 'workflow_dispatch'
-        )
-      }}
+    # Opt-in only. Keep this if: simple — complex event filters previously made
+    # it hard to tell whether pull_request_review was delivering at all.
+    if: ${{ vars.ADDI_MERGE_ON_APPROVE == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - name: Require Addi App credentials
@@ -47,23 +44,65 @@ jobs:
           app-id: ${{ vars.ADDI_APP_ID }}
           private-key: ${{ secrets.ADDI_APP_PRIVATE_KEY }}
 
-      - name: Resolve PR number
-        id: pr
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          REVIEW_PR: ${{ github.event.pull_request.number }}
-          DISPATCH_PR: ${{ inputs.pr_number }}
-        run: |
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            echo "number=$DISPATCH_PR" >> "$GITHUB_OUTPUT"
-          else
-            echo "number=$REVIEW_PR" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Verify author + gates, then merge as Addi
+      - name: Resolve PR numbers
+        id: prs
         env:
           GH_TOKEN: ${{ steps.addi.outputs.token }}
-          PR: ${{ steps.pr.outputs.number }}
+          EVENT_NAME: ${{ github.event_name }}
+          REVIEW_PR: ${{ github.event.pull_request.number }}
+          REVIEW_STATE: ${{ github.event.review.state }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          DISPATCH_PR: ${{ inputs.pr_number }}
+          REPO: ${{ github.repository }}
+          ALLOW_ANY_AUTHOR: ${{ vars.ADDI_MERGE_ANY_AUTHOR }}
+        run: |
+          set -euo pipefail
+          echo "event_name=$EVENT_NAME review_state=${REVIEW_STATE:-}"
+
+          numbers=""
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            numbers="$DISPATCH_PR"
+          elif [ "$EVENT_NAME" = "pull_request_review" ]; then
+            if [ "${REVIEW_STATE:-}" != "approved" ]; then
+              echo "Review state is '${REVIEW_STATE:-}' (want approved); nothing to do."
+              echo "numbers=" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            if [ "${HEAD_REPO:-}" != "$REPO" ]; then
+              echo "Fork PR (${HEAD_REPO:-unknown}); skip."
+              echo "numbers=" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            numbers="$REVIEW_PR"
+          else
+            # schedule (and any future poll triggers)
+            jq_filter='.[]
+              | select(.isDraft == false)
+              | select(.reviewDecision == "APPROVED")
+              | select(
+                  ($any == "true")
+                  or (.author.login == "app/rosetta-s-addi-m")
+                  or (.author.login == "rosetta-s-addi-m")
+                  or (.author.login == "rosetta-s-addi-m[bot]")
+                  or (.author.login == "addi-m[bot]")
+                )
+              | .number'
+            numbers=$(
+              gh pr list -R "$REPO" --state open --limit 50 \
+                --json number,author,reviewDecision,isDraft \
+                | jq -r --arg any "${ALLOW_ANY_AUTHOR:-}" "$jq_filter" \
+                | tr '\n' ' ' | sed 's/[[:space:]]*$//'
+            )
+          fi
+
+          echo "numbers=${numbers}"
+          echo "numbers=${numbers}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify author + gates, then merge as Addi
+        if: ${{ steps.prs.outputs.numbers != '' }}
+        env:
+          GH_TOKEN: ${{ steps.addi.outputs.token }}
+          PRS: ${{ steps.prs.outputs.numbers }}
           REPO: ${{ github.repository }}
           ALLOW_ANY_AUTHOR: ${{ vars.ADDI_MERGE_ANY_AUTHOR }}
           # Keep comment text in env — unindented heredoc bodies break YAML
@@ -81,62 +120,87 @@ jobs:
         run: |
           set -euo pipefail
 
-          meta=$(gh pr view "$PR" -R "$REPO" --json \
-            author,state,isDraft,reviewDecision,mergeable,mergeStateStatus,url)
-          echo "$meta" | jq .
+          process_pr() {
+            local PR="$1"
+            echo "::group::PR #$PR"
+            meta=$(gh pr view "$PR" -R "$REPO" --json \
+              author,state,isDraft,reviewDecision,mergeable,mergeStateStatus,url)
+            echo "$meta" | jq .
 
-          author=$(echo "$meta" | jq -r '.author.login // empty')
-          state=$(echo "$meta" | jq -r '.state')
-          draft=$(echo "$meta" | jq -r '.isDraft')
-          decision=$(echo "$meta" | jq -r '.reviewDecision // empty')
-          mergeable=$(echo "$meta" | jq -r '.mergeable // empty')
-          url=$(echo "$meta" | jq -r '.url')
+            author=$(echo "$meta" | jq -r '.author.login // empty')
+            state=$(echo "$meta" | jq -r '.state')
+            draft=$(echo "$meta" | jq -r '.isDraft')
+            decision=$(echo "$meta" | jq -r '.reviewDecision // empty')
+            mergeable=$(echo "$meta" | jq -r '.mergeable // empty')
+            url=$(echo "$meta" | jq -r '.url')
 
-          if [ "$state" != "OPEN" ]; then
-            echo "PR not OPEN ($state); nothing to do."
-            exit 0
-          fi
-          if [ "$draft" = "true" ]; then
-            echo "Draft PR; refusing merge."
-            exit 0
-          fi
+            if [ "$state" != "OPEN" ]; then
+              echo "PR not OPEN ($state); nothing to do."
+              echo "::endgroup::"
+              return 0
+            fi
+            if [ "$draft" = "true" ]; then
+              echo "Draft PR; refusing merge."
+              echo "::endgroup::"
+              return 0
+            fi
 
-          # gh --json author.login is often "app/rosetta-s-addi-m"; REST may
-          # use "rosetta-s-addi-m[bot]". Accept both shapes.
-          if [ "${ALLOW_ANY_AUTHOR:-}" != "true" ]; then
-            case "$author" in
-              app/rosetta-s-addi-m|rosetta-s-addi-m|rosetta-s-addi-m\[bot\]|addi-m\[bot\]) ;;
-              *)
-                echo "Author '$author' is not Addi; skip (set ADDI_MERGE_ANY_AUTHOR=true to override)."
-                exit 0
-                ;;
-            esac
-          fi
+            # gh --json author.login is often "app/rosetta-s-addi-m"; REST may
+            # use "rosetta-s-addi-m[bot]". Accept both shapes.
+            if [ "${ALLOW_ANY_AUTHOR:-}" != "true" ]; then
+              case "$author" in
+                app/rosetta-s-addi-m|rosetta-s-addi-m|rosetta-s-addi-m\[bot\]|addi-m\[bot\]) ;;
+                *)
+                  echo "Author '$author' is not Addi; skip (set ADDI_MERGE_ANY_AUTHOR=true to override)."
+                  echo "::endgroup::"
+                  return 0
+                  ;;
+              esac
+            fi
 
-          if [ "$decision" != "APPROVED" ]; then
-            echo "reviewDecision is '$decision' (want APPROVED); skip."
-            exit 0
-          fi
+            if [ "$decision" != "APPROVED" ]; then
+              echo "reviewDecision is '$decision' (want APPROVED); skip."
+              echo "::endgroup::"
+              return 0
+            fi
 
-          if [ "$mergeable" = "CONFLICTING" ]; then
-            gh pr comment "$PR" -R "$REPO" --body "$CONFLICT_BODY"
-            echo "Commented on conflicting PR; exiting 0."
-            exit 0
-          fi
+            if [ "$mergeable" = "CONFLICTING" ]; then
+              if gh api "repos/$REPO/issues/$PR/comments" --jq '.[].body' \
+                | grep -Fq '## Addi merge-on-approve'; then
+                echo "Conflict comment already present; skip."
+                echo "::endgroup::"
+                return 0
+              fi
+              gh pr comment "$PR" -R "$REPO" --body "$CONFLICT_BODY"
+              echo "Commented on conflicting PR; exiting 0."
+              echo "::endgroup::"
+              return 0
+            fi
 
-          echo "Waiting for checks…"
-          # Fail the job if checks fail; --watch blocks until terminal.
-          if ! gh pr checks "$PR" -R "$REPO" --watch --fail-fast; then
-            echo "Checks failed; not merging $url"
-            exit 1
-          fi
+            echo "Waiting for checks…"
+            if ! gh pr checks "$PR" -R "$REPO" --watch --fail-fast; then
+              echo "Checks failed; not merging $url"
+              echo "::endgroup::"
+              return 1
+            fi
 
-          # Re-read mergeability after checks.
-          mergeable=$(gh pr view "$PR" -R "$REPO" --json mergeable --jq '.mergeable // empty')
-          if [ "$mergeable" != "MERGEABLE" ]; then
-            echo "After checks, mergeable=$mergeable; not merging."
-            exit 1
-          fi
+            mergeable=$(gh pr view "$PR" -R "$REPO" --json mergeable --jq '.mergeable // empty')
+            if [ "$mergeable" != "MERGEABLE" ]; then
+              echo "After checks, mergeable=$mergeable; not merging."
+              echo "::endgroup::"
+              return 1
+            fi
 
-          gh pr merge "$PR" -R "$REPO" --squash --delete-branch
-          echo "Merged as Addi: $url"
+            gh pr merge "$PR" -R "$REPO" --squash --delete-branch
+            echo "Merged as Addi: $url"
+            echo "::endgroup::"
+            return 0
+          }
+
+          fail=0
+          for PR in $PRS; do
+            if ! process_pr "$PR"; then
+              fail=1
+            fi
+          done
+          exit "$fail"
