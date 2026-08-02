@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **team-setup:** gold-standard **Addi PR automation** —
+  `docs/addi-pr-automation-standard.md` + hardened
+  `addi-merge-on-approve.yml` (repository_dispatch / workflow_run / schedule)
+  + `addi-merge-webhook` bridge; `pr-approve-watch` demoted to triage when GHA
+  is enabled. Comita and Rosetta each use their own Addi App Client ID + PEM
+  under the same Action variable names.
 - **team-setup:** Addi merge-on-approve uses `client-id` (`ADDI_CLIENT_ID`) instead of deprecated `app-id`.
 - **team-setup:** fix Addi merge-on-approve self-deadlock — do not `gh pr checks --watch` our own pending check on `pull_request_review`.
 - **team-setup:** prove Addi merge-on-approve clean path v2 (Approve → bot squash-merge via GHA schedule).

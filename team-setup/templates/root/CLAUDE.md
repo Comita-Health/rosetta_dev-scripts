@@ -45,8 +45,11 @@ When kicking off or watching `sdlc-workflow` (`run` / shadow waves):
 
 When you open a PR that needs a human proceed (especially Addi / bot-authored
 PRs): follow **`pr-approve-watch`** — arm the background Approve watcher, wake
-on `AGENT_LOOP_WAKE_pr_approve`, then merge + pull `main`. Do **not** treat chat
-"approved" as the proceed signal. Slash: `/watch-pr-approve`.
+on `AGENT_LOOP_WAKE_pr_approve`, triage review comments. If the repo enables
+**Addi merge on Approve** (GHA), do **not** merge from the agent — pull the
+default branch after GHA merges. Otherwise merge as Addi, then pull. Do **not**
+treat chat "approved" as the proceed signal. Slash: `/watch-pr-approve`. See
+`rosetta_dev-scripts/team-setup/docs/addi-pr-automation-standard.md`.
 
 ## Package Manager
 

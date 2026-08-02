@@ -1,15 +1,17 @@
-# Spike: Addi merge-on-approve via GitHub Actions
+# Spike notes: Addi merge-on-approve via GitHub Actions
 
-**Status:** spike (opt-in, single-repo pilot in `rosetta_dev-scripts`)  
-**Decision:** Cursor Automations **cannot** keep the Addi M. identity for
-GitHub writes. Official identity is `cursor` (comments/reviews/team PRs) or
-the creating user’s personal OAuth (private automations). There is no
+**Status:** historical spike notes — **canonical spec is**
+[`addi-pr-automation-standard.md`](./addi-pr-automation-standard.md).
+
+**Decision (still valid):** Cursor Automations **cannot** keep the Addi M.
+identity for GitHub writes. Official identity is `cursor` (comments/reviews/team
+PRs) or the creating user’s personal OAuth (private automations). There is no
 supported “run as GitHub App X” switch. Therefore the unattended Approve →
-merge path that preserves **Addi M. (`rosetta-s-addi-m[bot]`)** is GHA +
-installation token, not Cursor Automations.
+merge path that preserves Addi (`rosetta-s-addi-m[bot]` / Comita
+`addi-m[bot]`) is GHA + installation token, not Cursor Automations.
 
-Local `pr-approve-watch` remains useful for IDE sessions; this spike replaces
-the unreliable `notify_on_output` wake for merge execution.
+Local `pr-approve-watch` is demoted to Request-changes + comment triage when
+GHA merge-on-approve is enabled (see gold standard).
 
 ## Goals
 
