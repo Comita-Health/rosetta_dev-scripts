@@ -159,7 +159,10 @@ print(json.dumps({
   "prompt": (
     f"PR approve proceed signal fired for {t}. "
     "Activate the workspace GitHub App (Addi), verify APPROVED + green checks, "
-    "merge the PR, confirm merge, pull main locally in that repo, and report. "
+    "then triage all PR review comments and unresolved reviewThreads "
+    "(fix / reply with commit SHA / resolveReviewThread; do not merge with "
+    "unaddressed actionable comments). Re-check CI if you pushed fixes, then "
+    "merge, pull the repo default branch locally, and report. "
     "Keep watching any remaining unapproved PRs from this same watch set."
   ),
   "repo": repo,
