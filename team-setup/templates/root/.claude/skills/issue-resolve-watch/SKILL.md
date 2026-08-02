@@ -37,11 +37,35 @@ Exit when every target has closed (after a `closed` wake).
 4. Use `--kickoff` when the agent should start work immediately after arming.
 5. Recreate human-authored issues as Addi (close + create) when the user asks
    to “re-open as yourself,” same pattern as PR ownership.
+6. **Drain wakes even when chat notify is silent** — see Wake delivery below.
+
+## Wake delivery (chat notify is best-effort)
+
+`notify_on_output` often does **not** start a new agent turn after the turn
+that armed the watcher has ended. The sentinel still prints to the watcher
+terminal:
+
+```text
+AGENT_LOOP_WAKE_issue_resolve {"target":"Owner/repo#N","reason":"...",...}
+```
+
+**Agent duties while a watcher is armed:**
+
+- Before ending a turn: skim armed watcher terminal output for unconsumed
+  `AGENT_LOOP_WAKE_issue_resolve` lines and process each **now**.
+- When the user mentions issue activity, “check watchers”, “process wakes”,
+  or similar: read watcher terminals **and** the issue timeline, then drain
+  any fired or missed wakes.
+- Do not claim “no activity” without checking the watcher terminal; silent
+  chat ≠ idle watcher.
+
+**Human mitigations:** ping the agent (“process watcher wakes”) if a comment
+or linked PR should have triggered work and nothing happens.
 
 ## Launch template
 
 ```bash
-bash .claude/skills/issue-resolve-watch/scripts/watch-issue-resolve.sh \
+bash .cursor/skills/issue-resolve-watch/scripts/watch-issue-resolve.sh \
   --interval 30 \
   --activate ~/.config/comita/github-app-activate.sh \
   --kickoff \
@@ -69,3 +93,5 @@ Optional activate: `~/.config/rosetta/github-app-activate.sh` (Rosetta).
 - Blocking the chat with a foreground poll loop.
 - Swallowing wake sentinels by redirecting stdout.
 - Leaving a kickoff wake unworked.
+- Ending a turn while wakes sit unprocessed in the watcher terminal because
+  chat notify did not fire.

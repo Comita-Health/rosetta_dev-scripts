@@ -159,10 +159,13 @@ print(json.dumps({
   "prompt": (
     f"PR approve proceed signal fired for {t}. "
     "Activate the workspace GitHub App (Addi), verify APPROVED + green checks, "
-    "then triage all PR review comments and unresolved reviewThreads "
-    "(fix / reply with commit SHA / resolveReviewThread; do not merge with "
-    "unaddressed actionable comments). Re-check CI if you pushed fixes, then "
-    "merge, pull the repo default branch locally, and report. "
+    "resolve mergeable=CONFLICTING if needed (merge/rebase onto base, push, "
+    "re-check CI), then triage all PR review comments and unresolved "
+    "reviewThreads (fix / reply with commit SHA / resolveReviewThread; do not "
+    "merge with unaddressed actionable comments). Re-check CI if you pushed "
+    "fixes, then merge, pull the repo default branch locally, and report. "
+    "Chat notify is best-effort — drain this wake from the watcher terminal "
+    "even if the chat stayed quiet. "
     "Keep watching any remaining unapproved PRs from this same watch set."
   ),
   "repo": repo,
@@ -174,6 +177,7 @@ PY
 )
         printf 'AGENT_LOOP_WAKE_pr_approve %s\n' "$payload"
         echo "watch-pr-approve: APPROVED → $t (remaining=$REMAINING)" >&2
+        echo "watch-pr-approve: NOTE chat notify is best-effort; agent must drain AGENT_LOOP_WAKE_pr_approve from this terminal if the chat stays quiet." >&2
       fi
     fi
     i=$((i + 1))
