@@ -27,4 +27,34 @@ describe('HeartbeatWatchService', () => {
     expect(monitor).toContain('"step":"implementation"');
     expect(readFileSync(`${monitorPath}.count`, 'utf8')).toBe('1');
   });
+
+  it('tolerates a missing heartbeat file and a truncated/rewritten log', async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'hb-watch-'));
+    const heartbeatPath = path.join(dir, 'heartbeat.jsonl');
+    const monitorPath = path.join(dir, 'monitor.log');
+
+    const watch = new HeartbeatWatchService();
+    watch.start({ heartbeatPath, monitorPath, pollMs: 40 });
+    await new Promise(r => setTimeout(r, 90));
+
+    writeFileSync(heartbeatPath, '{"step":"a"}\n{"step":"b"}\n');
+    await new Promise(r => setTimeout(r, 90));
+
+    // Truncate (size < offset) then rewrite
+    writeFileSync(heartbeatPath, '{"step":"c"}\n');
+    await new Promise(r => setTimeout(r, 90));
+    watch.stop();
+
+    const monitor = readFileSync(monitorPath, 'utf8');
+    expect(monitor).toContain('"step":"a"');
+    expect(monitor).toContain('"step":"c"');
+  });
+
+  it('note appends operator lines without requiring start', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'hb-watch-'));
+    const monitorPath = path.join(dir, 'nested', 'monitor.log');
+    const watch = new HeartbeatWatchService();
+    watch.note(monitorPath, 'hello');
+    expect(readFileSync(monitorPath, 'utf8')).toContain('hello');
+  });
 });

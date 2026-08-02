@@ -33,4 +33,15 @@ describe('buildSuperviseChildArgv', () => {
       /no "run" subcommand/
     );
   });
+
+  it('strips --detach=true style flags', () => {
+    const out = buildSuperviseChildArgv([
+      'node',
+      'src/index.ts',
+      'run',
+      '--detach=true'
+    ]);
+    expect(out.some(a => a.startsWith('--detach'))).toBe(false);
+    expect(out).toContain('--supervise');
+  });
 });

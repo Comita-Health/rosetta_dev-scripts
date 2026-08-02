@@ -57,6 +57,7 @@ const state = (merged: Record<string, string | undefined>): RunState =>
 describe('run-completion', () => {
   it('allTasksMerged requires every spec task to have a mergedSha', () => {
     expect(allTasksMerged(spec(['T-01', 'T-02']), null)).toBe(false);
+    expect(allTasksMerged(spec([]), state({}))).toBe(false);
     expect(
       allTasksMerged(spec(['T-01', 'T-02']), state({ 'T-01': 'aaa' }))
     ).toBe(false);
@@ -66,6 +67,7 @@ describe('run-completion', () => {
         state({ 'T-01': 'aaa', 'T-02': 'bbb' })
       )
     ).toBe(true);
+    expect(allTasksMerged(spec(['T-01']), state({ 'T-01': '' }))).toBe(false);
   });
 
   it('hasUnmergedCompletedTasks detects shadow human-gate state', () => {

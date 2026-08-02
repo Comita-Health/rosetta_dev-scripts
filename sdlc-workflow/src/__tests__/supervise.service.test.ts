@@ -196,4 +196,89 @@ describe('SuperviseService', () => {
     expect(result.detail).toBe('shadow-human-gate');
     expect(runTask).toHaveBeenCalledTimes(1);
   });
+
+  it('runs a single wave when supervise is false', async () => {
+    runTask.mockResolvedValue(wave('executed'));
+    load.mockReturnValue({
+      taskResults: {
+        'T-01': {
+          taskId: 'T-01',
+          status: 'completed',
+          mergedSha: 'a',
+          recordedAt: 't'
+        },
+        'T-02': {
+          taskId: 'T-02',
+          status: 'completed',
+          mergedSha: 'b',
+          recordedAt: 't'
+        }
+      }
+    } as unknown as RunState);
+
+    const result = await supervise.run(input({ supervise: false }));
+    expect(result.kind).toBe('completed');
+    expect(result.waves).toBe(1);
+    expect(runTask).toHaveBeenCalledTimes(1);
+  });
+
+  it('maps blocked / failed single-wave outcomes to failed', async () => {
+    runTask.mockResolvedValueOnce(wave('blocked'));
+    expect((await supervise.run(input({ supervise: false }))).kind).toBe(
+      'failed'
+    );
+
+    runTask.mockResolvedValueOnce(wave('executed', 'failed'));
+    expect((await supervise.run(input({ supervise: false }))).kind).toBe(
+      'failed'
+    );
+  });
+
+  it('stops the loop when a wave is blocked or a task fails', async () => {
+    runTask.mockResolvedValueOnce(wave('blocked'));
+    const blocked = await supervise.run(input());
+    expect(blocked.kind).toBe('failed');
+    expect(blocked.detail).toBe('blocked');
+
+    runTask.mockResolvedValueOnce(wave('executed', 'failed'));
+    const failed = await supervise.run(input());
+    expect(failed.kind).toBe('failed');
+    expect(failed.detail).toBe('task-failed');
+  });
+
+  it('stops when no ready task remains and work is incomplete', async () => {
+    runTask.mockResolvedValue(wave('no-ready-task'));
+    load.mockReturnValue({ taskResults: {} } as unknown as RunState);
+
+    const result = await supervise.run(input());
+    expect(result.kind).toBe('stopped');
+    expect(result.detail).toBe('no-ready-task');
+  });
+
+  it('fails when max-waves is exhausted without full merge', async () => {
+    runTask.mockResolvedValue(wave('executed'));
+    load.mockReturnValue({
+      taskResults: {
+        'T-01': {
+          taskId: 'T-01',
+          status: 'completed',
+          mergedSha: 'a',
+          recordedAt: 't'
+        }
+      }
+    } as unknown as RunState);
+
+    const result = await supervise.run(input({ maxWaves: 2 }));
+    expect(result.kind).toBe('failed');
+    expect(result.detail).toBe('max-waves-2');
+    expect(result.waves).toBe(2);
+  });
+
+  it('maps incomplete single-wave success to stopped', async () => {
+    runTask.mockResolvedValue(wave('executed'));
+    load.mockReturnValue({ taskResults: {} } as unknown as RunState);
+
+    const result = await supervise.run(input({ supervise: false }));
+    expect(result.kind).toBe('stopped');
+  });
 });
