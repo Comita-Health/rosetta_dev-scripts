@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **team-setup:** Addi merge-on-approve uses GitHub **`merge-async`** for
+  native stacked PRs (`pull.stack`); plain `gh pr merge` is rejected on stacks.
+  Conflicts on a lower PR still require an agent resolve (GHA comments only).
 - **team-setup:** `pr-approve-watch` also wakes on human **Request changes**
   (`signal: changes_requested` in the wake JSON) — once per new non-bot review
   id — so feedback can stay on the PR; agent fixes without merging and keeps
@@ -13,9 +16,9 @@
 - **team-setup:** gold-standard **Addi PR automation** —
   `docs/addi-pr-automation-standard.md` + hardened
   `addi-merge-on-approve.yml` (repository_dispatch / workflow_run / schedule)
-  + `addi-merge-webhook` bridge; `pr-approve-watch` demoted to triage when GHA
-  is enabled. Comita and Rosetta each use their own Addi App Client ID + PEM
-  under the same Action variable names.
+  - `addi-merge-webhook` bridge; `pr-approve-watch` demoted to triage when GHA
+    is enabled. Comita and Rosetta each use their own Addi App Client ID + PEM
+    under the same Action variable names.
 - **team-setup:** add `addi-authorship` rule — agent PRs/issues must be created
   as the workspace GitHub App (Addi); verify `viewer.login` before create; never
   fall back to human `gh` on 403; recreate accidental human-authored PRs as Addi.

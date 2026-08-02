@@ -172,7 +172,7 @@ jobs:
             local PR="$1"
             echo "::group::PR #$PR"
             meta=$(gh pr view "$PR" -R "$REPO" --json \
-              author,state,isDraft,reviewDecision,mergeable,mergeStateStatus,baseRefName,url)
+              author,state,isDraft,reviewDecision,mergeable,mergeStateStatus,url)
             echo "$meta" | jq .
 
             author=$(echo "$meta" | jq -r '.author.login // empty')
@@ -180,10 +180,7 @@ jobs:
             draft=$(echo "$meta" | jq -r '.isDraft')
             decision=$(echo "$meta" | jq -r '.reviewDecision // empty')
             mergeable=$(echo "$meta" | jq -r '.mergeable // empty')
-            base_ref=$(echo "$meta" | jq -r '.baseRefName // empty')
             url=$(echo "$meta" | jq -r '.url')
-            default_ref=$(gh repo view "$REPO" --json defaultBranchRef \
-              --jq '.defaultBranchRef.name')
 
             if [ "$state" != "OPEN" ]; then
               echo "PR not OPEN ($state); nothing to do."
@@ -272,15 +269,55 @@ jobs:
               return 1
             fi
 
-            # Stacked PRs (base ≠ default branch) require merge commits.
-            # Default-branch PRs keep squash for a linear trunk.
-            if [ -n "$base_ref" ] && [ -n "$default_ref" ] \
-              && [ "$base_ref" != "$default_ref" ]; then
-              echo "Stacked PR (base=$base_ref ≠ $default_ref); merge commit."
-              gh pr merge "$PR" -R "$REPO" --merge --delete-branch
-            else
-              gh pr merge "$PR" -R "$REPO" --squash --delete-branch
+            # GitHub native stacks require PUT .../merge-async (sync gh pr merge
+            # fails). Merging a stacked tip lands the whole stack up to that PR
+            # onto the stack base. Unstacked default-branch PRs stay squash.
+            # Docs: https://docs.github.com/en/rest/pulls/pulls#merge-a-pull-request-asynchronously
+            stack_json=$(gh api "repos/$REPO/pulls/$PR" --jq '.stack // empty')
+            if [ -n "$stack_json" ] && [ "$stack_json" != "null" ]; then
+              echo "Stacked PR detected: $stack_json"
+              echo "Using merge-async (merge commits) for the stack."
+              resp=$(gh api --method PUT "repos/$REPO/pulls/$PR/merge-async" \
+                -f merge_method=merge \
+                -f merge_action=direct_merge)
+              echo "$resp" | jq .
+              status=$(echo "$resp" | jq -r '.status // empty')
+              uuid=$(echo "$resp" | jq -r '.details.uuid // empty')
+              if [ "$status" = "merged" ]; then
+                echo "Stack already merged as Addi: $url"
+                echo "::endgroup::"
+                return 0
+              fi
+              if [ "$status" != "pending" ] || [ -z "$uuid" ]; then
+                echo "merge-async did not enqueue (status=$status); not merging."
+                echo "::endgroup::"
+                return 1
+              fi
+              local deadline=$((SECONDS + 600))
+              while true; do
+                poll=$(gh api "repos/$REPO/pulls/$PR/merge-async/$uuid")
+                echo "$poll" | jq .
+                pstatus=$(echo "$poll" | jq -r '.status // empty')
+                if [ "$pstatus" = "merged" ]; then
+                  echo "Stack merged as Addi: $url"
+                  echo "::endgroup::"
+                  return 0
+                fi
+                if [ "$pstatus" = "failed" ] || [ "$pstatus" = "error" ]; then
+                  echo "merge-async failed: $(echo "$poll" | jq -r '.details.message // empty')"
+                  echo "::endgroup::"
+                  return 1
+                fi
+                if [ "$SECONDS" -ge "$deadline" ]; then
+                  echo "Timed out waiting for merge-async $uuid"
+                  echo "::endgroup::"
+                  return 1
+                fi
+                sleep 5
+              done
             fi
+
+            gh pr merge "$PR" -R "$REPO" --squash --delete-branch
             echo "Merged as Addi: $url"
             echo "::endgroup::"
             return 0
