@@ -32,7 +32,8 @@ Forbidden in commit messages and PR titles/bodies:
   footer yourself.
 - After `gh pr create`, if the published body still contains a Made with Cursor
   line (known Cursor injection bug even when attribution is off), strip it
-  immediately with `gh pr edit <n> --body-file` (or equivalent) before
-  considering the PR ready.
+  immediately before considering the PR ready. Prefer
+  `gh api -X PATCH repos/{owner}/{repo}/pulls/{n} -f body=...` — `gh pr edit`
+  can still get a footer re-appended by the Cursor client.
 - Prefer HEREDOC / `--body-file` for PR bodies so content stays under agent
   control.
