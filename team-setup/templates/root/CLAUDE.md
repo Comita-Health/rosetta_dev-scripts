@@ -173,12 +173,20 @@ See each repo's `CONTRIBUTING.md`. There is no CLA.
 
 ### Finishing work
 
-When work is complete, push the branch and open a PR:
+When work is complete, push the branch and open a PR **as Addi** (never as the
+human `gh` user — humans must Approve agent PRs):
 
 ```bash
+eval "$(bash ~/.config/comita/github-app-activate.sh)"   # or rosetta for Rosetta-Foundation
+gh api graphql -f query='query { viewer { login } }' --jq '.data.viewer.login'  # must be *addi*[bot]
 git push -u origin HEAD
-gh pr create --fill
+gh pr create --title "…" --body "$(cat <<'EOF'
+…
+EOF
+)"
 ```
+
+See `.claude/rules/addi-authorship.md`. Same rule for `gh issue create`.
 
 **No tool marketing in PR bodies or commits.** Never include `Made with Cursor`,
 `Made-with: Cursor`, or similar AI-tool footers/trailers. Prefer `--body` /
