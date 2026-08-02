@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **team-setup:** add `addi-authorship` rule — agent PRs/issues must be created
+  as the workspace GitHub App (Addi); verify `viewer.login` before create; never
+  fall back to human `gh` on 403; recreate accidental human-authored PRs as Addi.
 - **team-setup:** add `deploy-verify-watch` skill — classify live-verify PRs
   (auth / multi-SPA / Deploy Org paths), auto-dispatch the deploy workflow on
   each new head SHA, and wake on `deploy_green` / `deploy_failed` so humans
