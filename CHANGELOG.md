@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **team-setup:** add `pr-approve-watch` skill/rule/command — background-watch
+  PRs for a human GitHub Approve proceed signal (`AGENT_LOOP_WAKE_pr_approve`),
+  then merge and continue. Works for Rosetta (`~/.config/rosetta/…`) and Comita
+  (`~/.config/comita/…`) activate scripts.
 - **sdlc-workflow:** supervise fails fast on enforce `merge-blocked` (no spurious
   "no ready task" wave); gate logs label `[enforce]` vs `[shadow]`; monitor notes
   when the heartbeat watch stops.
