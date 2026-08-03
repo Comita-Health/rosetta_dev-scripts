@@ -315,6 +315,8 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
         fetch: gitFetch,
         resolveSha: jest.fn().mockReturnValue('main-sha'),
         defaultBranch: jest.fn().mockReturnValue('main'),
+        fileAtRef: jest.fn().mockReturnValue(null),
+        pathDiffersFromRef: jest.fn().mockReturnValue(false),
         revertMerge,
         stageAll: jest.fn(),
         commit: jest.fn()

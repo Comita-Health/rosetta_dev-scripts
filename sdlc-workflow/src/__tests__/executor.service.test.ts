@@ -27,7 +27,9 @@ const makeSpec = (overrides: Partial<SpecDocument> = {}): SpecDocument => ({
 });
 
 const INPUT = {
-  specPath: '/specs/spec.md',
+  // In-repo: an enforcing run refuses a spec it cannot compare against the
+  // default branch, and a spec outside the repo has nothing to compare to.
+  specPath: '/repo/specs/spec.md',
   repoPath: '/repo',
   runId: 'run-1',
   runsDir: '/runs',
@@ -79,7 +81,9 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
       push: jest.fn(),
       fetch: jest.fn(),
       resolveSha: jest.fn(),
-      defaultBranch: jest.fn(),
+      defaultBranch: jest.fn().mockReturnValue('build-env/dev'),
+      fileAtRef: jest.fn().mockReturnValue('spec contents'),
+      pathDiffersFromRef: jest.fn().mockReturnValue(false),
       revertMerge: jest.fn(),
       stageAll: jest.fn(),
       commit: jest.fn()
@@ -201,6 +205,67 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
 
     const verdict = stateMock.appendVerdict.mock.calls[0][2];
     expect(verdict.reasons.join(' ')).toContain('defined: ci-config');
+  });
+
+  // The gate is a human approving the PR that lands the spec, so the only
+  // spec an enforcing run may execute is the one on the default branch.
+  // Without this an agent flips `status: Approved` in its own checkout and
+  // launches -- which is exactly how the first canary skipped its own gate.
+  describe('spec provenance', () => {
+    it('blocks when the spec has not landed on the default branch', async () => {
+      gitMock.fileAtRef.mockReturnValue(null);
+
+      const pool = await executor.executeReady(INPUT);
+
+      expect(pool.kind).toBe('blocked');
+      expect(pool.detail).toBe('spec-not-merged');
+      expect(gitMock.fileAtRef).toHaveBeenCalledWith(
+        '/repo',
+        'origin/build-env/dev',
+        'specs/spec.md'
+      );
+      expect(agentRun).not.toHaveBeenCalled();
+      expect(gitMock.addWorktree).not.toHaveBeenCalled();
+    });
+
+    it('blocks when the local copy differs from the merged one', async () => {
+      gitMock.pathDiffersFromRef.mockReturnValue(true);
+
+      const pool = await executor.executeReady(INPUT);
+
+      expect(pool.kind).toBe('blocked');
+      expect(pool.detail).toBe('spec-not-merged');
+      const verdict = stateMock.appendVerdict.mock.calls[0][2];
+      expect(verdict.reasons.join(' ')).toContain('differs from');
+      expect(agentRun).not.toHaveBeenCalled();
+    });
+
+    it('refuses a spec outside the repo, which has nothing to compare to', async () => {
+      const pool = await executor.executeReady({
+        ...INPUT,
+        specPath: '/elsewhere/spec.md'
+      });
+
+      expect(pool.kind).toBe('blocked');
+      expect(pool.detail).toBe('spec-not-merged');
+      const verdict = stateMock.appendVerdict.mock.calls[0][2];
+      expect(verdict.reasons.join(' ')).toContain('outside the repo');
+    });
+
+    it('fetches first so the comparison is against current origin', async () => {
+      await executor.executeReady(INPUT);
+
+      expect(gitMock.fetch).toHaveBeenCalledWith('/repo');
+    });
+
+    // Shadow runs never merge, so working from an unlanded spec is the point.
+    it('skips the check in shadow mode', async () => {
+      gitMock.fileAtRef.mockReturnValue(null);
+
+      const pool = await executor.executeReady({ ...INPUT, shadow: true });
+
+      expect(pool.kind).not.toBe('blocked');
+    });
   });
 
   it('does not block when every forbidden label resolves', async () => {

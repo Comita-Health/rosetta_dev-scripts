@@ -18,6 +18,12 @@ export interface ExecutorInput {
   repoPath: string;
   runId: string;
   runsDir: string;
+  /**
+   * Calibration mode. Shadow runs never merge, so they are allowed to work
+   * from a spec that has not landed on the default branch yet — that is the
+   * point of a dry run. Enforcing runs are not.
+   */
+  shadow?: boolean;
 }
 
 /** Optional progress sink for native heartbeat (#39) — not a Service call. */
@@ -190,6 +196,29 @@ export class ExecutorService implements IExecutorService {
         detail: 'unapproved-spec',
         outcomes: []
       };
+    }
+
+    // Authorization before content: if this is not the spec a human approved,
+    // nothing about its contents is worth checking.
+    if (input.shadow !== true) {
+      const provenance = this.specProvenance(input);
+      if (provenance !== null) {
+        const state = this.loadOrInitState(input, spec);
+        this._runStateRepo.appendVerdict(input.runsDir, state, {
+          gate: 'intake',
+          outcome: 'blocked',
+          wouldEscalate: true,
+          reasons: ['spec-not-merged', provenance],
+          recordedAt: new Date().toISOString()
+        });
+        return {
+          kind: 'blocked',
+          spec,
+          state,
+          detail: 'spec-not-merged',
+          outcomes: []
+        };
+      }
     }
 
     // Structural defects are cheap here and ruinous later. An envelope naming
@@ -482,6 +511,40 @@ export class ExecutorService implements IExecutorService {
             : '')
       };
     }
+  }
+
+  /**
+   * The approval gate is a human approving the PR that lands the spec, so the
+   * only spec an enforcing run may execute is the one on the default branch.
+   * Without this an agent can flip `status: Approved` in its own checkout and
+   * launch, which is exactly how the first canary skipped its own gate. Local
+   * branch protection cannot help: the repo is private on a free plan so
+   * GitHub protection is unavailable, the husky guard is client-side, and the
+   * engine's implementation prompt tells agents to commit with `--no-verify`.
+   *
+   * Returns null when the spec is verified, or the reason it is not.
+   */
+  private specProvenance(input: ExecutorInput): string | null {
+    const relPath = path.relative(input.repoPath, input.specPath);
+    if (relPath.startsWith('..') || path.isAbsolute(relPath)) {
+      // Unverifiable, so refused rather than waved through: a spec outside
+      // the repo has no reviewed, merged version to compare against.
+      return `spec is outside the repo (${input.specPath}), so its approval cannot be verified against the default branch`;
+    }
+
+    // The comparison is only as current as the remote-tracking ref.
+    this._gitRepo.fetch(input.repoPath);
+    const branch = this._gitRepo.defaultBranch(input.repoPath);
+    const ref = `origin/${branch}`;
+    const merged = this._gitRepo.fileAtRef(input.repoPath, ref, relPath);
+
+    if (merged === null) {
+      return `${relPath} does not exist on ${ref} — approve and merge the spec PR first`;
+    }
+    if (this._gitRepo.pathDiffersFromRef(input.repoPath, ref, relPath)) {
+      return `${relPath} differs from ${ref} — the local copy is not the reviewed one; commit it, open a PR, and get it approved`;
+    }
+    return null;
   }
 
   private initState(input: ExecutorInput, spec: SpecDocument): RunState {
