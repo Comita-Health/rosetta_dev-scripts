@@ -36,7 +36,8 @@ describe('HeartbeatService (#39)', () => {
         defaultBranch: jest.fn(),
         revertMerge: jest.fn(),
         stageAll: jest.fn(),
-        commit: jest.fn()
+        commit: jest.fn(),
+        removeWorktreeAsync: jest.fn()
       });
     container
       .bind<IHeartbeatService>(WORKFLOW_TOKENS.HeartbeatService)

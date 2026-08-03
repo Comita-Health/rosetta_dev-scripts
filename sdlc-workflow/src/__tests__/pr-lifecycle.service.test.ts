@@ -58,7 +58,8 @@ describe('PrLifecycleService (P3 T-02)', () => {
         defaultBranch: jest.fn(),
         revertMerge: jest.fn(),
         stageAll: jest.fn(),
-        commit: jest.fn()
+        commit: jest.fn(),
+        removeWorktreeAsync: jest.fn()
       });
     container
       .bind<IPullRequestRepository>(WORKFLOW_TOKENS.PullRequestRepository)

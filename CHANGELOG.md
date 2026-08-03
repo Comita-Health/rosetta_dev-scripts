@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** task worktrees are now cleaned up automatically once
+  their work has actually merged. `GitRepository.removeWorktreeAsync`
+  dispatches `git worktree remove --force` without waiting for it —
+  fire-and-forget, so a locked file or slow removal can never block run
+  progress or turn a landed merge into a reported failure. Wired into both
+  merge paths: the engine's own enforcing-mode merge, and `record-merge`
+  (now accepting an optional `--repo`) for merges acknowledged externally
+  (e.g. a human Approve that GHA merged). Closes the manual
+  `git worktree prune` cleanup this session kept needing by hand.
 - **sdlc-workflow:** the PRD parser now fails loudly and specifically instead
   of silently degrading. `prd-parser.ts` required exact heading text/numbering
   (`### 1.2 Goals`, an em-dash-only Rollout phase format) and returned empty
