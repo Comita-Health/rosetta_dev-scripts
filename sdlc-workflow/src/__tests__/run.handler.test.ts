@@ -80,6 +80,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
   let review: jest.Mock;
   let deploy: jest.Mock;
   let verify: jest.Mock;
+  let verifyTestTierOnly: jest.Mock;
   let ciEvaluate: jest.Mock;
   let aggregate: jest.Mock;
   let digestPost: jest.Mock;
@@ -176,6 +177,9 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
       verdict: verificationVerdict,
       criteria: criterionVerdicts
     });
+    // Returning undefined mirrors "not precomputed" so verify() above runs
+    // its own test-tier path unaffected in tests that don't care about it.
+    verifyTestTierOnly = jest.fn().mockResolvedValue(undefined);
     ciEvaluate = jest.fn().mockResolvedValue(ciVerdict);
     aggregate = jest.fn().mockReturnValue({
       verdict: phaseVerdict,
@@ -283,7 +287,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
       .toConstantValue({ deploy });
     container
       .bind<IVerificationService>(WORKFLOW_TOKENS.VerificationService)
-      .toConstantValue({ verify });
+      .toConstantValue({ verify, verifyTestTierOnly });
     container
       .bind<ICiGateService>(WORKFLOW_TOKENS.CiGateService)
       .toConstantValue({ monitor: ciEvaluate });
@@ -689,6 +693,37 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
         exceptions: []
       });
     };
+
+    it('dispatches the sandbox deploy and test-tier verification concurrently, not sequentially', async () => {
+      greenGates();
+      let resolveDeploy: (value: unknown) => void = () => {};
+      deploy.mockReturnValue(
+        new Promise(resolve => {
+          resolveDeploy = resolve;
+        })
+      );
+
+      const runPromise = handler.runTask(INPUT);
+
+      // Flush pending microtasks (envelope + reviewer each chain several
+      // awaits before reaching the sandbox/verification dispatch) without
+      // resolving the deploy promise — if verifyTestTierOnly were only
+      // dispatched after sandbox resolved, it would not have been called
+      // yet at this point.
+      for (let i = 0; i < 20; i++) {
+        await Promise.resolve();
+      }
+      expect(verifyTestTierOnly).toHaveBeenCalled();
+      expect(verify).not.toHaveBeenCalled();
+
+      resolveDeploy({
+        verdict: verdictOf('sandbox', 'pass'),
+        healthReport: 'sha=head-sha ok'
+      });
+      await runPromise;
+
+      expect(verify).toHaveBeenCalled();
+    });
 
     it('auto-merges the PR when all four gates are green, recording the SHA in state and Chronicle', async () => {
       greenGates();

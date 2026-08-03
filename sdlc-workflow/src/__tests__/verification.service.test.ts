@@ -211,4 +211,61 @@ describe('VerificationService (T-04)', () => {
     expect(outcome.criteria[0].outcome).toBe('human-required');
     expect(outcome.verdict.outcome).toBe('human-required');
   });
+
+  describe('verifyTestTierOnly (concurrent with sandbox deploy)', () => {
+    it('runs only the test-tier scripted check, independent of any sandbox health report', async () => {
+      const task = taskWith(['test: alpha', 'agent: beta']);
+
+      const verdicts = await service.verifyTestTierOnly({ ...baseInput, task });
+
+      expect(run).toHaveBeenCalledTimes(1);
+      expect(agentRun).not.toHaveBeenCalled();
+      expect(verdicts).toHaveLength(1);
+      expect(verdicts?.[0]).toMatchObject({ tier: 'test', outcome: 'pass' });
+    });
+
+    it('returns an empty array when the task has no test-tier criteria', async () => {
+      const task = taskWith(['agent: beta']);
+
+      const verdicts = await service.verifyTestTierOnly({ ...baseInput, task });
+
+      expect(run).not.toHaveBeenCalled();
+      expect(verdicts).toEqual([]);
+    });
+
+    it('returns undefined on malformed criteria instead of throwing, deferring to verify()', async () => {
+      const task = taskWith(['wat: no such tier']);
+
+      const verdicts = await service.verifyTestTierOnly({ ...baseInput, task });
+
+      expect(verdicts).toBeUndefined();
+      expect(run).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('verify() with a precomputed test tier', () => {
+    it('reuses precomputed test-tier verdicts instead of re-running the scripted check', async () => {
+      const task = taskWith(['test: alpha']);
+      const precomputedTestTier = [
+        {
+          taskId: task.id,
+          criterion: 'test: alpha',
+          tier: 'test' as const,
+          outcome: 'pass' as const,
+          evidenceId: 'precomputed-evidence',
+          recordedAt: 'x'
+        }
+      ];
+
+      const outcome = await service.verify({
+        ...baseInput,
+        task,
+        precomputedTestTier
+      });
+
+      expect(run).not.toHaveBeenCalled();
+      expect(outcome.criteria).toEqual(precomputedTestTier);
+      expect(outcome.verdict.outcome).toBe('pass');
+    });
+  });
 });

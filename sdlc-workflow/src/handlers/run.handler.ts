@@ -29,6 +29,7 @@ import type {
 } from '../services/verification.service';
 import { WORKFLOW_TOKENS } from '../tokens';
 import {
+  CriterionVerdict,
   ExceptionEntry,
   GateVerdict,
   RunState,
@@ -395,14 +396,30 @@ export class RunHandler implements IRunHandler {
     );
 
     // T-03: SHA-idempotent sandbox deploy; the step cache additionally
-    // guarantees kill-resume produces no duplicate deployments.
-    const sandboxOutcome = await this.sandboxStep(
+    // guarantees kill-resume produces no duplicate deployments. The
+    // test-tier verification check has no dependency on the deployed
+    // sandbox — only agent-tier criteria consume the health report — so it
+    // runs concurrently with the deploy instead of paying for both
+    // sequentially. On a resume where verification is already step-cached
+    // this duplicates one test run for nothing; that's cheaper than the
+    // complexity of pre-checking the cache before deciding to dispatch it.
+    const sandboxPromise = this.sandboxStep(
       input,
       state,
       task,
       worktreePath,
       inputsDigest({ ...chain, step: 'sandbox' })
     );
+    const testTierPromise = this._verification.verifyTestTierOnly({
+      worktreePath,
+      runsDir: input.runsDir,
+      runId: input.runId,
+      task
+    });
+    const [sandboxOutcome, precomputedTestTier] = await Promise.all([
+      sandboxPromise,
+      testTierPromise
+    ]);
 
     const verificationVerdict = await this.verificationStep(
       input,
@@ -410,7 +427,8 @@ export class RunHandler implements IRunHandler {
       task,
       worktreePath,
       sandboxOutcome.healthReport,
-      inputsDigest({ ...chain, criteria: task.acceptanceCriteria })
+      inputsDigest({ ...chain, criteria: task.acceptanceCriteria }),
+      precomputedTestTier
     );
 
     // P3 T-03: live CI gate — poll the pushed branch's checks to terminal,
@@ -1249,7 +1267,8 @@ export class RunHandler implements IRunHandler {
     task: SpecTask,
     worktreePath: string,
     healthReport: string | undefined,
-    digest: string
+    digest: string,
+    precomputedTestTier?: CriterionVerdict[]
   ): Promise<GateVerdict> {
     const key = stepKey('verification', task.id, digest);
     const cached = state.steps[key];
@@ -1264,7 +1283,8 @@ export class RunHandler implements IRunHandler {
       input,
       worktreePath,
       task,
-      healthReport
+      healthReport,
+      precomputedTestTier
     );
     verification.verdict.taskId = task.id;
     verification.verdict.inputsDigest = digest;
@@ -1293,7 +1313,8 @@ export class RunHandler implements IRunHandler {
     input: RunTaskInput,
     worktreePath: string,
     task: SpecTask,
-    healthReport: string | undefined
+    healthReport: string | undefined,
+    precomputedTestTier?: CriterionVerdict[]
   ): Promise<VerificationOutcome> {
     try {
       return await this._verification.verify({
@@ -1301,7 +1322,8 @@ export class RunHandler implements IRunHandler {
         runsDir: input.runsDir,
         runId: input.runId,
         task,
-        healthReport
+        healthReport,
+        precomputedTestTier
       });
     } catch (err) {
       if (err instanceof WorkflowError && err.code === 'SPEC_MALFORMED') {

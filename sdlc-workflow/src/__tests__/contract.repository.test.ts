@@ -102,8 +102,8 @@ describe('ContractRepository', () => {
 describe('ShellCommandRepository', () => {
   const repo = new ShellCommandRepository();
 
-  it('runs a command and captures output', () => {
-    const result = repo.run(
+  it('runs a command and captures output', async () => {
+    const result = await repo.run(
       os.tmpdir(),
       'echo "hello $SDLC_SANDBOX_SHA"',
       {
@@ -115,8 +115,8 @@ describe('ShellCommandRepository', () => {
     expect(result.output).toContain('hello abc123');
   });
 
-  it('reports failure with combined output on non-zero exit', () => {
-    const result = repo.run(
+  it('reports failure with combined output on non-zero exit', async () => {
+    const result = await repo.run(
       os.tmpdir(),
       'echo out; echo err >&2; exit 3',
       {},
@@ -127,9 +127,19 @@ describe('ShellCommandRepository', () => {
     expect(result.output).toContain('err');
   });
 
-  it('fails when the command exceeds the timeout', () => {
-    const result = repo.run(os.tmpdir(), 'sleep 2', {}, 200);
+  it('fails when the command exceeds the timeout', async () => {
+    const result = await repo.run(os.tmpdir(), 'sleep 2', {}, 200);
     expect(result.ok).toBe(false);
+  });
+
+  it('runs two commands concurrently rather than blocking the event loop', async () => {
+    const start = Date.now();
+    await Promise.all([
+      repo.run(os.tmpdir(), 'sleep 0.3', {}, 5_000),
+      repo.run(os.tmpdir(), 'sleep 0.3', {}, 5_000)
+    ]);
+    // Sequential (spawnSync) would take ~600ms; concurrent (spawn) ~300ms.
+    expect(Date.now() - start).toBeLessThan(550);
   });
 });
 

@@ -67,7 +67,7 @@ export class SandboxDeployService implements ISandboxDeployService {
       input.previous?.sha === input.sha && input.previous.status === 'healthy';
 
     if (!alreadyDeployed) {
-      const deploy = this._shellRepo.run(
+      const deploy = await this._shellRepo.run(
         input.worktreePath,
         contract.deployCommand,
         env,
@@ -88,7 +88,7 @@ export class SandboxDeployService implements ISandboxDeployService {
       }
     }
 
-    const health = this._shellRepo.run(
+    const health = await this._shellRepo.run(
       input.worktreePath,
       contract.healthCommand,
       env,
