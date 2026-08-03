@@ -11,7 +11,7 @@ import type { IProcessDetachRepository } from '../repositories/process-detach.re
 import type { IHeartbeatWatchService } from '../services/heartbeat-watch.service';
 import { WORKFLOW_TOKENS } from '../tokens';
 import type { RunState, SpecDocument } from '../types';
-import { mkdtempSync } from 'fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'fs';
 import os from 'os';
 import path from 'path';
 
@@ -28,6 +28,7 @@ describe('SuperviseService', () => {
   let load: jest.Mock;
   let read: jest.Mock;
   let spawnDetached: jest.Mock;
+  let isAlive: jest.Mock;
   let supervise: ISuperviseService;
   let runsDir: string;
 
@@ -72,6 +73,7 @@ describe('SuperviseService', () => {
     load = jest.fn().mockReturnValue(null);
     read = jest.fn().mockReturnValue(baseSpec);
     spawnDetached = jest.fn().mockReturnValue({ pid: 4242 });
+    isAlive = jest.fn().mockReturnValue(true);
 
     const container = new Container();
     container
@@ -85,7 +87,7 @@ describe('SuperviseService', () => {
       .toConstantValue({ load } as unknown as IRunStateRepository);
     container
       .bind<IProcessDetachRepository>(WORKFLOW_TOKENS.ProcessDetachRepository)
-      .toConstantValue({ spawnDetached });
+      .toConstantValue({ spawnDetached, isAlive });
     container
       .bind<IHeartbeatWatchService>(WORKFLOW_TOKENS.HeartbeatWatchService)
       .toConstantValue({
@@ -136,6 +138,68 @@ describe('SuperviseService', () => {
     const spawnArgs = spawnDetached.mock.calls[0][0].args as string[];
     expect(spawnArgs).toContain('--supervise');
     expect(spawnArgs).not.toContain('--detach');
+  });
+
+  // A child that dies on startup (bad spec path, spec still Draft, repo not a
+  // worktree) used to leave the parent printing "detached" and exiting 0. The
+  // operator walks away from a run that never began, and no state.json is
+  // written so the continuity daemon skips the directory too — nothing at all
+  // reports it. The detached launch must not claim success it cannot see.
+  it('reports failure when the detached child dies during startup', async () => {
+    isAlive.mockReturnValue(false);
+    const logPath = path.join(runsDir, 'run-1', 'supervise.log');
+    mkdirSync(path.dirname(logPath), { recursive: true });
+    writeFileSync(
+      logPath,
+      '\nRun run-1 — /spec.md\n\n✗ SPEC_MALFORMED: Spec file not found: /spec.md\n'
+    );
+
+    const result = await supervise.run(
+      input({
+        detachArgv: [
+          'node',
+          'src/index.ts',
+          'run',
+          '--spec',
+          '/s.md',
+          '--repo',
+          '/r',
+          '--detach'
+        ],
+        detach: true,
+        supervise: true
+      })
+    );
+
+    expect(result.kind).toBe('failed');
+    expect(result.pid).toBe(4242);
+    // The child's own error is what the operator needs, not "it died".
+    expect(result.detail).toContain('SPEC_MALFORMED');
+    expect(isAlive).toHaveBeenCalledWith(4242);
+  });
+
+  it('does not claim failure when the child is still alive', async () => {
+    isAlive.mockReturnValue(true);
+
+    const result = await supervise.run(
+      input({
+        detachArgv: [
+          'node',
+          'src/index.ts',
+          'run',
+          '--spec',
+          '/s.md',
+          '--repo',
+          '/r',
+          '--detach'
+        ],
+        detach: true,
+        supervise: true
+      })
+    );
+
+    expect(result.kind).toBe('detached');
+    expect(result.detail).toBeUndefined();
   });
 
   it('loops until all tasks are merged', async () => {
