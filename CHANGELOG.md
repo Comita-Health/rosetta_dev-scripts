@@ -11,6 +11,29 @@
   (now accepting an optional `--repo`) for merges acknowledged externally
   (e.g. a human Approve that GHA merged). Closes the manual
   `git worktree prune` cleanup this session kept needing by hand.
+- **team-setup:** add `/write-bug-spec` command and
+  `rosetta_docs/product/BUG-SPEC-TEMPLATE.md` — a lightweight entry point
+  into the spec-run-verify-merge machine for bugs that skips the PRD and
+  `decompose` steps entirely. The engine's atomic unit is the Approved spec,
+  not the PRD; `decompose` is only one way to produce one, and forcing a
+  single-task bug fix through PRD-shaped Goals/Non-Goals/Rollout ceremony
+  and an LLM decompose call was needless overhead. Hand-author a minimal
+  spec (synthetic `prd: BUG-<slug>` label, one task, tight envelope) instead
+  and run it through the identical `sdlc-workflow run` — same envelope gate,
+  verification, reviewer, sandbox, and provenance checks a feature gets.
+  Reserved for non-trivial or blast-radius-sensitive bugs; a genuinely
+  trivial one-liner still doesn't need the machine.
+- **addi-authorship rule:** documented a recurring false-positive permission
+  error. `gh pr create`/`gh issue create` without an explicit `--repo`
+  default to targeting a forked repo's upstream parent, not `origin` — on
+  `Comita-Health/rosetta_dev-scripts` (forked from
+  `Rosetta-Foundation/rosetta_dev-scripts`) this produced `GraphQL: Resource
+  not accessible by integration (createPullRequest)`, indistinguishable
+  from Addi genuinely lacking `pull_requests: write`, which it does not.
+  Confirmed live: REST `POST /pulls` and a raw GraphQL `createPullRequest`
+  both pass the permission check on the same token; only `gh pr create`'s
+  default fork-upstream resolution failed. Fix is `--repo <owner>/<repo>`,
+  not a permission grant.
 - **sdlc-workflow:** an enforcing run now refuses a spec that is not the one on
   the repo's default branch — missing there, or differing from the local copy.
   The approval gate is a human approving the PR that lands the spec, but
