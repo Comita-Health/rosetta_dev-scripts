@@ -16,12 +16,48 @@ const SPEC_STATUSES: readonly SpecStatus[] = [
 
 const COMPLEXITIES: readonly Complexity[] = ['S', 'M', 'L'];
 
+/**
+ * Split on commas that actually separate elements — not ones inside a quoted
+ * string or a brace/bracket group. A naive `split(',')` shreds a brace glob
+ * (`**\/*.{test,spec}.ts` becomes two broken halves), which is quietly
+ * dangerous in `forbiddenSurfaces`: the surface stops matching anything and
+ * the gate that was meant to guard it silently passes.
+ */
+const splitTopLevel = (inner: string): string[] => {
+  const parts: string[] = [];
+  let depth = 0;
+  let quote: "'" | '"' | null = null;
+  let current = '';
+
+  for (const char of inner) {
+    if (quote !== null) {
+      if (char === quote) quote = null;
+      current += char;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      current += char;
+      continue;
+    }
+    if (char === '{' || char === '[') depth += 1;
+    if (char === '}' || char === ']') depth -= 1;
+    if (char === ',' && depth === 0) {
+      parts.push(current);
+      current = '';
+      continue;
+    }
+    current += char;
+  }
+  parts.push(current);
+  return parts;
+};
+
 /** Parse an inline YAML string array: ["a", "b"] or ['a', 'b']. */
 const parseInlineArray = (raw: string): string[] => {
   const inner = raw.trim().replace(/^\[/, '').replace(/\]$/, '').trim();
   if (inner.length === 0) return [];
-  return inner
-    .split(',')
+  return splitTopLevel(inner)
     .map(item => item.trim().replace(/^['"]/, '').replace(/['"]$/, ''))
     .filter(item => item.length > 0);
 };
