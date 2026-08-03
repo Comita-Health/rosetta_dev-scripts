@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, writeFileSync } from 'fs';
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { inject, injectable } from 'inversify';
 import path from 'path';
 import chalk from 'chalk';
@@ -18,6 +18,30 @@ import {
 } from '../utils/run-completion';
 import { buildSuperviseChildArgv } from '../utils/supervise-argv';
 import type { IHeartbeatWatchService } from './heartbeat-watch.service';
+
+/**
+ * How long to let a detached child prove it survived startup. Startup failures
+ * throw within milliseconds (file reads and spec parsing), so this only has to
+ * clear process spawn — it is not a health check.
+ */
+const DETACH_STARTUP_GRACE_MS = 1_500;
+const DETACH_FAILURE_LOG_LINES = 20;
+
+const sleep = (ms: number): Promise<void> =>
+  new Promise(resolve => setTimeout(resolve, ms));
+
+/** Last `count` non-empty lines of a log, for surfacing a child's own error. */
+const tailFile = (filePath: string, count: number): string => {
+  try {
+    return readFileSync(filePath, 'utf-8')
+      .split('\n')
+      .filter(line => line.trim().length > 0)
+      .slice(-count)
+      .join('\n');
+  } catch {
+    return '';
+  }
+};
 
 export interface SuperviseInput extends RunTaskInput {
   /**
@@ -120,7 +144,7 @@ export class SuperviseService implements ISuperviseService {
     );
   }
 
-  private detach(input: SuperviseInput): SuperviseResult {
+  private async detach(input: SuperviseInput): Promise<SuperviseResult> {
     const runDir = path.join(input.runsDir, input.runId);
     mkdirSync(runDir, { recursive: true });
     const logPath = path.join(runDir, 'supervise.log');
@@ -141,6 +165,25 @@ export class SuperviseService implements ISuperviseService {
     });
 
     writeFileSync(pidPath, `${pid}\n`);
+
+    // A child that dies during startup — spec path wrong, spec unparseable,
+    // spec still Draft, repo not a worktree — would otherwise leave the parent
+    // printing a cheerful "detached" and exiting 0. The operator walks away
+    // from a run that never began, and because no state.json was ever written
+    // the continuity daemon skips the directory too, so nothing reports it.
+    // Confirm the child actually survived before claiming success.
+    await sleep(DETACH_STARTUP_GRACE_MS);
+    if (!this._detachRepo.isAlive(pid)) {
+      const detail = tailFile(logPath, DETACH_FAILURE_LOG_LINES);
+      console.error(
+        chalk.red(`\n[supervise] detached child exited during startup`)
+      );
+      console.error(`  runId: ${input.runId}`);
+      console.error(`  log:   ${logPath}`);
+      if (detail.length > 0) console.error(`\n${detail}`);
+      return { kind: 'failed', waves: 0, pid, monitorPath, logPath, detail };
+    }
+
     this._hbWatch.note(
       monitorPath,
       `[supervise] detached pid=${pid} runId=${input.runId} log=${logPath}`

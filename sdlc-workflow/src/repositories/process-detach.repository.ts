@@ -26,10 +26,21 @@ export interface DetachSpawnResult {
  */
 export interface IProcessDetachRepository {
   spawnDetached(input: DetachSpawnInput): DetachSpawnResult;
+  /** True while the pid is still running (signal 0 probe). */
+  isAlive(pid: number): boolean;
 }
 
 @injectable()
 export class ProcessDetachRepository implements IProcessDetachRepository {
+  isAlive(pid: number): boolean {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   spawnDetached(input: DetachSpawnInput): DetachSpawnResult {
     const logFd = openSync(input.logPath, 'a');
     const child: ChildProcess = spawn(input.command, input.args, {
