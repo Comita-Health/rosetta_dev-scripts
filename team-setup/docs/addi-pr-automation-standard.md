@@ -75,19 +75,31 @@ Addi topic PRs.
 ## Webhook bridge (required for reliable Approve delivery)
 
 GitHub App webhooks cannot start Actions by themselves. Run
-`team-setup/addi-merge-webhook` (or an equivalent mirror such as GitHub’s
-unofficial [event-mirror Azure Function](https://github.com/github/github-event-mirror-azure-function))
-and point the Addi App’s webhook URL at it.
+`team-setup/addi-merge-webhook` (AWS Lambda Function URL in `comita-dev`)
+and deliver **`pull_request_review`** events to it.
+
+**Preferred delivery (current):** org webhooks created by the Addi App
+installation (`organization_hooks: write`) — App webhook config stays 404
+until “Active” is toggled in the App settings UI.
+
+| Org                | Webhook path       |
+| ------------------ | ------------------ |
+| Rosetta-Foundation | `/webhook/rosetta` |
+| Comita-Health      | `/webhook/comita`  |
 
 Bridge duties:
 
-1. Verify `X-Hub-Signature-256` with the App webhook secret.
+1. Verify `X-Hub-Signature-256` with the per-tenant webhook secret.
 2. On `pull_request_review` + `action=submitted` + `review.state=approved`,
    mint an installation token and
    `POST /repos/{owner}/{repo}/dispatches` with
    `event_type=addi-merge-on-approve` and `client_payload.pr_number`.
 
-See `team-setup/addi-merge-webhook/README.md` for run/deploy.
+Deploy: `cd team-setup/addi-merge-webhook && bun run deploy`
+(see `team-setup/addi-merge-webhook/README.md`).
+
+Production Function URL (`comita-dev` / `us-east-1`):
+`https://kfjifzn4cza53dmr4xqdcrgk4m0ugopm.lambda-url.us-east-1.on.aws`
 
 ## Comita vs Rosetta
 
@@ -104,8 +116,8 @@ See `team-setup/addi-merge-webhook/README.md` for run/deploy.
 1. Set org (or repo) `ADDI_CLIENT_ID`, `ADDI_APP_PRIVATE_KEY`,
    `ADDI_MERGE_ON_APPROVE=true`.
 2. Land `addi-merge-on-approve.yml` on the repo default branch.
-3. Deploy webhook bridge; subscribe App to **Pull request reviews**; set webhook
-   URL + secret.
+3. Deploy webhook bridge (`bun run deploy` in `addi-merge-webhook`); ensure org
+   hooks for **Pull request reviews** point at `/webhook/{rosetta|comita}`.
 4. Update agent rules via team-setup so `pr-approve-watch` does not merge when
    GHA is enabled.
 5. Proof: Addi PR → Approve → merge as Addi without manual `workflow_dispatch`.

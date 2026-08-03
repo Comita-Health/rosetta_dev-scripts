@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **team-setup:** deploy dual-tenant `addi-merge-webhook` to AWS Lambda Function
+  URL (`comita-dev`); Comita + Rosetta org webhooks deliver
+  `pull_request_review` → `repository_dispatch` (`addi-merge-on-approve`).
 - **team-setup:** remove `attribution` from project `.cursor/cli.json` — Cursor
   only allows `permissions` at project scope; `attribution` belongs in
   `~/.cursor/cli-config.json` and was failing Agent CLI schema validation.
