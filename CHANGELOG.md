@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** enforce intake / supervise re-read the Approved spec from
+  `origin/<defaultBranch>` (`SpecDocRepository.readAtRef`) instead of comparing
+  the operator working tree to origin. Stale local checkbox edits no longer
+  block the next wave after a merge moves the origin blob. The envelope gate
+  hard-breaches any path under `specs/**` (even if listed in `allowedPaths`);
+  implementation and reviewer prompts ban mid-run spec / AC / `status:` edits.
+  Blocked intake CLI output now prints `pool.detail` and verdict reasons
+  instead of always saying `unapproved-spec`.
+- **team-setup:** continuity daemon one-shot syncs the launch.json spec file
+  from origin before relaunch when recent intake evidence shows
+  `spec-not-merged` / “differs from origin” (safety net for older engines).
 - **team-setup:** `sdlc-continuity-daemon.sh` no longer reports a supervisor
   that exited cleanly (exit code 0) as "died during startup." `--supervise`
   finishes its own process the moment a wave has nothing left to do —

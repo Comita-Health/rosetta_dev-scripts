@@ -93,6 +93,78 @@ sys.exit(0 if all(r.get("mergedSha") for r in results.values()) else 1)
 PY
 }
 
+# Older engines compared the operator working-tree spec to origin and blocked
+# wave continuation when a merge updated origin while the checkout lagged.
+# Newer engines read the origin blob directly; this one-shot still helps stale
+# installs / odd checkouts by restoring the launch.json spec file from origin
+# before relaunch when recent intake evidence shows spec-not-merged / differs.
+maybe_sync_spec_from_origin() {
+  local run_dir="$1" run_id="$2"
+  local launch_file="$run_dir/launch.json"
+  local marker="$run_dir/spec-origin-sync.attempted"
+  local state_file="$run_dir/state.json"
+  local log_file="$run_dir/supervise.log"
+
+  [[ -f "$launch_file" ]] || return 0
+  [[ -f "$marker" ]] && return 0
+
+  local needs_sync=0
+  if [[ -f "$log_file" ]] && grep -Eiq 'spec-not-merged|differs from origin' "$log_file"; then
+    needs_sync=1
+  fi
+  if [[ "$needs_sync" -eq 0 && -f "$state_file" ]]; then
+    if python3 - "$state_file" <<'PY'
+import json, sys
+try:
+    state = json.load(open(sys.argv[1]))
+except (OSError, json.JSONDecodeError):
+    sys.exit(1)
+for v in reversed(state.get("verdicts") or []):
+    if v.get("gate") != "intake":
+        continue
+    blob = " ".join(str(x) for x in (v.get("reasons") or []))
+    if "spec-not-merged" in blob or "differs from" in blob:
+        sys.exit(0)
+    break
+sys.exit(1)
+PY
+    then
+      needs_sync=1
+    fi
+  fi
+  [[ "$needs_sync" -eq 1 ]] || return 0
+
+  local repo_path spec_path
+  repo_path=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("repoPath",""))' "$launch_file")
+  spec_path=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("specPath",""))' "$launch_file")
+  [[ -d "$repo_path" && -n "$spec_path" ]] || return 0
+
+  local rel_path
+  rel_path=$(python3 -c 'import os,sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "$spec_path" "$repo_path") || return 0
+  case "$rel_path" in
+    ../* | /*) return 0 ;;
+  esac
+
+  touch "$marker"
+  if ! git -C "$repo_path" fetch origin >/dev/null 2>&1; then
+    log "  $run_id: spec-origin sync: fetch failed — relaunching without checkout"
+    return 0
+  fi
+
+  local default_branch
+  default_branch=$(git -C "$repo_path" symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')
+  if [[ -z "$default_branch" ]]; then
+    default_branch=$(git -C "$repo_path" remote show origin 2>/dev/null | awk '/HEAD branch/ {print $NF}')
+  fi
+  [[ -n "$default_branch" ]] || return 0
+
+  if git -C "$repo_path" checkout "origin/${default_branch}" -- "$rel_path" >/dev/null 2>&1; then
+    log "  $run_id: synced stale spec from origin/${default_branch}: ${rel_path}"
+  else
+    log "  $run_id: spec-origin sync: checkout failed for ${rel_path}"
+  fi
+}
+
 relaunch_supervisor() {
   local run_dir="$1" run_id="$2" launch_file="$run_dir/launch.json"
 
@@ -103,6 +175,8 @@ relaunch_supervisor() {
       "$(printf '{"runId":"%s"}' "$run_id")" >/dev/null
     return
   fi
+
+  maybe_sync_spec_from_origin "$run_dir" "$run_id"
 
   local cwd exec_path
   cwd=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("cwd",""))' "$launch_file")

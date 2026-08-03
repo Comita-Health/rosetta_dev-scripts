@@ -54,8 +54,16 @@ describe('CLI (T-01)', () => {
       const { output } = cli(`run ${missingSpec} ${flags}`.trim());
 
       expect(output).not.toContain('mutually exclusive');
-      // Reached the handler, so parsing succeeded.
-      expect(output).toContain('Spec file not found');
+      // Reached the handler, so parsing succeeded. Shadow reads the local
+      // file; enforce fetches origin first (so a non-repo --repo fails at
+      // git rather than "Spec file not found").
+      if (flags.includes('--shadow')) {
+        expect(output).toContain('Spec file not found');
+      } else {
+        expect(output).toMatch(
+          /GIT_FAILED|Spec file not found|Refused at intake/
+        );
+      }
     });
 
     it('still rejects --shadow and --enforce together', () => {

@@ -204,14 +204,25 @@ export class RunHandler implements IRunHandler {
       const pool = await this._executor.executeReady(poolInput);
 
       if (pool.kind === 'blocked') {
+        const intake = [...(pool.state?.verdicts ?? [])]
+          .reverse()
+          .find(v => v.gate === 'intake');
+        const reasons = intake?.reasons ?? [];
         console.log(
-          chalk.red(
-            '  ✗ Refused: spec is not Approved (blocked verdict recorded: unapproved-spec).'
-          )
+          chalk.red(`  ✗ Refused at intake: ${pool.detail ?? 'blocked'}.`)
         );
-        console.log(
-          '  Approve the spec (status: Draft → Approved, ADR-0008) and rerun.'
-        );
+        for (const reason of reasons) {
+          console.log(chalk.red(`    - ${reason}`));
+        }
+        if (pool.detail === 'unapproved-spec') {
+          console.log(
+            '  Approve the spec (status: Draft → Approved, ADR-0008) and rerun.'
+          );
+        } else if (pool.detail === 'spec-not-merged') {
+          console.log(
+            '  Merge the Approved spec onto the default branch (or sync origin) and rerun.'
+          );
+        }
         return { outcome: pool.kind, tasks: [] };
       }
 
@@ -1111,7 +1122,11 @@ export class RunHandler implements IRunHandler {
     );
     if (input.taskId !== undefined && input.repoPath !== undefined) {
       this.scheduleWorktreeCleanup(
-        { runsDir: input.runsDir, runId: input.runId, repoPath: input.repoPath },
+        {
+          runsDir: input.runsDir,
+          runId: input.runId,
+          repoPath: input.repoPath
+        },
         input.taskId
       );
     }

@@ -2,9 +2,11 @@ import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { inject, injectable } from 'inversify';
 import path from 'path';
 import chalk from 'chalk';
+import type { IGitRepository } from '../repositories/git.repository';
 import type { IProcessDetachRepository } from '../repositories/process-detach.repository';
 import type { IRunStateRepository } from '../repositories/run-state.repository';
 import type { ISpecDocRepository } from '../repositories/spec-doc.repository';
+import type { SpecDocument } from '../types';
 import type {
   IRunHandler,
   RunTaskInput,
@@ -96,7 +98,9 @@ export class SuperviseService implements ISuperviseService {
     @inject(WORKFLOW_TOKENS.ProcessDetachRepository)
     private readonly _detachRepo: IProcessDetachRepository,
     @inject(WORKFLOW_TOKENS.HeartbeatWatchService)
-    private readonly _hbWatch: IHeartbeatWatchService
+    private readonly _hbWatch: IHeartbeatWatchService,
+    @inject(WORKFLOW_TOKENS.GitRepository)
+    private readonly _gitRepo: IGitRepository
   ) {}
 
   async run(input: SuperviseInput): Promise<SuperviseResult> {
@@ -249,7 +253,7 @@ export class SuperviseService implements ISuperviseService {
 
         lastWave = await this._runHandler.runTask(input);
 
-        const spec = this._specDocRepo.read(input.specPath);
+        const spec = this.readSpecForSupervise(input);
         const state = this._runStateRepo.load(input.runsDir, input.runId);
 
         if (allTasksMerged(spec, state)) {
@@ -376,11 +380,32 @@ export class SuperviseService implements ISuperviseService {
     if (lastWave.tasks.some(t => t.kind === 'failed')) {
       return 'failed';
     }
-    const spec = this._specDocRepo.read(input.specPath);
+    const spec = this.readSpecForSupervise(input);
     const state = this._runStateRepo.load(input.runsDir, input.runId);
     if (allTasksMerged(spec, state)) {
       return 'completed';
     }
     return 'stopped';
+  }
+
+  /**
+   * Enforce: re-read the Approved blob from origin after each wave so
+   * completion checks see post-merge checkbox / content updates.
+   * Shadow: local working-tree file.
+   */
+  private readSpecForSupervise(input: SuperviseInput): SpecDocument {
+    if (input.shadow === true) {
+      return this._specDocRepo.read(input.specPath);
+    }
+    const relPath = path.relative(input.repoPath, input.specPath);
+    if (relPath.startsWith('..') || path.isAbsolute(relPath)) {
+      return this._specDocRepo.read(input.specPath);
+    }
+    this._gitRepo.fetch(input.repoPath);
+    const ref = `origin/${this._gitRepo.defaultBranch(input.repoPath)}`;
+    return (
+      this._specDocRepo.readAtRef(input.repoPath, ref, relPath) ??
+      this._specDocRepo.read(input.specPath)
+    );
   }
 }
