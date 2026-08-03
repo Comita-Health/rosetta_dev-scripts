@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** enforcing-mode merges no longer fail on every task. The
+  merge ran `gh pr merge --squash --delete-branch`, and the engine only ever
+  merges a branch checked out in one of its own worktrees, so gh always failed
+  the *local* delete — after the merge had already landed. Every task reported
+  `merge failed`, filed a needs-human issue, and held the phase gate behind
+  work that was in fact on the default branch. `--delete-branch` is dropped
+  (repos set `delete_branch_on_merge`), and a merge command that exits non-zero
+  is now reconciled against real PR state before it is called a failure.
 - **sdlc-workflow:** `run --detach` no longer reports success when the child
   dies during startup. It printed `[supervise] detached` and exited 0 as soon
   as the spawn returned, so a bad `--spec` path, a still-`Draft` spec, or a
