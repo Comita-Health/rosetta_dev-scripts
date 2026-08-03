@@ -14,6 +14,7 @@ import {
 } from '../services/executor.service';
 import { WORKFLOW_TOKENS } from '../tokens';
 import { RunState, SpecDocument, stepKey } from '../types';
+import { inputsDigest } from '../utils/digest';
 import { makeEnvelope, makeTask } from './fixtures';
 
 const makeSpec = (overrides: Partial<SpecDocument> = {}): SpecDocument => ({
@@ -325,6 +326,74 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
     // T-01 phase breach + unmerged: T-02 stays ineligible; T-01 not retried.
     expect(pool.kind).toBe('no-ready-task');
     expect(agentRun).not.toHaveBeenCalled();
+  });
+
+  it('re-selects a red-phase task when tip advanced after verification breach', async () => {
+    const tipHead = 'fixed-tip-sha';
+    gitMock.headSha.mockImplementation((repoPath: string) =>
+      repoPath.includes('worktrees') ? tipHead : 'base-sha'
+    );
+    const { mkdtempSync, mkdirSync, rmSync } = await import('fs');
+    const { tmpdir } = await import('os');
+    const runsDir = mkdtempSync(path.join(tmpdir(), 'sdlc-recover-'));
+    const wt = path.join(runsDir, INPUT.runId, 'worktrees', 'T-01');
+    mkdirSync(wt, { recursive: true });
+
+    const state = baseState();
+    const digest = implementationDigest(makeSpec().tasks[0], 'base-sha');
+    const staleVerifyDigest = inputsDigest({
+      implDigest: digest,
+      headSha: 'old-failing-tip',
+      criteria: makeSpec().tasks[0].acceptanceCriteria
+    });
+    state.taskResults['T-01'] = {
+      taskId: 'T-01',
+      status: 'completed',
+      branch: 'sdlc/run-1/T-01',
+      inputsDigest: digest,
+      recordedAt: 'x'
+    };
+    state.steps[stepKey('implementation', 'T-01', digest)] = {
+      name: 'implementation',
+      taskId: 'T-01',
+      inputsDigest: digest,
+      completedAt: 'x'
+    };
+    state.steps[stepKey('verification', 'T-01', staleVerifyDigest)] = {
+      name: 'verification',
+      taskId: 'T-01',
+      inputsDigest: staleVerifyDigest,
+      completedAt: 'x',
+      verdict: {
+        gate: 'verification',
+        outcome: 'breach',
+        wouldEscalate: true,
+        reasons: ['tests failed'],
+        recordedAt: 'x'
+      }
+    };
+    state.steps[stepKey('phase', 'T-01', 'p')] = {
+      name: 'phase',
+      taskId: 'T-01',
+      inputsDigest: 'p',
+      completedAt: 'y',
+      verdict: {
+        gate: 'phase',
+        outcome: 'breach',
+        wouldEscalate: true,
+        reasons: ['failing gates: verification'],
+        recordedAt: 'y'
+      }
+    };
+    stateMock.load.mockReturnValue(state);
+
+    try {
+      const pool = await executor.executeReady({ ...INPUT, runsDir });
+      expect(pool.kind).toBe('executed');
+      expect(pool.outcomes.map(o => o.task.id)).toEqual(['T-01']);
+    } finally {
+      rmSync(runsDir, { recursive: true, force: true });
+    }
   });
 
   it('re-selects a green-phase unmerged task so enforce can retry merge', async () => {

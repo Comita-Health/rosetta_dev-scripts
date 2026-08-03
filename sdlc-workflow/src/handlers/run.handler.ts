@@ -325,7 +325,8 @@ export class RunHandler implements IRunHandler {
     );
     const headSha = this._gitRepo.headSha(worktreePath);
     // Every downstream step chains off the implementation digest, so a spec
-    // content edit invalidates exactly this task's steps (T-09).
+    // content edit invalidates exactly this task's steps (T-09). `headSha`
+    // is refreshed when the tip moves mid-pipeline (late commit / CI fix).
     const chain = { implDigest: outcome.implDigest, headSha };
 
     this._heartbeat.setContext({
@@ -441,7 +442,7 @@ export class RunHandler implements IRunHandler {
       testTierPromise
     ]);
 
-    const verificationVerdict = await this.verificationStep(
+    let verificationVerdict = await this.verificationStep(
       input,
       state,
       task,
@@ -449,6 +450,19 @@ export class RunHandler implements IRunHandler {
       sandboxOutcome.healthReport,
       inputsDigest({ ...chain, criteria: task.acceptanceCriteria }),
       precomputedTestTier
+    );
+
+    // Tip may advance after verification (late agent commit, salvage commit).
+    // Re-verify against the current head before CI so a fix already on the
+    // branch is not frozen behind a stale red verification verdict.
+    verificationVerdict = await this.reverifyIfTipMoved(
+      input,
+      state,
+      task,
+      worktreePath,
+      sandboxOutcome.healthReport,
+      chain,
+      verificationVerdict
     );
 
     // P3 T-03: live CI gate — poll the pushed branch's checks to terminal,
@@ -483,6 +497,18 @@ export class RunHandler implements IRunHandler {
         }
         return verdict;
       }
+    );
+
+    // CI fix agents (or salvage commits during the monitor) can move HEAD
+    // again — re-verify before phase aggregation.
+    verificationVerdict = await this.reverifyIfTipMoved(
+      input,
+      state,
+      task,
+      worktreePath,
+      sandboxOutcome.healthReport,
+      chain,
+      verificationVerdict
     );
 
     const phaseDigest = inputsDigest({ ...chain, step: 'phase' });
@@ -1371,6 +1397,40 @@ export class RunHandler implements IRunHandler {
     });
     this.printVerdict(sandbox.verdict);
     return { verdict: sandbox.verdict, healthReport: sandbox.healthReport };
+  }
+
+  /**
+   * When the worktree tip advanced after a verification verdict was taken,
+   * re-run verification under the new head digest so phase aggregation sees
+   * the fixed tree (same-wave auto-recover).
+   */
+  private async reverifyIfTipMoved(
+    input: RunTaskInput,
+    state: RunState,
+    task: SpecTask,
+    worktreePath: string,
+    healthReport: string | undefined,
+    chain: { implDigest: string; headSha: string },
+    current: GateVerdict
+  ): Promise<GateVerdict> {
+    const tip = this._gitRepo.headSha(worktreePath);
+    if (tip === chain.headSha) {
+      return current;
+    }
+    console.log(
+      chalk.yellow(
+        `  [recover] tip moved ${chain.headSha.slice(0, 12)} → ${tip.slice(0, 12)} — re-running verification`
+      )
+    );
+    chain.headSha = tip;
+    return this.verificationStep(
+      input,
+      state,
+      task,
+      worktreePath,
+      healthReport,
+      inputsDigest({ ...chain, criteria: task.acceptanceCriteria })
+    );
   }
 
   private async verificationStep(

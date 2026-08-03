@@ -147,10 +147,33 @@ describe('CiGateService (P3 T-03 live monitor + bounded fix cycle)', () => {
     expect(agentRun).not.toHaveBeenCalled();
   });
 
-  it('blocks when the commit exists but reports zero check runs', async () => {
+  it('waits for check runs to register before treating zero as terminal', async () => {
+    checkRuns
+      .mockReturnValueOnce({ total: 0, failed: [], pending: [] })
+      .mockReturnValueOnce({ total: 0, failed: [], pending: [] })
+      .mockReturnValue(green);
+
+    const verdict = await gate.monitor({
+      ...input(),
+      pollIntervalMs: 1,
+      timeoutMs: 5_000
+    });
+
+    expect(verdict.outcome).toBe('pass');
+    expect(verdict.transcript).toContain(
+      'waiting for check runs to register for abc123'
+    );
+    expect(checkRuns).toHaveBeenCalledTimes(3);
+  });
+
+  it('blocks when zero check runs persist through the deadline', async () => {
     checkRuns.mockReturnValue({ total: 0, failed: [], pending: [] });
 
-    const verdict = await gate.monitor(input());
+    const verdict = await gate.monitor({
+      ...input(),
+      pollIntervalMs: 1,
+      timeoutMs: 5
+    });
 
     expect(verdict.outcome).toBe('blocked');
     expect(verdict.reasons[0]).toContain('no check runs');
