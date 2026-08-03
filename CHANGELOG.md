@@ -19,6 +19,16 @@
   twice after hitting a blocked gate, both attempted relaunches were
   misreported as startup crashes, and the resulting wake sat unconsumed in
   the local inbox with nobody watching.
+- **team-setup:** `wake-inbox.sh`'s `wake_emit` now fires a native macOS
+  notification banner (`osascript display notification`) alongside the
+  existing pending-file write, best-effort and non-blocking. The durable
+  file was already reachable by the Cursor stop hook, but that hook only
+  drains on the next turn boundary — a wake created while chat is fully
+  idle had no path to a human until they happened to start a new turn on
+  their own. The system notification reaches the human directly and closes
+  that idle-chat gap. Found live: a daemon relaunch-failed wake sat in
+  `~/.rosetta/wake/pending` for 30+ minutes during idle chat with nobody
+  alerted.
 - **sdlc-workflow:** task worktrees are now cleaned up automatically once
   their work has actually merged. `GitRepository.removeWorktreeAsync`
   dispatches `git worktree remove --force` without waiting for it —
