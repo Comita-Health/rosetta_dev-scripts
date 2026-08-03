@@ -133,4 +133,48 @@ describe('EnvelopeGateService (T-02)', () => {
       'unresolvable surface label: auth'
     );
   });
+
+  it('breaches on specs/** even when the path is listed in allowedPaths', async () => {
+    setDiff({
+      files: [
+        { path: 'src/feature/a.ts', lines: 4 },
+        { path: 'specs/PRD-0004/phase-0g-spec.md', lines: 2 }
+      ],
+      totalLines: 6
+    });
+
+    const verdict = await gate.evaluate({
+      ...INPUT,
+      envelope: makeEnvelope({
+        allowedPaths: ['src/**', 'specs/PRD-0004/**'],
+        forbiddenSurfaces: [],
+        maxDiffLines: 100
+      })
+    });
+
+    expect(verdict.outcome).toBe('breach');
+    expect(verdict.reasons.join(' ')).toContain('mid-run specs/**');
+    expect(verdict.reasons.join(' ')).toContain(
+      'specs/PRD-0004/phase-0g-spec.md'
+    );
+  });
+
+  it('breaches on nested **/specs/** paths', async () => {
+    setDiff({
+      files: [{ path: 'packages/foo/specs/note.md', lines: 1 }],
+      totalLines: 1
+    });
+
+    const verdict = await gate.evaluate({
+      ...INPUT,
+      envelope: makeEnvelope({
+        allowedPaths: ['packages/**'],
+        forbiddenSurfaces: [],
+        maxDiffLines: 100
+      })
+    });
+
+    expect(verdict.outcome).toBe('breach');
+    expect(verdict.reasons.join(' ')).toContain('packages/foo/specs/note.md');
+  });
 });

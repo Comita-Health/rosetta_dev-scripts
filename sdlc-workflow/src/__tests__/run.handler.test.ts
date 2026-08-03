@@ -283,7 +283,10 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
       .toConstantValue({ post: escalationPost });
     container
       .bind<ISpecDocRepository>(WORKFLOW_TOKENS.SpecDocRepository)
-      .toConstantValue({ read: specRead });
+      .toConstantValue({
+        read: specRead,
+        readAtRef: jest.fn().mockImplementation(() => specRead())
+      });
     container
       .bind<ISandboxDeployService>(WORKFLOW_TOKENS.SandboxDeployService)
       .toConstantValue({ deploy });
@@ -517,6 +520,40 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
     expect(evaluate).not.toHaveBeenCalled();
     expect(review).not.toHaveBeenCalled();
     expect(appendVerdict).not.toHaveBeenCalled();
+  });
+
+  it('prints pool.detail and intake reasons when intake is blocked', async () => {
+    const blockedState = {
+      ...state,
+      verdicts: [
+        {
+          gate: 'intake' as const,
+          outcome: 'blocked' as const,
+          wouldEscalate: true,
+          reasons: [
+            'spec-not-merged',
+            'specs/x.md does not exist on origin/main — approve and merge the spec PR first'
+          ],
+          recordedAt: 'x'
+        }
+      ]
+    };
+    executeReady.mockResolvedValue({
+      kind: 'blocked',
+      spec: SPEC,
+      state: blockedState,
+      detail: 'spec-not-merged',
+      outcomes: []
+    });
+
+    await handler.runTask(INPUT);
+
+    const printed = (console.log as jest.Mock).mock.calls
+      .map(c => String(c[0]))
+      .join('\n');
+    expect(printed).toContain('spec-not-merged');
+    expect(printed).toContain('does not exist on origin/main');
+    expect(printed).not.toContain('unapproved-spec');
   });
 
   it('reports no-ready-task without gate evaluation', async () => {

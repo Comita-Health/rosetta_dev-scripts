@@ -211,7 +211,7 @@ export class GitRepository implements IGitRepository {
   }
 
   diffStat(repoPath: string, baseRef: string, headRef: string): DiffStat {
-    const raw = git(repoPath, `diff --numstat "${baseRef}".."${headRef}"`);
+    const raw = git(repoPath, `diff --numstat --no-renames "${baseRef}".."${headRef}"`);
     const files: DiffStat['files'] = [];
     let totalLines = 0;
     for (const line of raw.split('\n')) {

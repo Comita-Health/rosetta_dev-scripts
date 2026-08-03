@@ -276,11 +276,15 @@ describe('parseSpec', () => {
 });
 
 describe('SpecDocRepository', () => {
-  const repo = new SpecDocRepository();
+  const git = {
+    fileAtRef: jest.fn()
+  };
+  const repo = new SpecDocRepository(git as never);
   let dir: string;
 
   beforeEach(() => {
     dir = mkdtempSync(path.join(os.tmpdir(), 'sdlc-spec-'));
+    git.fileAtRef.mockReset();
   });
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -294,5 +298,21 @@ describe('SpecDocRepository', () => {
     expect(() => repo.read(path.join(dir, 'missing.md'))).toThrow(
       expect.objectContaining({ code: 'SPEC_MALFORMED' })
     );
+  });
+
+  it('readAtRef parses the blob from git', () => {
+    git.fileAtRef.mockReturnValue(renderFixture());
+    const doc = repo.readAtRef('/repo', 'origin/main', 'specs/x.md');
+    expect(doc?.id).toBe('SPEC-PRD-0099-P1');
+    expect(git.fileAtRef).toHaveBeenCalledWith(
+      '/repo',
+      'origin/main',
+      'specs/x.md'
+    );
+  });
+
+  it('readAtRef returns null when the path is absent on the ref', () => {
+    git.fileAtRef.mockReturnValue(null);
+    expect(repo.readAtRef('/repo', 'origin/main', 'specs/x.md')).toBeNull();
   });
 });
