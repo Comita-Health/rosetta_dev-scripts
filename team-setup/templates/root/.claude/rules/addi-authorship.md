@@ -29,7 +29,30 @@ Approve their own PR and the proceed signal breaks.
 
 3. **Never** fall back to ambient human `gh` auth for PR/issue creation just
    because Addi returned 403. Report the permission error and ask the human to
-   grant the app `pull_requests: write` / `issues: write` on that repo.
+   grant the app `pull_requests: write` / `issues: write` on that repo — but
+   first rule out the fork-targeting false positive in rule 3a below, which
+   produces the exact same error text for a different reason.
+
+3a. **On a forked repo** (e.g. `Comita-Health/rosetta_dev-scripts`, forked
+    from `Rosetta-Foundation/rosetta_dev-scripts`): `gh pr create` /
+    `gh issue create` run **without an explicit `--repo`** default to
+    targeting the fork's **upstream parent**, not `origin`. The Addi token
+    for the fork's org correctly has no access to the upstream org, so this
+    fails with `GraphQL: Resource not accessible by integration
+    (createPullRequest)` — indistinguishable from a real permission error by
+    message alone, but it is not one; the same token succeeds immediately
+    with an explicit `--repo`. Diagnose before assuming a real gap:
+
+    ```bash
+    gh repo view --json isFork,parent --jq '{isFork,parent:.parent.nameWithOwner}'
+    # if isFork is true, always pass --repo explicitly:
+    gh pr create --repo <owner>/<repo> ...
+    gh issue create --repo <owner>/<repo> ...
+    ```
+
+    Confirm with a disposable probe if still unsure: create an empty commit
+    on a throwaway branch, `gh pr create --repo <owner>/<repo> ...`, verify
+    `app/<addi-slug>` authorship, then `gh pr close <n> --delete-branch`.
 
 4. After create, confirm author is the bot:
 
@@ -48,7 +71,11 @@ Approve their own PR and the proceed signal breaks.
 
 ## Anti-patterns
 
-- `unset GH_TOKEN` then `gh pr create` “because GraphQL failed once”.
+- `unset GH_TOKEN` then `gh pr create` “because GraphQL failed once” without
+  first checking whether the repo is a fork and retrying with `--repo`
+  (rule 3a) — the ambient-human fallback works only because it bypasses the
+  same fork-targeting bug by resolving `origin` differently, not because
+  Addi actually lacked the permission.
 - Opening the PR as human “just to land it” and hoping Approve still works.
 - Mixing Comita Addi tokens on Rosetta-Foundation repos (or the reverse)
   without checking `viewer.login` and installation repos.
