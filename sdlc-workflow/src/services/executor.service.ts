@@ -1,3 +1,4 @@
+import { existsSync } from 'fs';
 import { inject, injectable } from 'inversify';
 import path from 'path';
 import type { IAgentRunnerRepository } from '../repositories/agent-runner.repository';
@@ -116,10 +117,96 @@ const latestPhaseStep = (state: RunState, taskId: string) => {
 const isMerged = (state: RunState, taskId: string): boolean =>
   state.taskResults[taskId]?.mergedSha !== undefined;
 
+/**
+ * True when a red/blocked gate step was recorded under a digest that no
+ * longer matches the current worktree head — a fix commit landed after the
+ * breach, so resume must re-enter the gate pipeline rather than treat the
+ * red phase as terminal forever.
+ */
+const gateStaleVsTip = (
+  state: RunState,
+  taskId: string,
+  gateName: string,
+  freshDigest: string
+): boolean =>
+  Object.values(state.steps).some(step => {
+    if (step.name !== gateName || step.taskId !== taskId) {
+      return false;
+    }
+    const outcome = step.verdict?.outcome;
+    if (outcome !== 'breach' && outcome !== 'blocked') {
+      return false;
+    }
+    return step.inputsDigest !== freshDigest;
+  });
+
+/** Tip-moved recoverability across the gates that freeze a red phase. */
+const redGatesStaleVsTip = (
+  state: RunState,
+  task: SpecTask,
+  implDigest: string,
+  integrationTip: string,
+  worktreeHead: string | undefined,
+  envelope: SpecDocument['envelope']
+): boolean => {
+  if (worktreeHead === undefined || worktreeHead.length === 0) {
+    return false;
+  }
+  const chain = { implDigest, headSha: worktreeHead };
+  return (
+    gateStaleVsTip(
+      state,
+      task.id,
+      'verification',
+      inputsDigest({ ...chain, criteria: task.acceptanceCriteria })
+    ) ||
+    gateStaleVsTip(
+      state,
+      task.id,
+      'envelope',
+      inputsDigest({ ...chain, envelope, baseRef: integrationTip })
+    ) ||
+    gateStaleVsTip(
+      state,
+      task.id,
+      'reviewer',
+      inputsDigest({ ...chain, task, baseRef: integrationTip })
+    ) ||
+    gateStaleVsTip(
+      state,
+      task.id,
+      'ci',
+      inputsDigest({ ...chain, gate: 'ci' })
+    )
+  );
+};
+
+/** True when the latest CI step is a non-escalating block (retryable). */
+const latestCiRetryableBlock = (state: RunState, taskId: string): boolean => {
+  const ciSteps = Object.values(state.steps).filter(
+    step => step.name === 'ci' && step.taskId === taskId
+  );
+  if (ciSteps.length === 0) {
+    return false;
+  }
+  const latest = ciSteps.reduce((best, step) =>
+    step.completedAt > best.completedAt ? step : best
+  );
+  if (latest.verdict?.outcome !== 'blocked') {
+    return false;
+  }
+  const reasons = latest.verdict.reasons ?? [];
+  return reasons.some(
+    reason =>
+      reason.includes('no check runs') || reason.includes('no CI results')
+  );
+};
+
 const selectReadyTasks = (
   spec: SpecDocument,
   state: RunState,
-  maxParallel: number
+  maxParallel: number,
+  tipHeads: Record<string, string> = {}
 ): { task: SpecTask; implDigest: string; baseSha: string }[] => {
   const ready: { task: SpecTask; implDigest: string; baseSha: string }[] = [];
   for (const task of spec.tasks) {
@@ -145,13 +232,30 @@ const selectReadyTasks = (
         // Completed at the current content: resume the gate pipeline until
         // phase lands. After a *pass* phase with no merge step, re-select
         // so enforce can retry `gh pr merge` (dirty PR / flaky API). A
-        // *breach* phase stays terminal for this digest.
+        // *breach* phase is terminal unless tip moved after a red
+        // verification (fix commit) or CI was a retryable empty-checks
+        // race — both must auto-recover without a human clearing state.
         const phase = latestPhaseStep(state, task.id);
         if (phase !== undefined) {
           const passed = phase.verdict?.outcome === 'pass';
           const mergeDone = hasStep(state, 'merge', task.id);
-          if (!passed || mergeDone) {
+          if (mergeDone) {
             continue;
+          }
+          if (!passed) {
+            const tipHead = tipHeads[task.id];
+            const recoverable =
+              redGatesStaleVsTip(
+                state,
+                task,
+                digest,
+                tip,
+                tipHead,
+                spec.envelope
+              ) || latestCiRetryableBlock(state, task.id);
+            if (!recoverable) {
+              continue;
+            }
           }
         }
       }
@@ -215,7 +319,26 @@ export class ExecutorService implements IExecutorService {
 
     const existing = this._runStateRepo.load(input.runsDir, input.runId);
     const state: RunState = existing ?? this.initState(input, spec);
-    const selected = selectReadyTasks(spec, state, input.maxParallel);
+    // Worktree heads let resume detect "verification failed, then tip moved"
+    // without reopening unrelated red phases.
+    const tipHeads: Record<string, string> = {};
+    for (const task of spec.tasks) {
+      const worktreePath = path.join(
+        input.runsDir,
+        input.runId,
+        'worktrees',
+        task.id
+      );
+      if (!existsSync(worktreePath)) {
+        continue;
+      }
+      try {
+        tipHeads[task.id] = this._gitRepo.headSha(worktreePath);
+      } catch {
+        // Missing / corrupt worktree — leave unset; selection stays conservative.
+      }
+    }
+    const selected = selectReadyTasks(spec, state, input.maxParallel, tipHeads);
     if (selected.length === 0) {
       // No side effects: nothing is persisted for a no-op invocation.
       return { kind: 'no-ready-task', spec, state: existing, outcomes: [] };

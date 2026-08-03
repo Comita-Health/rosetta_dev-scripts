@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** auto-recover merge-blocked waves when (1) GitHub reports
+  zero check-runs right after push — keep polling until suites register
+  (gh#7401 race) instead of freezing a red phase; (2) the task tip advances
+  after a verification breach — re-verify in-wave and re-select on resume
+  when the worktree head no longer matches the failing verification digest.
 - **sdlc-workflow:** enforce intake / supervise re-read the Approved spec from
   `origin/<defaultBranch>` (`SpecDocRepository.readAtRef`) instead of comparing
   the operator working tree to origin. Stale local checkbox edits no longer

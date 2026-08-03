@@ -241,9 +241,28 @@ export class CiGateService implements ICiGateService {
   ): Promise<CheckRunSummary | null> {
     for (;;) {
       const summary = this._ciStatusRepo.checkRuns(repoPath, sha);
-      if (summary === null || summary.total === 0) return summary;
-      if (summary.pending.length === 0) return summary;
-      if (Date.now() >= deadline) return summary;
+      // `null` means gh/API failure — fail closed immediately.
+      if (summary === null) {
+        return null;
+      }
+      // GitHub often reports zero check-runs for several seconds after a
+      // push/PR open before Actions registers suites (gh#7401). Keep polling
+      // until something appears or the monitor deadline expires — do not
+      // treat empty as a terminal "no CI" block on the first sample.
+      if (summary.total === 0) {
+        if (Date.now() >= deadline) {
+          return summary;
+        }
+        log.push(`waiting for check runs to register for ${sha}`);
+        await sleep(pollIntervalMs);
+        continue;
+      }
+      if (summary.pending.length === 0) {
+        return summary;
+      }
+      if (Date.now() >= deadline) {
+        return summary;
+      }
       log.push(
         `waiting on ${summary.pending.length} pending check(s) for ${sha}`
       );
