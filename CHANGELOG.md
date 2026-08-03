@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- **sdlc-workflow / team-setup:** the continuity daemon could never actually
+  restart anything, and said it had. Launch records stored `execPath` (plain
+  node) plus a `.ts` entry but not the interpreter flags, so every relaunch —
+  and every `run --supervise --detach` from a source checkout — died on
+  `ERR_UNKNOWN_FILE_EXTENSION` before reading a byte. The daemon then wrote the
+  corpse's pid, logged "relaunched", and woke the operator to "confirm it is
+  making progress". Launch records now carry `execArgv` and both the detach
+  path and the daemon replay it (records already on disk fall back to `tsx`),
+  and the daemon probes the child before claiming a restart, escalating a
+  distinct wake when it dies immediately.
+- **team-setup:** the continuity daemon no longer re-logs and re-kills a
+  stalled agent on every 60s tick. A killed agent never touches its heartbeat
+  again, so the condition is permanent once detected — one abandoned run
+  emitted 800 "stalled — killing" lines over 13 hours, burying every other
+  run. The kill now happens once per condition, matching the wake.
+- **sdlc-workflow:** enforcing-mode merges no longer fail on every task. The
+  merge ran `gh pr merge --squash --delete-branch`, and the engine only ever
+  merges a branch checked out in one of its own worktrees, so gh always failed
+  the *local* delete — after the merge had already landed. Every task reported
+  `merge failed`, filed a needs-human issue, and held the phase gate behind
+  work that was in fact on the default branch. `--delete-branch` is dropped
+  (repos set `delete_branch_on_merge`), and a merge command that exits non-zero
+  is now reconciled against real PR state before it is called a failure.
 - **sdlc-workflow:** `run --detach` no longer reports success when the child
   dies during startup. It printed `[supervise] detached` and exited 0 as soon
   as the spawn returned, so a bad `--spec` path, a still-`Draft` spec, or a

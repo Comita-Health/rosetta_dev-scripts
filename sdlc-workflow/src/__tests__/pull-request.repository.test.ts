@@ -107,9 +107,10 @@ describe('PullRequestRepository (P3 T-02)', () => {
       const sha = await repo.merge('/repo', 14);
 
       expect(sha).toBe('abc123def4567890abc123def4567890abc123de');
-      expect(execMock.mock.calls[1][0]).toContain(
-        'gh pr merge 14 --squash --delete-branch'
-      );
+      expect(execMock.mock.calls[1][0]).toContain('gh pr merge 14 --squash');
+      // The engine merges branches held in its own worktrees, where gh's
+      // local delete always fails after the merge has landed.
+      expect(execMock.mock.calls[1][0]).not.toContain('--delete-branch');
       expect(execMock.mock.calls[2][0]).toContain('gh pr view 14');
     });
 
@@ -245,6 +246,60 @@ describe('PullRequestRepository (P3 T-02)', () => {
 
       await expect(repo.merge('/repo', 14)).rejects.toThrow(
         expect.objectContaining({ code: 'GH_FAILED' })
+      );
+    });
+
+    it('succeeds when gh exits non-zero but the merge actually landed', async () => {
+      execMock
+        .mockReturnValueOnce('') // .stack -> unstacked
+        .mockImplementationOnce(() => {
+          throw new Error('failed to delete local branch: used by worktree');
+        })
+        .mockReturnValueOnce('MERGED\n') // state probe
+        .mockReturnValueOnce('abc123def4567890abc123def4567890abc123de\n');
+
+      await expect(repo.merge('/repo', 14)).resolves.toBe(
+        'abc123def4567890abc123def4567890abc123de'
+      );
+    });
+
+    it('still throws when gh fails and the PR is not merged', async () => {
+      execMock
+        .mockReturnValueOnce('')
+        .mockImplementationOnce(() => {
+          throw new Error('gh: merge conflict');
+        })
+        .mockReturnValueOnce('OPEN\n');
+
+      await expect(repo.merge('/repo', 14)).rejects.toThrow(
+        expect.objectContaining({ code: 'GH_FAILED' })
+      );
+    });
+
+    it('reports failure when even the merged-state probe fails', async () => {
+      execMock
+        .mockReturnValueOnce('')
+        .mockImplementationOnce(() => {
+          throw new Error('gh: merge conflict');
+        })
+        .mockImplementationOnce(() => {
+          throw new Error('gh: network down');
+        });
+
+      await expect(repo.merge('/repo', 14)).rejects.toThrow(
+        expect.objectContaining({ code: 'GH_FAILED' })
+      );
+    });
+
+    it('reconciles a stacked merge that errored after landing', async () => {
+      execMock
+        .mockReturnValueOnce('{"base":"f/parent"}\n')
+        .mockReturnValueOnce('{"status":"rejected"}') // mergeStack throws
+        .mockReturnValueOnce('MERGED\n')
+        .mockReturnValueOnce('abc123def4567890abc123def4567890abc123de\n');
+
+      await expect(repo.merge('/repo', 14)).resolves.toBe(
+        'abc123def4567890abc123def4567890abc123de'
       );
     });
   });
