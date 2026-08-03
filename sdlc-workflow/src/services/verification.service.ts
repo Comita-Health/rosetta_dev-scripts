@@ -21,7 +21,19 @@ export interface VerificationInput {
   task: SpecTask;
   /** Sandbox health output; absent when the sandbox gate did not pass. */
   healthReport?: string;
+  /**
+   * Test-tier verdicts already computed by {@link verifyTestTierOnly}, run
+   * by the caller in parallel with the sandbox deploy. When present, the
+   * test-tier scripted check is not re-run.
+   */
+  precomputedTestTier?: CriterionVerdict[];
 }
+
+/** Fields {@link verifyTestTierOnly} needs — no sandbox health report. */
+export type TestTierInput = Pick<
+  VerificationInput,
+  'worktreePath' | 'runsDir' | 'runId' | 'task'
+>;
 
 export interface VerificationOutcome {
   verdict: GateVerdict;
@@ -39,9 +51,22 @@ const TEST_TIMEOUT_MS = 30 * 60_000;
  * agent that drives the running sandbox, its transcript attached as
  * evidence; manual-tier criteria force a human-required verdict. The
  * aggregate is green only when every criterion passes.
+ *
+ * The test tier has no dependency on the sandbox deploy — only agent-tier
+ * criteria consume `healthReport`. {@link verifyTestTierOnly} lets the
+ * orchestrator run it concurrently with the sandbox gate instead of paying
+ * for both sequentially.
  */
 export interface IVerificationService {
   verify(input: VerificationInput): Promise<VerificationOutcome>;
+  /**
+   * Runs just the test-tier scripted check, independent of the sandbox.
+   * Returns `undefined` on a criteria-parse failure so the caller's
+   * subsequent `verify()` call — not this shortcut — surfaces the error.
+   */
+  verifyTestTierOnly(
+    input: TestTierInput
+  ): Promise<CriterionVerdict[] | undefined>;
 }
 
 @injectable()
@@ -64,7 +89,10 @@ export class VerificationService implements IVerificationService {
 
     const testTier = tiered.filter(criterion => criterion.tier === 'test');
     if (testTier.length > 0) {
-      verdicts.push(...this.runTestTier(input, testTier));
+      verdicts.push(
+        ...(input.precomputedTestTier ??
+          (await this.runTestTier(input, testTier)))
+      );
     }
 
     for (const criterion of tiered.filter(item => item.tier === 'agent')) {
@@ -78,10 +106,26 @@ export class VerificationService implements IVerificationService {
     return { verdict: this.aggregate(verdicts), criteria: verdicts };
   }
 
-  private runTestTier(
+  async verifyTestTierOnly(
+    input: TestTierInput
+  ): Promise<CriterionVerdict[] | undefined> {
+    let tiered: TieredCriterion[];
+    try {
+      tiered = parseAllCriteria(input.task.acceptanceCriteria);
+    } catch {
+      // Malformed criteria: let the real verify() call raise this the same
+      // way it always has, instead of duplicating that error path here.
+      return undefined;
+    }
+    const testTier = tiered.filter(criterion => criterion.tier === 'test');
+    if (testTier.length === 0) return [];
+    return this.runTestTier(input as VerificationInput, testTier);
+  }
+
+  private async runTestTier(
     input: VerificationInput,
     criteria: TieredCriterion[]
-  ): CriterionVerdict[] {
+  ): Promise<CriterionVerdict[]> {
     const contract = this._contractRepo.loadVerification(input.worktreePath);
     if (contract === null) {
       // Without a scripted-check contract the tier cannot execute; a human
@@ -93,7 +137,7 @@ export class VerificationService implements IVerificationService {
 
     // One scripted-check run covers the tier; each criterion records its
     // own verdict referencing the shared captured-output artifact.
-    const result = this._shellRepo.run(
+    const result = await this._shellRepo.run(
       input.worktreePath,
       contract.testCommand,
       { SDLC_TASK_ID: input.task.id },
