@@ -144,6 +144,80 @@ describe('parseSpec', () => {
     expect(doc.envelope.budgetK).toBe(160);
   });
 
+  // A naive split(',') shreds a brace glob into two broken halves. In
+  // forbiddenSurfaces that is quietly dangerous: neither half matches
+  // anything, so the surface the envelope was meant to guard stops being
+  // enforced and the gate still reports green.
+  it('keeps brace globs and quoted commas intact in envelope arrays', () => {
+    const markdown = [
+      '---',
+      'id: SPEC-X-P1',
+      'prd: PRD-X',
+      'phase: 1',
+      'status: Approved',
+      'envelope:',
+      '  allowedPaths:',
+      "    ['packages/app/backend/src/**/*.{test,spec}.ts', 'docs/**']",
+      '  forbiddenSurfaces:',
+      "    ['infra/{prod,staging}/**', 'production-deploy']",
+      '  maxDiffLines: 100',
+      '  budgetK: 40',
+      '---',
+      '',
+      '# SPEC-X-P1: Brace globs.',
+      '',
+      '## Task T-01: Do it',
+      '',
+      '- **Complexity:** S',
+      '',
+      '### Acceptance criteria',
+      '',
+      '- [ ] test: it works'
+    ].join('\n');
+
+    const doc = parseSpec(markdown);
+
+    expect(doc.envelope.allowedPaths).toEqual([
+      'packages/app/backend/src/**/*.{test,spec}.ts',
+      'docs/**'
+    ]);
+    expect(doc.envelope.forbiddenSurfaces).toEqual([
+      'infra/{prod,staging}/**',
+      'production-deploy'
+    ]);
+  });
+
+  it('does not split a comma inside a quoted envelope entry', () => {
+    const markdown = [
+      '---',
+      'id: SPEC-X-P1',
+      'prd: PRD-X',
+      'phase: 1',
+      'status: Approved',
+      'envelope:',
+      '  allowedPaths: ["docs/a,b.md", "docs/c.md"]',
+      '  forbiddenSurfaces: []',
+      '  maxDiffLines: 10',
+      '  budgetK: 5',
+      '---',
+      '',
+      '# SPEC-X-P1: Quoted comma.',
+      '',
+      '## Task T-01: Do it',
+      '',
+      '- **Complexity:** S',
+      '',
+      '### Acceptance criteria',
+      '',
+      '- [ ] test: it works'
+    ].join('\n');
+
+    expect(parseSpec(markdown).envelope.allowedPaths).toEqual([
+      'docs/a,b.md',
+      'docs/c.md'
+    ]);
+  });
+
   it('tolerates sparse task metadata and wrapped criteria', () => {
     const markdown = [
       '---',
