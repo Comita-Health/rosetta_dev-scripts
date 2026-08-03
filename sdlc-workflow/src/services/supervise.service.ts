@@ -135,6 +135,11 @@ export class SuperviseService implements ISuperviseService {
           shadow: input.shadow === true,
           cwd: process.cwd(),
           execPath: process.execPath,
+          // Without the interpreter flags the record is not re-runnable when
+          // the engine runs from source: `execPath` is plain node and argv[0]
+          // is a `.ts` file, so a relaunch dies on ERR_UNKNOWN_FILE_EXTENSION
+          // before it can read anything. Under tsx these carry the loader.
+          execArgv: process.execArgv,
           argv: childArgv,
           recordedAt: new Date().toISOString()
         },
@@ -155,7 +160,9 @@ export class SuperviseService implements ISuperviseService {
     this.writeLaunchRecord(input, childArgv);
     const { pid } = this._detachRepo.spawnDetached({
       command: process.execPath,
-      args: childArgv,
+      // Replay the interpreter flags, or a source checkout detaches into
+      // `node src/index.ts` and the child dies before it runs a single wave.
+      args: [...process.execArgv, ...childArgv],
       cwd: process.cwd(),
       logPath,
       env: {
