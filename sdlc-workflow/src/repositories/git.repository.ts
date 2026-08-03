@@ -1,4 +1,4 @@
-import { execSync } from 'child_process';
+import { execSync, spawn } from 'child_process';
 import { existsSync } from 'fs';
 import { injectable } from 'inversify';
 import { DiffStat, WorkflowError } from '../types';
@@ -54,6 +54,16 @@ export interface IGitRepository {
    * cannot block the run (#41).
    */
   commit(repoPath: string, message: string, options?: GitCommitOptions): void;
+  /**
+   * Dispatch `git worktree remove` for a completed task and return without
+   * waiting for it to finish. A stale worktree is disk-space debt, not a
+   * correctness problem, so removal must never block or fail the caller —
+   * a locked file or a shell still `cd`-ed into the directory only logs a
+   * warning. Never call this before the task's work has actually landed
+   * (merged or otherwise finalized): a worktree still holds the only copy
+   * of an unmerged branch's checkout.
+   */
+  removeWorktreeAsync(repoPath: string, worktreePath: string): void;
 }
 
 const git = (repoPath: string, args: string): string => {
@@ -133,6 +143,35 @@ export class GitRepository implements IGitRepository {
     const escaped = message.replace(/"/g, '\\"');
     const flagStr = flags.length > 0 ? `${flags.join(' ')} ` : '';
     git(repoPath, `commit ${flagStr}-m "${escaped}"`);
+  }
+
+  removeWorktreeAsync(repoPath: string, worktreePath: string): void {
+    if (!existsSync(worktreePath)) return;
+    const child = spawn(
+      'git',
+      ['-C', repoPath, 'worktree', 'remove', '--force', worktreePath],
+      { stdio: ['ignore', 'ignore', 'pipe'] }
+    );
+    let stderr = '';
+    child.stderr?.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString('utf-8');
+    });
+    child.on('error', err => {
+      console.warn(
+        `[worktree-cleanup] failed to spawn removal for ${worktreePath}: ${err.message}`
+      );
+    });
+    child.on('close', code => {
+      if (code !== 0) {
+        console.warn(
+          `[worktree-cleanup] git worktree remove exited ${code} for ` +
+            `${worktreePath}: ${stderr.trim().slice(0, 300)}`
+        );
+      }
+    });
+    // Never lets a background daemon's process wait on this child at exit —
+    // fire-and-forget means the cleanup outlives interest in its outcome.
+    child.unref();
   }
 
   diffStat(repoPath: string, baseRef: string, headRef: string): DiffStat {

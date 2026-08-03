@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** task worktrees are now cleaned up automatically once
+  their work has actually merged. `GitRepository.removeWorktreeAsync`
+  dispatches `git worktree remove --force` without waiting for it —
+  fire-and-forget, so a locked file or slow removal can never block run
+  progress or turn a landed merge into a reported failure. Wired into both
+  merge paths: the engine's own enforcing-mode merge, and `record-merge`
+  (now accepting an optional `--repo`) for merges acknowledged externally
+  (e.g. a human Approve that GHA merged). Closes the manual
+  `git worktree prune` cleanup this session kept needing by hand.
 - **team-setup:** add `/write-bug-spec` command and
   `rosetta_docs/product/BUG-SPEC-TEMPLATE.md` — a lightweight entry point
   into the spec-run-verify-merge machine for bugs that skips the PRD and

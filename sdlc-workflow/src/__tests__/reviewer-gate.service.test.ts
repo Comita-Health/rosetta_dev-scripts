@@ -46,7 +46,8 @@ describe('ReviewerGateService (T-05)', () => {
         defaultBranch: jest.fn(),
         revertMerge: jest.fn(),
         stageAll: jest.fn(),
-        commit: jest.fn()
+        commit: jest.fn(),
+        removeWorktreeAsync: jest.fn()
       });
     container
       .bind<IInferenceRepository>(WORKFLOW_TOKENS.InferenceRepository)

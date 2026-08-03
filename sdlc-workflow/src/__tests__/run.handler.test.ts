@@ -1,4 +1,5 @@
 import 'reflect-metadata';
+import path from 'path';
 import { Container } from 'inversify';
 import { IRunHandler, RunHandler } from '../handlers/run.handler';
 import type { IEvidenceRepository } from '../repositories/evidence.repository';
@@ -102,6 +103,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
   let prCreate: jest.Mock;
   let gitPush: jest.Mock;
   let gitFetch: jest.Mock;
+  let removeWorktreeAsync: jest.Mock;
   let specRead: jest.Mock;
   let escalationPost: jest.Mock;
 
@@ -239,6 +241,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
     revertMerge = jest.fn();
     gitPush = jest.fn();
     gitFetch = jest.fn();
+    removeWorktreeAsync = jest.fn();
     prCreate = jest.fn().mockReturnValue({
       url: 'https://github.com/org/repo/pull/99',
       number: 99
@@ -317,7 +320,8 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
         defaultBranch: jest.fn().mockReturnValue('main'),
         revertMerge,
         stageAll: jest.fn(),
-        commit: jest.fn()
+        commit: jest.fn(),
+        removeWorktreeAsync
       });
     container
       .bind<IHeartbeatService>(WORKFLOW_TOKENS.HeartbeatService)
@@ -1259,5 +1263,33 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
       mergedSha: 'abc123def456',
       taskId: 'T-01'
     });
+  });
+
+  it('record-merge schedules fire-and-forget worktree cleanup when both task and repo are given', async () => {
+    await handler.recordMerge({
+      chronicleRepo: '/chronicle',
+      runsDir: '/runs',
+      runId: 'run-1',
+      mergedSha: 'abc123def456',
+      taskId: 'T-01',
+      repoPath: '/repo'
+    });
+
+    expect(removeWorktreeAsync).toHaveBeenCalledWith(
+      '/repo',
+      path.join('/runs', 'run-1', 'worktrees', 'T-01')
+    );
+  });
+
+  it('record-merge does not attempt cleanup without a repoPath — there is no repo to run git in', async () => {
+    await handler.recordMerge({
+      chronicleRepo: '/chronicle',
+      runsDir: '/runs',
+      runId: 'run-1',
+      mergedSha: 'abc123def456',
+      taskId: 'T-01'
+    });
+
+    expect(removeWorktreeAsync).not.toHaveBeenCalled();
   });
 });

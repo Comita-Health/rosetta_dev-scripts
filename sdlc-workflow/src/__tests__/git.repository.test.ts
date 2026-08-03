@@ -1,12 +1,25 @@
 import 'reflect-metadata';
+import { EventEmitter } from 'events';
 
-jest.mock('child_process', () => ({ execSync: jest.fn() }));
+jest.mock('child_process', () => ({
+  execSync: jest.fn(),
+  spawn: jest.fn()
+}));
 
-import { execSync } from 'child_process';
+import { execSync, spawn } from 'child_process';
+import { mkdtempSync, rmSync } from 'fs';
 import os from 'os';
+import path from 'path';
 import { GitRepository } from '../repositories/git.repository';
 
 const execMock = execSync as jest.Mock;
+const spawnMock = spawn as jest.Mock;
+
+/** Minimal fake child_process.ChildProcess for removeWorktreeAsync tests. */
+class FakeChild extends EventEmitter {
+  stderr = new EventEmitter();
+  unref = jest.fn();
+}
 
 describe('GitRepository', () => {
   const repo = new GitRepository();
@@ -119,5 +132,68 @@ describe('GitRepository', () => {
     expect(() => repo.status('/repo')).toThrow(
       expect.objectContaining({ code: 'GIT_FAILED', details: ['raw failure'] })
     );
+  });
+
+  describe('removeWorktreeAsync (fire-and-forget cleanup)', () => {
+    let worktreePath: string;
+    let warnSpy: jest.SpyInstance;
+
+    beforeEach(() => {
+      worktreePath = mkdtempSync(path.join(os.tmpdir(), 'sdlc-wt-'));
+      spawnMock.mockReset();
+      warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      rmSync(worktreePath, { recursive: true, force: true });
+      warnSpy.mockRestore();
+    });
+
+    it('does nothing when the worktree path does not exist', () => {
+      repo.removeWorktreeAsync('/repo', '/definitely/not/a/real/path');
+      expect(spawnMock).not.toHaveBeenCalled();
+    });
+
+    it('dispatches git worktree remove and unrefs it without waiting', () => {
+      const child = new FakeChild();
+      spawnMock.mockReturnValue(child);
+
+      repo.removeWorktreeAsync('/repo', worktreePath);
+
+      expect(spawnMock).toHaveBeenCalledWith(
+        'git',
+        ['-C', '/repo', 'worktree', 'remove', '--force', worktreePath],
+        expect.objectContaining({ stdio: ['ignore', 'ignore', 'pipe'] })
+      );
+      expect(child.unref).toHaveBeenCalled();
+      // A clean exit is silent — no warning for the common case.
+      child.emit('close', 0);
+      expect(warnSpy).not.toHaveBeenCalled();
+    });
+
+    it('warns but does not throw when the removal exits non-zero', () => {
+      const child = new FakeChild();
+      spawnMock.mockReturnValue(child);
+
+      expect(() => repo.removeWorktreeAsync('/repo', worktreePath)).not.toThrow();
+      child.stderr.emit('data', Buffer.from('fatal: worktree is locked'));
+      child.emit('close', 1);
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('worktree is locked')
+      );
+    });
+
+    it('warns but does not throw when spawn itself errors', () => {
+      const child = new FakeChild();
+      spawnMock.mockReturnValue(child);
+
+      expect(() => repo.removeWorktreeAsync('/repo', worktreePath)).not.toThrow();
+      child.emit('error', new Error('ENOENT'));
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('ENOENT')
+      );
+    });
   });
 });
