@@ -9,6 +9,17 @@ import { GateVerdict, SpecDocument, SpecTask } from '../types';
 export const prTitle = (runId: string, task: SpecTask): string =>
   `sdlc(${runId}): ${task.id} ${task.title}`;
 
+const TEST_TIER_PREFIX = /^test:\s*/;
+
+/**
+ * Deliberately not a full {@link parseAllCriteria} call: `prBody` is a pure
+ * render function that must never throw on a spec a human is actively
+ * reviewing, so this only ever adds an informational note and silently
+ * adds nothing for criteria that don't match the simple prefix check.
+ */
+const countTestTierCriteria = (criteria: string[]): number =>
+  criteria.filter(criterion => TEST_TIER_PREFIX.test(criterion.trim())).length;
+
 export const prBody = (
   spec: SpecDocument,
   task: SpecTask,
@@ -34,6 +45,16 @@ export const prBody = (
   ];
   for (const criterion of task.acceptanceCriteria) {
     lines.push(`- ${criterion}`);
+  }
+  const testTierCount = countTestTierCriteria(task.acceptanceCriteria);
+  if (testTierCount > 1) {
+    lines.push(
+      '',
+      `> All ${testTierCount} \`test:\` criteria above share **one** run of ` +
+        'the repo\'s scripted verify command — they are not independently ' +
+        'asserted. If a specific behavior needs its own guarantee, a real ' +
+        'test for it must exist in the repo.'
+    );
   }
 
   lines.push('', '## Gate verdicts');
