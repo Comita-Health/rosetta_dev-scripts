@@ -2,6 +2,52 @@
 
 ## Unreleased
 
+- **team-setup:** add `/write-bug-spec` command and
+  `rosetta_docs/product/BUG-SPEC-TEMPLATE.md` — a lightweight entry point
+  into the spec-run-verify-merge machine for bugs that skips the PRD and
+  `decompose` steps entirely. The engine's atomic unit is the Approved spec,
+  not the PRD; `decompose` is only one way to produce one, and forcing a
+  single-task bug fix through PRD-shaped Goals/Non-Goals/Rollout ceremony
+  and an LLM decompose call was needless overhead. Hand-author a minimal
+  spec (synthetic `prd: BUG-<slug>` label, one task, tight envelope) instead
+  and run it through the identical `sdlc-workflow run` — same envelope gate,
+  verification, reviewer, sandbox, and provenance checks a feature gets.
+  Reserved for non-trivial or blast-radius-sensitive bugs; a genuinely
+  trivial one-liner still doesn't need the machine.
+- **addi-authorship rule:** documented a recurring false-positive permission
+  error. `gh pr create`/`gh issue create` without an explicit `--repo`
+  default to targeting a forked repo's upstream parent, not `origin` — on
+  `Comita-Health/rosetta_dev-scripts` (forked from
+  `Rosetta-Foundation/rosetta_dev-scripts`) this produced `GraphQL: Resource
+  not accessible by integration (createPullRequest)`, indistinguishable
+  from Addi genuinely lacking `pull_requests: write`, which it does not.
+  Confirmed live: REST `POST /pulls` and a raw GraphQL `createPullRequest`
+  both pass the permission check on the same token; only `gh pr create`'s
+  default fork-upstream resolution failed. Fix is `--repo <owner>/<repo>`,
+  not a permission grant.
+- **sdlc-workflow:** the PRD parser now fails loudly and specifically instead
+  of silently degrading. `prd-parser.ts` required exact heading text/numbering
+  (`### 1.2 Goals`, an em-dash-only Rollout phase format) and returned empty
+  arrays on any mismatch — a hand-authored or agent-authored PRD that drifted
+  even slightly from that microformat produced no error, just a PRD that
+  quietly decomposed into worse (or, for empty goals, eventually-erroring)
+  output with no indication why. Sweeping this against every real PRD in
+  `rosetta_docs/product/` surfaced that even the *authoritative*
+  `TEMPLATE.md` and the engine's own founding `PRD-0011` don't match the old
+  strict Rollout regex (template puts the title outside the bold span;
+  PRD-0011 prefixes phases with a status emoji) — proof the old contract was
+  unworkable in practice, not just strict. Required sections (Goals,
+  Acceptance Criteria, Rollout) now throw a `PRD_MALFORMED` error naming the
+  exact missing heading the moment a heading truly isn't found, while Rollout
+  phase parsing itself became more permissive: it accepts either dash type
+  (—/-), a title inside or outside the bold span, and an optional
+  emoji/status marker, and correctly captures multi-line wrapped
+  descriptions (a separate, previously-silent bug: the old lazy-match
+  lookahead terminated at the end of a phase's first line, truncating or
+  dropping any phase whose description wrapped). Added `sdlc-workflow
+  prd-lint --prd <id> --docs-dir <dir>` — validates a PRD parses cleanly with
+  no LLM call and no `--repo`, for fast feedback right after drafting, before
+  `decompose` ever runs.
 - **sdlc-workflow:** sandbox deploy and test-tier verification now run
   concurrently instead of sequentially. `ShellCommandRepository` used
   `spawnSync`, which blocks Node's single thread — so even though the
