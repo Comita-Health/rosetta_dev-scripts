@@ -118,31 +118,66 @@ const isMerged = (state: RunState, taskId: string): boolean =>
   state.taskResults[taskId]?.mergedSha !== undefined;
 
 /**
- * True when a failing verification step was recorded against a tip that no
- * longer matches the worktree head — a fix commit landed after the breach,
- * so resume must re-enter the gate pipeline (new digests) rather than treat
- * the red phase as terminal forever.
+ * True when a red/blocked gate step was recorded under a digest that no
+ * longer matches the current worktree head — a fix commit landed after the
+ * breach, so resume must re-enter the gate pipeline rather than treat the
+ * red phase as terminal forever.
  */
-const verificationStaleVsTip = (
+const gateStaleVsTip = (
+  state: RunState,
+  taskId: string,
+  gateName: string,
+  freshDigest: string
+): boolean =>
+  Object.values(state.steps).some(step => {
+    if (step.name !== gateName || step.taskId !== taskId) {
+      return false;
+    }
+    const outcome = step.verdict?.outcome;
+    if (outcome !== 'breach' && outcome !== 'blocked') {
+      return false;
+    }
+    return step.inputsDigest !== freshDigest;
+  });
+
+/** Tip-moved recoverability across the gates that freeze a red phase. */
+const redGatesStaleVsTip = (
   state: RunState,
   task: SpecTask,
   implDigest: string,
-  tipHeadSha: string | undefined
+  integrationTip: string,
+  worktreeHead: string | undefined,
+  envelope: SpecDocument['envelope']
 ): boolean => {
-  if (tipHeadSha === undefined || tipHeadSha.length === 0) {
+  if (worktreeHead === undefined || worktreeHead.length === 0) {
     return false;
   }
-  const freshDigest = inputsDigest({
-    implDigest,
-    headSha: tipHeadSha,
-    criteria: task.acceptanceCriteria
-  });
-  return Object.values(state.steps).some(
-    step =>
-      step.name === 'verification' &&
-      step.taskId === task.id &&
-      step.verdict?.outcome === 'breach' &&
-      step.inputsDigest !== freshDigest
+  const chain = { implDigest, headSha: worktreeHead };
+  return (
+    gateStaleVsTip(
+      state,
+      task.id,
+      'verification',
+      inputsDigest({ ...chain, criteria: task.acceptanceCriteria })
+    ) ||
+    gateStaleVsTip(
+      state,
+      task.id,
+      'envelope',
+      inputsDigest({ ...chain, envelope, baseRef: integrationTip })
+    ) ||
+    gateStaleVsTip(
+      state,
+      task.id,
+      'reviewer',
+      inputsDigest({ ...chain, task, baseRef: integrationTip })
+    ) ||
+    gateStaleVsTip(
+      state,
+      task.id,
+      'ci',
+      inputsDigest({ ...chain, gate: 'ci' })
+    )
   );
 };
 
@@ -210,8 +245,14 @@ const selectReadyTasks = (
           if (!passed) {
             const tipHead = tipHeads[task.id];
             const recoverable =
-              verificationStaleVsTip(state, task, digest, tipHead) ||
-              latestCiRetryableBlock(state, task.id);
+              redGatesStaleVsTip(
+                state,
+                task,
+                digest,
+                tip,
+                tipHead,
+                spec.envelope
+              ) || latestCiRetryableBlock(state, task.id);
             if (!recoverable) {
               continue;
             }
