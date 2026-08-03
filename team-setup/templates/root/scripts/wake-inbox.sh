@@ -28,6 +28,25 @@ wake_init() {
   mkdir -p "$WAKE_PENDING" "$WAKE_CONSUMED"
 }
 
+# Best-effort native OS alert, independent of any agent chat being open.
+#
+# The stop-hook drain (see cursor-stop-append.sh) only runs at the end of an
+# agent turn, so a wake created while chat is fully idle — nobody typed
+# anything, no turn is in flight — has no path to an agent until the human
+# happens to start a new one. A system notification banner reaches the human
+# directly, closing that idle-chat gap without needing an agent to be
+# listening at all. Never allowed to fail the wake: notification delivery is
+# strictly best-effort on top of the durable file, which is the source of
+# truth either way.
+wake_notify_system() {
+  local kind="$1" prompt="$2"
+  command -v osascript >/dev/null 2>&1 || return 0
+
+  local body="${prompt:0:220}"
+  osascript -e "display notification \"$(printf '%s' "$body" | sed 's/"/\\"/g')\" with title \"SDLC wake: ${kind}\" sound name \"Ping\"" \
+    >/dev/null 2>&1 || true
+}
+
 # Filesystem-safe slug for a dedupe key.
 wake_slug() {
   printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '-' | cut -c1-96
@@ -72,6 +91,8 @@ PY
 
   # Atomic publish: a draining reader never sees a half-written file.
   mv -f "$tmp" "$file"
+
+  wake_notify_system "$kind" "$prompt"
 
   # Still print the sentinel: an agent actively watching this terminal gets
   # woken immediately rather than waiting for the next stop-hook drain.
