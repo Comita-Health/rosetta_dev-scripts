@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** `run --detach` no longer reports success when the child
+  dies during startup. It printed `[supervise] detached` and exited 0 as soon
+  as the spawn returned, so a bad `--spec` path, a still-`Draft` spec, or a
+  non-worktree `--repo` looked identical to a healthy launch — and no
+  `state.json` exists that early, so the continuity daemon skipped the run too.
+  The parent now probes the child after a startup grace and, if it is gone,
+  surfaces the tail of the child's own log and exits 1.
 - **team-setup:** deploy dual-tenant `addi-merge-webhook` to AWS Lambda Function
   URL (`comita-dev`); Comita + Rosetta org webhooks deliver
   `pull_request_review` → `repository_dispatch` (`addi-merge-on-approve`).
