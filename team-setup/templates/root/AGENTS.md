@@ -16,7 +16,7 @@ truth for workflow, git conventions, and architecture pointers.
 | Project brief        | `CLAUDE.md`                                                                                                      | `CLAUDE.md` + this `AGENTS.md`                                                         |
 | Architecture / style | `.claude/rules/`                                                                                                 | `.cursor/rules/*.mdc` (mirrored on setup)                                              |
 | Permissions          | `.claude/settings.json`                                                                                          | `.cursor/cli.json`                                                                     |
-| Slash-style prompts  | `.claude/commands/` (`/review`, `/add-repo`, `/sdlc-status`, `/prd-portfolio`, `/sdlc-run`, `/watch-pr-approve`) | Matching `.cursor/rules/command-*.mdc` — ask the agent to follow them                  |
+| Slash-style prompts  | `.claude/commands/` (`/review`, `/add-repo`, `/sdlc-status`, `/prd-portfolio`, `/sdlc-run`, `/watch-pr-approve`, `/write-prd`) | Matching `.cursor/rules/command-*.mdc` — ask the agent to follow them                  |
 | Agent skills         | `.claude/skills/`                                                                                                | `.cursor/skills/` (e.g. `pr-approve-watch`, `sdlc-run-supervise`, `sdlc-prd-progress`) |
 
 ## Quick start
