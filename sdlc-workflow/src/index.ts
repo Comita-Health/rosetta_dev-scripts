@@ -513,6 +513,11 @@ yargs(hideBin(process.argv))
           describe:
             'Task ID the merge belongs to — marks it merged, unblocking dependents (P3 T-01)'
         })
+        .option('repo', {
+          type: 'string',
+          describe:
+            'Target repo checkout — with --task, schedules fire-and-forget cleanup of the task worktree'
+        })
         .option('runs-dir', {
           type: 'string',
           default: path.join(os.homedir(), '.rosetta', 'sdlc-runs'),
@@ -526,7 +531,8 @@ yargs(hideBin(process.argv))
           runsDir: argv['runs-dir'],
           runId: argv['run-id'],
           mergedSha: argv.sha,
-          taskId: argv.task
+          taskId: argv.task,
+          repoPath: argv.repo
         });
       } catch (err) {
         if (err instanceof WorkflowError) {

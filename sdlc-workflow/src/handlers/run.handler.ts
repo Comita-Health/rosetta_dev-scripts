@@ -89,6 +89,14 @@ export interface RecordMergeCliInput {
   mergedSha: string;
   /** P3 T-01: also mark this task merged, unblocking its dependents. */
   taskId?: string;
+  /**
+   * Target repo checkout. Optional because older callers/scripts may not
+   * pass it, but without it a merge recorded through this CLI path (e.g. a
+   * human-approved merge acknowledged by a watcher script) cannot schedule
+   * worktree cleanup — only `taskId` alone isn't enough to locate the repo
+   * the worktree was created in.
+   */
+  repoPath?: string;
 }
 
 export interface StatusCliInput {
@@ -627,6 +635,7 @@ export class RunHandler implements IRunHandler {
           `  [enforce] all gates green — merged ${prUrl} at ${mergedSha.slice(0, 12)}`
         )
       );
+      this.scheduleWorktreeCleanup(input, task.id);
     } catch (err) {
       const detail =
         err instanceof WorkflowError
@@ -648,6 +657,33 @@ export class RunHandler implements IRunHandler {
         )
       );
     }
+  }
+
+  /**
+   * Fire-and-forget: once a task's PR has actually landed on the default
+   * branch, its worktree has done its job and is pure disk-space debt.
+   * Dispatched via {@link IGitRepository.removeWorktreeAsync} and never
+   * awaited — a stuck or failed removal must not block run progress or
+   * turn a landed merge into a reported failure (the same principle as
+   * the merge-reconciliation fix: a completed side effect is never undone
+   * by best-effort cleanup around it). Only call this after the merge is
+   * confirmed; a worktree still holds the only checkout of an unmerged
+   * branch.
+   */
+  private scheduleWorktreeCleanup(
+    input: { runsDir: string; runId: string; repoPath: string },
+    taskId: string
+  ): void {
+    const worktreePath = path.join(
+      input.runsDir,
+      input.runId,
+      'worktrees',
+      taskId
+    );
+    console.log(
+      chalk.gray(`  [cleanup] removing worktree for ${taskId} (background)`)
+    );
+    this._gitRepo.removeWorktreeAsync(input.repoPath, worktreePath);
   }
 
   /**
@@ -1073,6 +1109,12 @@ export class RunHandler implements IRunHandler {
         `✓ merge ${input.mergedSha.slice(0, 12)} recorded for ${input.runId} (${artifactPath})`
       )
     );
+    if (input.taskId !== undefined && input.repoPath !== undefined) {
+      this.scheduleWorktreeCleanup(
+        { runsDir: input.runsDir, runId: input.runId, repoPath: input.repoPath },
+        input.taskId
+      );
+    }
   }
 
   /**

@@ -86,7 +86,8 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
       pathDiffersFromRef: jest.fn().mockReturnValue(false),
       revertMerge: jest.fn(),
       stageAll: jest.fn(),
-      commit: jest.fn()
+      commit: jest.fn(),
+      removeWorktreeAsync: jest.fn()
     };
     agentRun = jest.fn().mockResolvedValue({ ok: true, output: 'done' });
     stateMock = {

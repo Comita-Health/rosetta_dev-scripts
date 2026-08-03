@@ -49,7 +49,8 @@ describe('EnvelopeGateService (T-02)', () => {
         pathDiffersFromRef: jest.fn().mockReturnValue(false),
         revertMerge: jest.fn(),
         stageAll: jest.fn(),
-        commit: jest.fn()
+        commit: jest.fn(),
+        removeWorktreeAsync: jest.fn()
       });
     container
       .bind<ISurfaceMapRepository>(WORKFLOW_TOKENS.SurfaceMapRepository)

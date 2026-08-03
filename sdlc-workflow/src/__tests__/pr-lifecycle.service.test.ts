@@ -60,7 +60,8 @@ describe('PrLifecycleService (P3 T-02)', () => {
         pathDiffersFromRef: jest.fn().mockReturnValue(false),
         revertMerge: jest.fn(),
         stageAll: jest.fn(),
-        commit: jest.fn()
+        commit: jest.fn(),
+        removeWorktreeAsync: jest.fn()
       });
     container
       .bind<IPullRequestRepository>(WORKFLOW_TOKENS.PullRequestRepository)

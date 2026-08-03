@@ -102,6 +102,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
   let prCreate: jest.Mock;
   let gitPush: jest.Mock;
   let gitFetch: jest.Mock;
+  let removeWorktreeAsync: jest.Mock;
   let specRead: jest.Mock;
   let escalationPost: jest.Mock;
 
@@ -239,6 +240,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
     revertMerge = jest.fn();
     gitPush = jest.fn();
     gitFetch = jest.fn();
+    removeWorktreeAsync = jest.fn();
     prCreate = jest.fn().mockReturnValue({
       url: 'https://github.com/org/repo/pull/99',
       number: 99
@@ -319,7 +321,8 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
         pathDiffersFromRef: jest.fn().mockReturnValue(false),
         revertMerge,
         stageAll: jest.fn(),
-        commit: jest.fn()
+        commit: jest.fn(),
+        removeWorktreeAsync
       });
     container
       .bind<IHeartbeatService>(WORKFLOW_TOKENS.HeartbeatService)
@@ -747,6 +750,12 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
           taskId: 'T-01',
           approvedBy: 'machine-gates'
         })
+      );
+      // Fire-and-forget: the worktree is disk-space debt once merged, and
+      // cleanup must never be awaited on the merge critical path.
+      expect(removeWorktreeAsync).toHaveBeenCalledWith(
+        '/repo',
+        '/runs/run-1/worktrees/T-01'
       );
       // Cached: resume does not merge twice.
       await handler.runTask({ ...INPUT, chronicleRepo: '/chronicle' });
@@ -1265,5 +1274,33 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
       mergedSha: 'abc123def456',
       taskId: 'T-01'
     });
+  });
+
+  it('record-merge schedules fire-and-forget worktree cleanup when both task and repo are given', async () => {
+    await handler.recordMerge({
+      chronicleRepo: '/chronicle',
+      runsDir: '/runs',
+      runId: 'run-1',
+      mergedSha: 'abc123def456',
+      taskId: 'T-01',
+      repoPath: '/repo'
+    });
+
+    expect(removeWorktreeAsync).toHaveBeenCalledWith(
+      '/repo',
+      '/runs/run-1/worktrees/T-01'
+    );
+  });
+
+  it('record-merge does not attempt cleanup without a repoPath — there is no repo to run git in', async () => {
+    await handler.recordMerge({
+      chronicleRepo: '/chronicle',
+      runsDir: '/runs',
+      runId: 'run-1',
+      mergedSha: 'abc123def456',
+      taskId: 'T-01'
+    });
+
+    expect(removeWorktreeAsync).not.toHaveBeenCalled();
   });
 });
