@@ -396,6 +396,465 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
     }
   });
 
+  it('re-selects a red-phase task when only the envelope gate digest is stale vs tip', async () => {
+    const tipHead = 'envelope-fixed-tip';
+    gitMock.headSha.mockImplementation((repoPath: string) =>
+      repoPath.includes('worktrees') ? tipHead : 'base-sha'
+    );
+    const { mkdtempSync, mkdirSync, rmSync } = await import('fs');
+    const { tmpdir } = await import('os');
+    const runsDir = mkdtempSync(path.join(tmpdir(), 'sdlc-env-recover-'));
+    const wt = path.join(runsDir, INPUT.runId, 'worktrees', 'T-01');
+    mkdirSync(wt, { recursive: true });
+
+    const spec = makeSpec();
+    const state = baseState();
+    const digest = implementationDigest(spec.tasks[0], 'base-sha');
+    const staleEnvelopeDigest = inputsDigest({
+      implDigest: digest,
+      headSha: 'old-envelope-tip',
+      envelope: spec.envelope,
+      baseRef: 'base-sha'
+    });
+    // Fresh verification (pass) so redGates must walk past it to the stale
+    // envelope leg of the || chain.
+    const freshVerifyDigest = inputsDigest({
+      implDigest: digest,
+      headSha: tipHead,
+      criteria: spec.tasks[0].acceptanceCriteria
+    });
+    state.taskResults['T-01'] = {
+      taskId: 'T-01',
+      status: 'completed',
+      branch: 'sdlc/run-1/T-01',
+      inputsDigest: digest,
+      recordedAt: 'x'
+    };
+    state.steps[stepKey('implementation', 'T-01', digest)] = {
+      name: 'implementation',
+      taskId: 'T-01',
+      inputsDigest: digest,
+      completedAt: 'x'
+    };
+    state.steps[stepKey('verification', 'T-01', freshVerifyDigest)] = {
+      name: 'verification',
+      taskId: 'T-01',
+      inputsDigest: freshVerifyDigest,
+      completedAt: 'x',
+      verdict: {
+        gate: 'verification',
+        outcome: 'pass',
+        wouldEscalate: false,
+        reasons: [],
+        recordedAt: 'x'
+      }
+    };
+    state.steps[stepKey('envelope', 'T-01', staleEnvelopeDigest)] = {
+      name: 'envelope',
+      taskId: 'T-01',
+      inputsDigest: staleEnvelopeDigest,
+      completedAt: 'x',
+      verdict: {
+        gate: 'envelope',
+        outcome: 'breach',
+        wouldEscalate: true,
+        reasons: ['specs/** mid-run'],
+        recordedAt: 'x'
+      }
+    };
+    state.steps[stepKey('phase', 'T-01', 'p')] = {
+      name: 'phase',
+      taskId: 'T-01',
+      inputsDigest: 'p',
+      completedAt: 'y',
+      verdict: {
+        gate: 'phase',
+        outcome: 'breach',
+        wouldEscalate: true,
+        reasons: ['failing gates: envelope'],
+        recordedAt: 'y'
+      }
+    };
+    stateMock.load.mockReturnValue(state);
+
+    try {
+      const pool = await executor.executeReady({ ...INPUT, runsDir });
+      expect(pool.kind).toBe('executed');
+      expect(pool.outcomes.map(o => o.task.id)).toEqual(['T-01']);
+    } finally {
+      rmSync(runsDir, { recursive: true, force: true });
+    }
+  });
+
+  it('re-selects a red-phase task when only the reviewer gate digest is stale vs tip', async () => {
+    const tipHead = 'reviewer-fixed-tip';
+    gitMock.headSha.mockImplementation((repoPath: string) =>
+      repoPath.includes('worktrees') ? tipHead : 'base-sha'
+    );
+    const { mkdtempSync, mkdirSync, rmSync } = await import('fs');
+    const { tmpdir } = await import('os');
+    const runsDir = mkdtempSync(path.join(tmpdir(), 'sdlc-rev-recover-'));
+    const wt = path.join(runsDir, INPUT.runId, 'worktrees', 'T-01');
+    mkdirSync(wt, { recursive: true });
+
+    const spec = makeSpec();
+    const state = baseState();
+    const digest = implementationDigest(spec.tasks[0], 'base-sha');
+    const staleReviewerDigest = inputsDigest({
+      implDigest: digest,
+      headSha: 'old-reviewer-tip',
+      task: spec.tasks[0],
+      baseRef: 'base-sha'
+    });
+    state.taskResults['T-01'] = {
+      taskId: 'T-01',
+      status: 'completed',
+      branch: 'sdlc/run-1/T-01',
+      inputsDigest: digest,
+      recordedAt: 'x'
+    };
+    state.steps[stepKey('implementation', 'T-01', digest)] = {
+      name: 'implementation',
+      taskId: 'T-01',
+      inputsDigest: digest,
+      completedAt: 'x'
+    };
+    state.steps[stepKey('reviewer', 'T-01', staleReviewerDigest)] = {
+      name: 'reviewer',
+      taskId: 'T-01',
+      inputsDigest: staleReviewerDigest,
+      completedAt: 'x',
+      verdict: {
+        gate: 'reviewer',
+        outcome: 'breach',
+        wouldEscalate: true,
+        reasons: ['hard findings'],
+        recordedAt: 'x'
+      }
+    };
+    state.steps[stepKey('phase', 'T-01', 'p')] = {
+      name: 'phase',
+      taskId: 'T-01',
+      inputsDigest: 'p',
+      completedAt: 'y',
+      verdict: {
+        gate: 'phase',
+        outcome: 'breach',
+        wouldEscalate: true,
+        reasons: ['failing gates: reviewer'],
+        recordedAt: 'y'
+      }
+    };
+    stateMock.load.mockReturnValue(state);
+
+    try {
+      const pool = await executor.executeReady({ ...INPUT, runsDir });
+      expect(pool.kind).toBe('executed');
+      expect(pool.outcomes.map(o => o.task.id)).toEqual(['T-01']);
+    } finally {
+      rmSync(runsDir, { recursive: true, force: true });
+    }
+  });
+
+  it('re-selects a red-phase task when only the CI gate digest is stale vs tip', async () => {
+    const tipHead = 'ci-fixed-tip';
+    gitMock.headSha.mockImplementation((repoPath: string) =>
+      repoPath.includes('worktrees') ? tipHead : 'base-sha'
+    );
+    const { mkdtempSync, mkdirSync, rmSync } = await import('fs');
+    const { tmpdir } = await import('os');
+    const runsDir = mkdtempSync(path.join(tmpdir(), 'sdlc-ci-stale-'));
+    const wt = path.join(runsDir, INPUT.runId, 'worktrees', 'T-01');
+    mkdirSync(wt, { recursive: true });
+
+    const state = baseState();
+    const digest = implementationDigest(makeSpec().tasks[0], 'base-sha');
+    const staleCiDigest = inputsDigest({
+      implDigest: digest,
+      headSha: 'old-ci-tip',
+      gate: 'ci'
+    });
+    state.taskResults['T-01'] = {
+      taskId: 'T-01',
+      status: 'completed',
+      branch: 'sdlc/run-1/T-01',
+      inputsDigest: digest,
+      recordedAt: 'x'
+    };
+    state.steps[stepKey('implementation', 'T-01', digest)] = {
+      name: 'implementation',
+      taskId: 'T-01',
+      inputsDigest: digest,
+      completedAt: 'x'
+    };
+    state.steps[stepKey('ci', 'T-01', staleCiDigest)] = {
+      name: 'ci',
+      taskId: 'T-01',
+      inputsDigest: staleCiDigest,
+      completedAt: 'x',
+      verdict: {
+        gate: 'ci',
+        outcome: 'breach',
+        wouldEscalate: true,
+        reasons: ['check failed: test'],
+        recordedAt: 'x'
+      }
+    };
+    state.steps[stepKey('phase', 'T-01', 'p')] = {
+      name: 'phase',
+      taskId: 'T-01',
+      inputsDigest: 'p',
+      completedAt: 'y',
+      verdict: {
+        gate: 'phase',
+        outcome: 'breach',
+        wouldEscalate: true,
+        reasons: ['failing gates: ci'],
+        recordedAt: 'y'
+      }
+    };
+    stateMock.load.mockReturnValue(state);
+
+    try {
+      const pool = await executor.executeReady({ ...INPUT, runsDir });
+      expect(pool.kind).toBe('executed');
+      expect(pool.outcomes.map(o => o.task.id)).toEqual(['T-01']);
+    } finally {
+      rmSync(runsDir, { recursive: true, force: true });
+    }
+  });
+
+  it('re-selects a red-phase task when latest CI is a retryable empty-checks block', async () => {
+    // No worktree tip — recoverability comes solely from latestCiRetryableBlock.
+    const state = baseState();
+    const digest = implementationDigest(makeSpec().tasks[0], 'base-sha');
+    state.taskResults['T-01'] = {
+      taskId: 'T-01',
+      status: 'completed',
+      branch: 'sdlc/run-1/T-01',
+      inputsDigest: digest,
+      recordedAt: 'x'
+    };
+    state.steps[stepKey('implementation', 'T-01', digest)] = {
+      name: 'implementation',
+      taskId: 'T-01',
+      inputsDigest: digest,
+      completedAt: 'x'
+    };
+    state.steps[stepKey('ci', 'T-01', 'ci-old')] = {
+      name: 'ci',
+      taskId: 'T-01',
+      inputsDigest: 'ci-old',
+      completedAt: '2026-08-01T00:00:00.000Z',
+      verdict: {
+        gate: 'ci',
+        outcome: 'pass',
+        wouldEscalate: false,
+        reasons: [],
+        recordedAt: '2026-08-01T00:00:00.000Z'
+      }
+    };
+    state.steps[stepKey('ci', 'T-01', 'ci-empty')] = {
+      name: 'ci',
+      taskId: 'T-01',
+      inputsDigest: 'ci-empty',
+      completedAt: '2026-08-02T00:00:00.000Z',
+      verdict: {
+        gate: 'ci',
+        outcome: 'blocked',
+        wouldEscalate: false,
+        reasons: ['commit abc has no check runs'],
+        recordedAt: '2026-08-02T00:00:00.000Z'
+      }
+    };
+    state.steps[stepKey('phase', 'T-01', 'p')] = {
+      name: 'phase',
+      taskId: 'T-01',
+      inputsDigest: 'p',
+      completedAt: 'y',
+      verdict: {
+        gate: 'phase',
+        outcome: 'breach',
+        wouldEscalate: true,
+        reasons: ['failing gates: ci'],
+        recordedAt: 'y'
+      }
+    };
+    stateMock.load.mockReturnValue(state);
+
+    const pool = await executor.executeReady(INPUT);
+    expect(pool.kind).toBe('executed');
+    expect(pool.outcomes.map(o => o.task.id)).toEqual(['T-01']);
+  });
+
+  it('re-selects when latest CI block cites no CI results (gh unavailable race)', async () => {
+    const state = baseState();
+    const digest = implementationDigest(makeSpec().tasks[0], 'base-sha');
+    state.taskResults['T-01'] = {
+      taskId: 'T-01',
+      status: 'completed',
+      branch: 'sdlc/run-1/T-01',
+      inputsDigest: digest,
+      recordedAt: 'x'
+    };
+    state.steps[stepKey('implementation', 'T-01', digest)] = {
+      name: 'implementation',
+      taskId: 'T-01',
+      inputsDigest: digest,
+      completedAt: 'x'
+    };
+    state.steps[stepKey('ci', 'T-01', 'ci-null')] = {
+      name: 'ci',
+      taskId: 'T-01',
+      inputsDigest: 'ci-null',
+      completedAt: 'z',
+      verdict: {
+        gate: 'ci',
+        outcome: 'blocked',
+        wouldEscalate: false,
+        reasons: [
+          'no CI results for abc — branch not pushed or gh unavailable'
+        ],
+        recordedAt: 'z'
+      }
+    };
+    state.steps[stepKey('phase', 'T-01', 'p')] = {
+      name: 'phase',
+      taskId: 'T-01',
+      inputsDigest: 'p',
+      completedAt: 'y',
+      verdict: {
+        gate: 'phase',
+        outcome: 'breach',
+        wouldEscalate: true,
+        reasons: ['failing gates: ci'],
+        recordedAt: 'y'
+      }
+    };
+    stateMock.load.mockReturnValue(state);
+
+    const pool = await executor.executeReady(INPUT);
+    expect(pool.kind).toBe('executed');
+    expect(pool.outcomes.map(o => o.task.id)).toEqual(['T-01']);
+  });
+
+  it('does not re-select a red phase when CI is blocked for a non-retryable reason', async () => {
+    const state = baseState();
+    const digest = implementationDigest(makeSpec().tasks[0], 'base-sha');
+    state.taskResults['T-01'] = {
+      taskId: 'T-01',
+      status: 'completed',
+      branch: 'sdlc/run-1/T-01',
+      inputsDigest: digest,
+      recordedAt: 'x'
+    };
+    state.steps[stepKey('implementation', 'T-01', digest)] = {
+      name: 'implementation',
+      taskId: 'T-01',
+      inputsDigest: digest,
+      completedAt: 'x'
+    };
+    state.steps[stepKey('ci', 'T-01', 'ci-pending')] = {
+      name: 'ci',
+      taskId: 'T-01',
+      inputsDigest: 'ci-pending',
+      completedAt: 'z',
+      verdict: {
+        gate: 'ci',
+        outcome: 'blocked',
+        wouldEscalate: true,
+        reasons: ['check still pending at timeout: e2e'],
+        recordedAt: 'z'
+      }
+    };
+    state.steps[stepKey('phase', 'T-01', 'p')] = {
+      name: 'phase',
+      taskId: 'T-01',
+      inputsDigest: 'p',
+      completedAt: 'y',
+      verdict: {
+        gate: 'phase',
+        outcome: 'breach',
+        wouldEscalate: true,
+        reasons: ['failing gates: ci'],
+        recordedAt: 'y'
+      }
+    };
+    stateMock.load.mockReturnValue(state);
+
+    const pool = await executor.executeReady(INPUT);
+    expect(pool.kind).toBe('no-ready-task');
+  });
+
+  it('leaves tip unset when worktree headSha throws (selection stays conservative)', async () => {
+    const { mkdtempSync, mkdirSync, rmSync } = await import('fs');
+    const { tmpdir } = await import('os');
+    const runsDir = mkdtempSync(path.join(tmpdir(), 'sdlc-tip-throw-'));
+    const wt = path.join(runsDir, INPUT.runId, 'worktrees', 'T-01');
+    mkdirSync(wt, { recursive: true });
+    gitMock.headSha.mockImplementation((repoPath: string) => {
+      if (repoPath.includes('worktrees')) {
+        throw new Error('corrupt worktree');
+      }
+      return 'base-sha';
+    });
+
+    const state = baseState();
+    const digest = implementationDigest(makeSpec().tasks[0], 'base-sha');
+    const staleVerifyDigest = inputsDigest({
+      implDigest: digest,
+      headSha: 'old-failing-tip',
+      criteria: makeSpec().tasks[0].acceptanceCriteria
+    });
+    state.taskResults['T-01'] = {
+      taskId: 'T-01',
+      status: 'completed',
+      branch: 'sdlc/run-1/T-01',
+      inputsDigest: digest,
+      recordedAt: 'x'
+    };
+    state.steps[stepKey('implementation', 'T-01', digest)] = {
+      name: 'implementation',
+      taskId: 'T-01',
+      inputsDigest: digest,
+      completedAt: 'x'
+    };
+    state.steps[stepKey('verification', 'T-01', staleVerifyDigest)] = {
+      name: 'verification',
+      taskId: 'T-01',
+      inputsDigest: staleVerifyDigest,
+      completedAt: 'x',
+      verdict: {
+        gate: 'verification',
+        outcome: 'breach',
+        wouldEscalate: true,
+        reasons: ['tests failed'],
+        recordedAt: 'x'
+      }
+    };
+    state.steps[stepKey('phase', 'T-01', 'p')] = {
+      name: 'phase',
+      taskId: 'T-01',
+      inputsDigest: 'p',
+      completedAt: 'y',
+      verdict: {
+        gate: 'phase',
+        outcome: 'breach',
+        wouldEscalate: true,
+        reasons: ['failing gates: verification'],
+        recordedAt: 'y'
+      }
+    };
+    stateMock.load.mockReturnValue(state);
+
+    try {
+      const pool = await executor.executeReady({ ...INPUT, runsDir });
+      expect(pool.kind).toBe('no-ready-task');
+    } finally {
+      rmSync(runsDir, { recursive: true, force: true });
+    }
+  });
+
   it('re-selects a green-phase unmerged task so enforce can retry merge', async () => {
     const state = baseState();
     const digest = implementationDigest(makeSpec().tasks[0], 'base-sha');
