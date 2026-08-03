@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** closed the "acceptance criteria" transparency gap
+  identified while coaching PRD/spec authoring: all `test:` criteria on a
+  task share a single run of the repo's scripted verify command, so a
+  failure was previously reported as N independent `failed: <criterion>`
+  reasons — misrepresenting one root cause as several to anyone reading a
+  needs-human issue, `blockers` output, or the PR body. `VerificationService`
+  now groups criteria that share an `evidenceId` into one reason
+  (`failed (1 shared check, evidence <id>, covers N criteria): ...`);
+  agent-tier criteria, which each get their own `evidenceId`, are
+  unaffected. The generated PR body also now adds a note whenever a task
+  declares 2+ `test:` criteria, telling the reviewer up front that they
+  collapse into one check rather than N independent assertions.
 - **sdlc-workflow:** the PRD parser now fails loudly and specifically instead
   of silently degrading. `prd-parser.ts` required exact heading text/numbering
   (`### 1.2 Goals`, an em-dash-only Rollout phase format) and returned empty

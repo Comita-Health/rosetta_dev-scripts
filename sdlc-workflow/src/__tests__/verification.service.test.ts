@@ -118,6 +118,45 @@ describe('VerificationService (T-04)', () => {
     expect(outcome.verdict.reasons[0]).toContain('test: alpha');
   });
 
+  it('collapses multiple failing test-tier criteria into one reason, since they share one scripted-check run', async () => {
+    run.mockReturnValue({ ok: false, output: '1 test failed' });
+    const task = taskWith(['test: alpha', 'test: beta', 'test: gamma']);
+
+    const outcome = await service.verify({ ...baseInput, task });
+
+    // One shared evidence artifact, one command run — reporting three
+    // separate "failed: X" reasons would misrepresent one root cause as
+    // three independent assertions.
+    expect(outcome.verdict.reasons).toHaveLength(1);
+    expect(outcome.verdict.reasons[0]).toContain('1 shared check');
+    expect(outcome.verdict.reasons[0]).toContain(`${task.id}-test-output`);
+    expect(outcome.verdict.reasons[0]).toContain('covers 3 criteria');
+    expect(outcome.verdict.reasons[0]).toContain('test: alpha');
+    expect(outcome.verdict.reasons[0]).toContain('test: beta');
+    expect(outcome.verdict.reasons[0]).toContain('test: gamma');
+  });
+
+  it('reports agent-tier failures individually even alongside a failing shared test-tier check', async () => {
+    run.mockReturnValue({ ok: false, output: 'boom' });
+    agentRun.mockResolvedValue({ ok: true, output: '{ "pass": false }' });
+    const task = taskWith(['test: alpha', 'test: beta', 'agent: gamma']);
+
+    const outcome = await service.verify({ ...baseInput, task });
+
+    // Two reasons: one collapsed test-tier group, one standalone agent-tier
+    // criterion — agent-tier criteria each get their own evidenceId, so
+    // they never collapse with each other or with the test-tier group.
+    expect(outcome.verdict.reasons).toHaveLength(2);
+    expect(
+      outcome.verdict.reasons.some(
+        reason => reason.includes('1 shared check') && reason.includes('test: alpha')
+      )
+    ).toBe(true);
+    expect(
+      outcome.verdict.reasons.some(reason => reason === 'failed: agent: gamma')
+    ).toBe(true);
+  });
+
   it('hands agent-tier criteria to the verifier with the sandbox health report and attaches the transcript as evidence', async () => {
     const task = taskWith(['agent: the sandbox serves the new endpoint']);
 
