@@ -25,6 +25,35 @@
   both pass the permission check on the same token; only `gh pr create`'s
   default fork-upstream resolution failed. Fix is `--repo <owner>/<repo>`,
   not a permission grant.
+- **sdlc-workflow:** an enforcing run now refuses a spec that is not the one on
+  the repo's default branch — missing there, or differing from the local copy.
+  The approval gate is a human approving the PR that lands the spec, but
+  nothing enforced it: `run --spec <path>` read a local file, so an agent could
+  flip `status: Approved` in its own checkout and launch. That is exactly how
+  the first PRD-9999 canary skipped its own gate. Branch protection cannot
+  cover this (private repo on a free plan, client-side husky guard, and the
+  implementation prompt tells agents to use `--no-verify`). `--shadow` runs are
+  exempt, since they never merge and iterating on an unlanded spec is the point.
+- **sdlc-workflow:** a run now blocks at the intake gate when the spec envelope
+  names a `forbiddenSurfaces` label the target repo does not define in
+  `.sdlc/surfaces.json`. The envelope gate fails closed on an unresolvable
+  label, so an undefined one breached **every** task unconditionally, no matter
+  what the diff contained — and only after a full wave of agent work had been
+  paid for. The intake verdict lists each bad label alongside the labels the
+  repo does define. Spec synthesis routinely invents plausible names
+  (`migrations`, `frontend`, `handlers`) that no repo declares.
+- **sdlc-workflow:** closed the "acceptance criteria" transparency gap
+  identified while coaching PRD/spec authoring: all `test:` criteria on a
+  task share a single run of the repo's scripted verify command, so a
+  failure was previously reported as N independent `failed: <criterion>`
+  reasons — misrepresenting one root cause as several to anyone reading a
+  needs-human issue, `blockers` output, or the PR body. `VerificationService`
+  now groups criteria that share an `evidenceId` into one reason
+  (`failed (1 shared check, evidence <id>, covers N criteria): ...`);
+  agent-tier criteria, which each get their own `evidenceId`, are
+  unaffected. The generated PR body also now adds a note whenever a task
+  declares 2+ `test:` criteria, telling the reviewer up front that they
+  collapse into one check rather than N independent assertions.
 - **sdlc-workflow:** the PRD parser now fails loudly and specifically instead
   of silently degrading. `prd-parser.ts` required exact heading text/numbering
   (`### 1.2 Goals`, an em-dash-only Rollout phase format) and returned empty
@@ -32,7 +61,7 @@
   even slightly from that microformat produced no error, just a PRD that
   quietly decomposed into worse (or, for empty goals, eventually-erroring)
   output with no indication why. Sweeping this against every real PRD in
-  `rosetta_docs/product/` surfaced that even the *authoritative*
+  `rosetta_docs/product/` surfaced that even the _authoritative_
   `TEMPLATE.md` and the engine's own founding `PRD-0011` don't match the old
   strict Rollout regex (template puts the title outside the bold span;
   PRD-0011 prefixes phases with a status emoji) — proof the old contract was
@@ -78,7 +107,7 @@
 - **sdlc-workflow:** enforcing-mode merges no longer fail on every task. The
   merge ran `gh pr merge --squash --delete-branch`, and the engine only ever
   merges a branch checked out in one of its own worktrees, so gh always failed
-  the *local* delete — after the merge had already landed. Every task reported
+  the _local_ delete — after the merge had already landed. Every task reported
   `merge failed`, filed a needs-human issue, and held the phase gate behind
   work that was in fact on the default branch. `--delete-branch` is dropped
   (repos set `delete_branch_on_merge`), and a merge command that exits non-zero

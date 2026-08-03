@@ -42,6 +42,16 @@ export interface IGitRepository {
   /** The repo's default branch name, from origin/HEAD (fallback: main). */
   defaultBranch(repoPath: string): string;
   /**
+   * Contents of a repo-relative path at a ref, or null when the ref does not
+   * carry that path (unmerged spec, deleted file, unknown ref).
+   */
+  fileAtRef(repoPath: string, ref: string, relPath: string): string | null;
+  /**
+   * True when the working-tree copy of `relPath` differs from the one at
+   * `ref`. Catches uncommitted edits and committed-but-unmerged ones alike.
+   */
+  pathDiffersFromRef(repoPath: string, ref: string, relPath: string): boolean;
+  /**
    * Revert a merge commit (first-parent mainline) with a signed-off commit
    * in the given checkout (P3 T-05 veto path).
    */
@@ -119,6 +129,28 @@ export class GitRepository implements IGitRepository {
       return name.length > 0 ? name : 'main';
     } catch {
       return 'main';
+    }
+  }
+
+  fileAtRef(repoPath: string, ref: string, relPath: string): string | null {
+    try {
+      return git(repoPath, `show "${ref}:${relPath}"`);
+    } catch {
+      // `git show` exits non-zero for an unknown ref and for a path the ref
+      // does not carry. Both mean "not present there", which the caller
+      // treats the same way.
+      return null;
+    }
+  }
+
+  pathDiffersFromRef(repoPath: string, ref: string, relPath: string): boolean {
+    try {
+      git(repoPath, `diff --quiet "${ref}" -- "${relPath}"`);
+      return false;
+    } catch {
+      // `--quiet` exits 1 on any difference. A genuine git error also lands
+      // here and is reported as a difference, which fails closed.
+      return true;
     }
   }
 
