@@ -10,6 +10,64 @@
   paid for. The intake verdict lists each bad label alongside the labels the
   repo does define. Spec synthesis routinely invents plausible names
   (`migrations`, `frontend`, `handlers`) that no repo declares.
+- **sdlc-workflow:** the PRD parser now fails loudly and specifically instead
+  of silently degrading. `prd-parser.ts` required exact heading text/numbering
+  (`### 1.2 Goals`, an em-dash-only Rollout phase format) and returned empty
+  arrays on any mismatch — a hand-authored or agent-authored PRD that drifted
+  even slightly from that microformat produced no error, just a PRD that
+  quietly decomposed into worse (or, for empty goals, eventually-erroring)
+  output with no indication why. Sweeping this against every real PRD in
+  `rosetta_docs/product/` surfaced that even the _authoritative_
+  `TEMPLATE.md` and the engine's own founding `PRD-0011` don't match the old
+  strict Rollout regex (template puts the title outside the bold span;
+  PRD-0011 prefixes phases with a status emoji) — proof the old contract was
+  unworkable in practice, not just strict. Required sections (Goals,
+  Acceptance Criteria, Rollout) now throw a `PRD_MALFORMED` error naming the
+  exact missing heading the moment a heading truly isn't found, while Rollout
+  phase parsing itself became more permissive: it accepts either dash type
+  (—/-), a title inside or outside the bold span, and an optional
+  emoji/status marker, and correctly captures multi-line wrapped
+  descriptions (a separate, previously-silent bug: the old lazy-match
+  lookahead terminated at the end of a phase's first line, truncating or
+  dropping any phase whose description wrapped). Added `sdlc-workflow
+prd-lint --prd <id> --docs-dir <dir>` — validates a PRD parses cleanly with
+  no LLM call and no `--repo`, for fast feedback right after drafting, before
+  `decompose` ever runs.
+- **sdlc-workflow:** sandbox deploy and test-tier verification now run
+  concurrently instead of sequentially. `ShellCommandRepository` used
+  `spawnSync`, which blocks Node's single thread — so even though the
+  test-tier scripted check (`yarn typecheck`/`test`/`build`) has no
+  dependency on the deployed sandbox, it could never overlap with the
+  deploy. Switched to async `spawn`, and `run.handler.ts` now dispatches
+  `sandboxStep` and `VerificationService.verifyTestTierOnly` together via
+  `Promise.all`; only agent-tier criteria (which consume the sandbox health
+  report) still wait for the deploy to finish. Measured against a live run:
+  cuts ~1.5–2 minutes off the deploy-finishes-to-merge gap per deployable
+  task. CI is unaffected — it already overlaps for free since GitHub
+  Actions triggers the moment the PR opens.
+- **sdlc-workflow / team-setup:** the continuity daemon could never actually
+  restart anything, and said it had. Launch records stored `execPath` (plain
+  node) plus a `.ts` entry but not the interpreter flags, so every relaunch —
+  and every `run --supervise --detach` from a source checkout — died on
+  `ERR_UNKNOWN_FILE_EXTENSION` before reading a byte. The daemon then wrote the
+  corpse's pid, logged "relaunched", and woke the operator to "confirm it is
+  making progress". Launch records now carry `execArgv` and both the detach
+  path and the daemon replay it (records already on disk fall back to `tsx`),
+  and the daemon probes the child before claiming a restart, escalating a
+  distinct wake when it dies immediately.
+- **team-setup:** the continuity daemon no longer re-logs and re-kills a
+  stalled agent on every 60s tick. A killed agent never touches its heartbeat
+  again, so the condition is permanent once detected — one abandoned run
+  emitted 800 "stalled — killing" lines over 13 hours, burying every other
+  run. The kill now happens once per condition, matching the wake.
+- **sdlc-workflow:** enforcing-mode merges no longer fail on every task. The
+  merge ran `gh pr merge --squash --delete-branch`, and the engine only ever
+  merges a branch checked out in one of its own worktrees, so gh always failed
+  the _local_ delete — after the merge had already landed. Every task reported
+  `merge failed`, filed a needs-human issue, and held the phase gate behind
+  work that was in fact on the default branch. `--delete-branch` is dropped
+  (repos set `delete_branch_on_merge`), and a merge command that exits non-zero
+  is now reconciled against real PR state before it is called a failure.
 - **sdlc-workflow:** `run --detach` no longer reports success when the child
   dies during startup. It printed `[supervise] detached` and exited 0 as soon
   as the spawn returned, so a bad `--spec` path, a still-`Draft` spec, or a

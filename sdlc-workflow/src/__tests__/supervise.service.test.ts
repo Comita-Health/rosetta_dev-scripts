@@ -11,7 +11,7 @@ import type { IProcessDetachRepository } from '../repositories/process-detach.re
 import type { IHeartbeatWatchService } from '../services/heartbeat-watch.service';
 import { WORKFLOW_TOKENS } from '../tokens';
 import type { RunState, SpecDocument } from '../types';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
 import os from 'os';
 import path from 'path';
 
@@ -138,6 +138,38 @@ describe('SuperviseService', () => {
     const spawnArgs = spawnDetached.mock.calls[0][0].args as string[];
     expect(spawnArgs).toContain('--supervise');
     expect(spawnArgs).not.toContain('--detach');
+  });
+
+  // Running from source, execPath is plain node and the entry is a .ts file,
+  // so dropping the interpreter flags detaches into a guaranteed
+  // ERR_UNKNOWN_FILE_EXTENSION. The same flags go into launch.json, or the
+  // continuity daemon's relaunch inherits the identical crash.
+  it('replays the interpreter flags into the child and the launch record', async () => {
+    const original = process.execArgv;
+    process.execArgv = ['--import', 'tsx/loader.mjs'];
+
+    try {
+      await supervise.run({
+        specPath: '/s.md',
+        repoPath: '/r',
+        runsDir,
+        runId: 'run-exec-argv',
+        maxParallel: 1,
+        supervise: true,
+        detach: true,
+        detachArgv: ['node', 'index.ts', 'run', '--detach']
+      });
+
+      const spawnArgs = spawnDetached.mock.calls[0][0].args as string[];
+      expect(spawnArgs.slice(0, 2)).toEqual(['--import', 'tsx/loader.mjs']);
+
+      const record = JSON.parse(
+        readFileSync(path.join(runsDir, 'run-exec-argv', 'launch.json'), 'utf-8')
+      ) as { execArgv: string[] };
+      expect(record.execArgv).toEqual(['--import', 'tsx/loader.mjs']);
+    } finally {
+      process.execArgv = original;
+    }
   });
 
   // A child that dies on startup (bad spec path, spec still Draft, repo not a

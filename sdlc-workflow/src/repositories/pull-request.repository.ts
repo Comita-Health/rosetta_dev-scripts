@@ -95,10 +95,23 @@ export class PullRequestRepository implements IPullRequestRepository {
   }
 
   async merge(repoPath: string, number: number): Promise<string> {
-    if (this.isStacked(repoPath, number)) {
-      await this.mergeStack(repoPath, number);
-    } else {
-      gh(repoPath, `gh pr merge ${number} --squash --delete-branch`);
+    try {
+      if (this.isStacked(repoPath, number)) {
+        await this.mergeStack(repoPath, number);
+      } else {
+        // No `--delete-branch`: the engine only ever merges a branch that is
+        // checked out in one of its own worktrees, so gh's local delete always
+        // fails — after the merge has already landed. The repo sets
+        // delete_branch_on_merge, so the remote branch is reaped anyway.
+        gh(repoPath, `gh pr merge ${number} --squash`);
+      }
+    } catch (err) {
+      // gh exits non-zero for post-merge cleanup problems too, so a thrown
+      // error does not prove the merge failed. Reporting a landed merge as a
+      // failure is the costly direction: it escalates a needs-human issue,
+      // holds the phase gate behind a task that is already on the default
+      // branch, and makes every resume retry a merge that can never succeed.
+      if (!this.isMerged(repoPath, number)) throw err;
     }
     const sha = gh(
       repoPath,
@@ -116,6 +129,19 @@ export class PullRequestRepository implements IPullRequestRepository {
 
   comment(repoPath: string, number: number, body: string): void {
     gh(repoPath, `gh pr comment ${number} --body-file -`, body);
+  }
+
+  private isMerged(repoPath: string, number: number): boolean {
+    try {
+      return (
+        gh(
+          repoPath,
+          `gh pr view ${number} --json state --jq ".state"`
+        ).trim() === 'MERGED'
+      );
+    } catch {
+      return false;
+    }
   }
 
   private isStacked(repoPath: string, number: number): boolean {

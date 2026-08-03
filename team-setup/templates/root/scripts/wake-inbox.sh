@@ -102,6 +102,15 @@ wake_emit_once() {
   fi
 }
 
+# True when wake_emit_once has already fired for this condition. Callers use
+# it to skip side effects the first notice already covered — logging and
+# killing on every tick of a standing condition is noise, not diagnosis.
+wake_notified() {
+  local kind="$1" key="$2"
+  wake_init
+  [[ -e "$WAKE_ROOT/notified/$(wake_slug "${kind}-${key}")" ]]
+}
+
 # Clear the once-only marker so the condition can notify again.
 wake_reset_once() {
   local kind="$1" key="$2"
