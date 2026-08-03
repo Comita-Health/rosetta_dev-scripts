@@ -353,15 +353,16 @@ yargs(hideBin(process.argv))
           describe:
             'Upper bound on concurrently running implementation agents (P3 T-01)'
         })
+        // No `default` on either flag: yargs counts a defaulted option as
+        // supplied, so `.conflicts()` would fire on every invocation —
+        // including one that passes neither. Absent means enforcing.
         .option('shadow', {
           type: 'boolean',
-          default: false,
           describe:
             'Calibration mode: record gate verdicts but never merge (P3 T-04)'
         })
         .option('enforce', {
           type: 'boolean',
-          default: false,
           describe:
             'Explicitly select enforcing mode (the default) — green gates auto-merge'
         })
@@ -411,7 +412,7 @@ yargs(hideBin(process.argv))
           runsDir: argv['runs-dir'],
           chronicleRepo: argv['chronicle-repo'],
           maxParallel: argv['max-parallel'],
-          shadow: argv.shadow,
+          shadow: argv.shadow === true,
           heartbeatSeconds: argv.heartbeat,
           supervise: argv.supervise === true || argv.detach === true,
           detach: argv.detach === true,
