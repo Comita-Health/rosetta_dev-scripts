@@ -53,4 +53,21 @@ describe('pr-content (P3 T-02)', () => {
     expect(body).toContain('_Recorded after the machine gates run');
     expect(body).not.toContain('Depends on:');
   });
+
+  it('does not add a shared-check note for a single test: criterion', () => {
+    const body = prBody(spec, task, 'run-1', 'b', []);
+    expect(body).not.toContain('share **one** run');
+  });
+
+  it('warns that multiple test: criteria on one task share a single scripted-check run', () => {
+    const multiTest: SpecTask = {
+      ...task,
+      acceptanceCriteria: ['test: alpha', 'test: beta', 'agent: gamma']
+    };
+    const body = prBody(spec, multiTest, 'run-1', 'b', []);
+    expect(body).toContain('All 2 `test:` criteria above share **one** run');
+    // agent: criteria are genuinely independent — the note must not imply
+    // otherwise by counting them.
+    expect(body).not.toContain('All 3');
+  });
 });

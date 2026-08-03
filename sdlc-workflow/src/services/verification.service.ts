@@ -231,11 +231,51 @@ export class VerificationService implements IVerificationService {
       outcome,
       wouldEscalate: failing.length > 0,
       reasons: [
-        ...failing.map(verdict => `failed: ${verdict.criterion}`),
+        ...this.groupFailureReasons(failing),
         ...manual.map(verdict => `human required: ${verdict.criterion}`)
       ],
       evidenceIds,
       recordedAt: new Date().toISOString()
     };
+  }
+
+  /**
+   * test-tier criteria on one task share a single scripted-check run and
+   * therefore a single `evidenceId` (see {@link runTestTier}) — one command
+   * failing produces N `CriterionVerdict`s, not N independent failures.
+   * Surfacing them as N separate "failed: X" reasons (the pre-fix
+   * behavior) misrepresents one root cause as several, both to a human
+   * reading a needs-human issue and to the reviewer/aggregator gates that
+   * consume `reasons` as context. Criteria sharing an `evidenceId` collapse
+   * into one reason naming the shared check; agent-tier criteria each get
+   * their own `evidenceId` (see {@link runAgentTier}) so they are
+   * unaffected and still report one reason per criterion.
+   */
+  private groupFailureReasons(failing: CriterionVerdict[]): string[] {
+    const withEvidence = new Map<string, CriterionVerdict[]>();
+    const withoutEvidence: CriterionVerdict[] = [];
+    for (const verdict of failing) {
+      if (verdict.evidenceId === undefined) {
+        withoutEvidence.push(verdict);
+        continue;
+      }
+      const group = withEvidence.get(verdict.evidenceId) ?? [];
+      group.push(verdict);
+      withEvidence.set(verdict.evidenceId, group);
+    }
+
+    const reasons: string[] = [];
+    for (const [evidenceId, group] of withEvidence) {
+      reasons.push(
+        group.length === 1
+          ? `failed: ${group[0].criterion}`
+          : `failed (1 shared check, evidence ${evidenceId}, covers ` +
+              `${group.length} criteria): ${group
+                .map(verdict => verdict.criterion)
+                .join('; ')}`
+      );
+    }
+    reasons.push(...withoutEvidence.map(verdict => `failed: ${verdict.criterion}`));
+    return reasons;
   }
 }
