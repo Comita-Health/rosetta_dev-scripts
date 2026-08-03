@@ -1,0 +1,15 @@
+---
+description: "Turn an approved Plan Mode conversation into a PRD that `sdlc-workflow decompose` can parse on the first try. Copy `rosetta_docs/product/TEMPLATE.md` verbatim (exact heading text/numbering, exact Rollout phase format) rather than writing PRD structure from memory. Before running `decompose`, validate for free with `sdlc-workflow prd-lint --prd <PRD-ID> --docs-dir <dir>` and fix any `PRD_MALFORMED` error it reports — the message names the exact missing/malformed section."
+alwaysApply: false
+---
+
+# /write-prd (Cursor)
+
+Turn an approved Plan Mode conversation into a PRD that `sdlc-workflow decompose` can parse on the first try.
+
+1. Copy `rosetta_docs/product/TEMPLATE.md` verbatim as the starting point — do not write PRD structure from memory. Match its heading text and numbering exactly (`### 1.2 Goals`, `### 1.3 Non-Goals`, `### 1.4 Acceptance Criteria`) and its `## N. Rollout & Phases` numbered-phase format (a "Phase \<N\>" reference followed by a dash and a title).
+2. Fill in every section from the approved plan. Do not invent `forbiddenSurfaces` labels later at decompose/spec time that aren't already defined in the target repo's `.sdlc/surfaces.json` — check that file first if the plan touches a sensitive surface.
+3. Before running `decompose` (which costs an LLM call), validate the PRD parses cleanly and for free: `sdlc-workflow prd-lint --prd <PRD-ID> --docs-dir <path-to-docs-dir>`. Fix any `PRD_MALFORMED` error it reports before proceeding.
+4. Only after `prd-lint` passes, run `sdlc-workflow decompose --prd <PRD-ID> --repo <target-repo>` to generate the Draft spec and stop at the human gate.
+
+The parser fails loudly and specifically now (it used to silently return empty sections on a heading mismatch) — `prd-lint` exists precisely so that loud failure happens before the LLM call, not after.

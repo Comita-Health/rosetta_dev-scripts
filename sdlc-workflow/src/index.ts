@@ -263,6 +263,49 @@ container
 
 yargs(hideBin(process.argv))
   .command(
+    'prd-lint',
+    'Validate a PRD parses cleanly against TEMPLATE.md, with no LLM call and no --repo required',
+    y =>
+      y
+        .option('prd', {
+          type: 'string',
+          demandOption: true,
+          describe: 'PRD ID, e.g. PRD-0011'
+        })
+        .option('docs-dir', {
+          type: 'string',
+          default: path.join('..', 'rosetta_docs', 'product'),
+          describe: 'Directory containing PRD markdown files'
+        }),
+    async argv => {
+      const prdRepo = container.get<IPrdRepository>(
+        WORKFLOW_TOKENS.PrdRepository
+      );
+      try {
+        const prd = await prdRepo.getPrd(argv.prd, argv['docs-dir']);
+        console.log(chalk.green(`✓ ${prd.id} — ${prd.title}`));
+        console.log(chalk.gray(`  goals: ${prd.goals.length}`));
+        console.log(chalk.gray(`  non-goals: ${prd.nonGoals.length}`));
+        console.log(
+          chalk.gray(`  acceptance criteria: ${prd.acceptanceCriteria.length}`)
+        );
+        console.log(
+          chalk.gray(`  rollout phases: ${prd.rolloutPhases.length}`)
+        );
+      } catch (err) {
+        if (err instanceof WorkflowError) {
+          console.error(chalk.red(`\n✗ ${err.code}: ${err.message}`));
+          for (const detail of err.details) {
+            console.error(chalk.red(`  - ${detail}`));
+          }
+        } else {
+          console.error(chalk.red(`\n✗ ${err}`));
+        }
+        process.exit(1);
+      }
+    }
+  )
+  .command(
     'decompose',
     'Decompose a PRD into a Draft implementation spec (stops at the human gate)',
     y =>
