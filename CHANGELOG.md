@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** sandbox deploy and test-tier verification now run
+  concurrently instead of sequentially. `ShellCommandRepository` used
+  `spawnSync`, which blocks Node's single thread — so even though the
+  test-tier scripted check (`yarn typecheck`/`test`/`build`) has no
+  dependency on the deployed sandbox, it could never overlap with the
+  deploy. Switched to async `spawn`, and `run.handler.ts` now dispatches
+  `sandboxStep` and `VerificationService.verifyTestTierOnly` together via
+  `Promise.all`; only agent-tier criteria (which consume the sandbox health
+  report) still wait for the deploy to finish. Measured against a live run:
+  cuts ~1.5–2 minutes off the deploy-finishes-to-merge gap per deployable
+  task. CI is unaffected — it already overlaps for free since GitHub
+  Actions triggers the moment the PR opens.
 - **sdlc-workflow / team-setup:** the continuity daemon could never actually
   restart anything, and said it had. Launch records stored `execPath` (plain
   node) plus a `.ts` entry but not the interpreter flags, so every relaunch —
