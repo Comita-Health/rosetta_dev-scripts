@@ -4,11 +4,13 @@ import type { IAgentRunnerRepository } from '../repositories/agent-runner.reposi
 import type { IGitRepository } from '../repositories/git.repository';
 import type { IRunStateRepository } from '../repositories/run-state.repository';
 import type { ISpecDocRepository } from '../repositories/spec-doc.repository';
+import type { ISurfaceMapRepository } from '../repositories/surface-map.repository';
 import { WORKFLOW_TOKENS } from '../tokens';
 import { RunState, SpecDocument, SpecTask, stepKey } from '../types';
 import { agentSpendK } from '../utils/agent-spend';
 import { inputsDigest } from '../utils/digest';
 import { buildImplementationPrompt } from '../utils/implementation-prompt';
+import { validateSpec } from '../utils/spec-validate';
 import { taskIntegrationTip } from '../utils/task-base';
 
 export interface ExecutorInput {
@@ -158,6 +160,8 @@ export class ExecutorService implements IExecutorService {
   constructor(
     @inject(WORKFLOW_TOKENS.SpecDocRepository)
     private readonly _specDocRepo: ISpecDocRepository,
+    @inject(WORKFLOW_TOKENS.SurfaceMapRepository)
+    private readonly _surfaceRepo: ISurfaceMapRepository,
     @inject(WORKFLOW_TOKENS.GitRepository)
     private readonly _gitRepo: IGitRepository,
     @inject(WORKFLOW_TOKENS.AgentRunnerRepository)
@@ -184,6 +188,33 @@ export class ExecutorService implements IExecutorService {
         spec,
         state,
         detail: 'unapproved-spec',
+        outcomes: []
+      };
+    }
+
+    // Structural defects are cheap here and ruinous later. An envelope naming
+    // a surface the repo does not define, for instance, is an unconditional
+    // breach at the envelope gate — every task fails no matter how good the
+    // code is, after a full wave of agent work has already been paid for.
+    const violations = validateSpec(
+      spec.tasks,
+      spec.envelope,
+      Object.keys(this._surfaceRepo.load(input.repoPath))
+    );
+    if (violations.length > 0) {
+      const state = this.loadOrInitState(input, spec);
+      this._runStateRepo.appendVerdict(input.runsDir, state, {
+        gate: 'intake',
+        outcome: 'blocked',
+        wouldEscalate: true,
+        reasons: ['invalid-spec', ...violations],
+        recordedAt: new Date().toISOString()
+      });
+      return {
+        kind: 'blocked',
+        spec,
+        state,
+        detail: 'invalid-spec',
         outcomes: []
       };
     }

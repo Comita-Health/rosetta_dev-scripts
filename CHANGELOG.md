@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** a run now blocks at the intake gate when the spec envelope
+  names a `forbiddenSurfaces` label the target repo does not define in
+  `.sdlc/surfaces.json`. The envelope gate fails closed on an unresolvable
+  label, so an undefined one breached **every** task unconditionally, no matter
+  what the diff contained — and only after a full wave of agent work had been
+  paid for. The intake verdict lists each bad label alongside the labels the
+  repo does define. Spec synthesis routinely invents plausible names
+  (`migrations`, `frontend`, `handlers`) that no repo declares.
 - **sdlc-workflow:** closed the "acceptance criteria" transparency gap
   identified while coaching PRD/spec authoring: all `test:` criteria on a
   task share a single run of the repo's scripted verify command, so a
@@ -21,7 +29,7 @@
   even slightly from that microformat produced no error, just a PRD that
   quietly decomposed into worse (or, for empty goals, eventually-erroring)
   output with no indication why. Sweeping this against every real PRD in
-  `rosetta_docs/product/` surfaced that even the *authoritative*
+  `rosetta_docs/product/` surfaced that even the _authoritative_
   `TEMPLATE.md` and the engine's own founding `PRD-0011` don't match the old
   strict Rollout regex (template puts the title outside the bold span;
   PRD-0011 prefixes phases with a status emoji) — proof the old contract was
@@ -67,7 +75,7 @@
 - **sdlc-workflow:** enforcing-mode merges no longer fail on every task. The
   merge ran `gh pr merge --squash --delete-branch`, and the engine only ever
   merges a branch checked out in one of its own worktrees, so gh always failed
-  the *local* delete — after the merge had already landed. Every task reported
+  the _local_ delete — after the merge had already landed. Every task reported
   `merge failed`, filed a needs-human issue, and held the phase gate behind
   work that was in fact on the default branch. `--delete-branch` is dropped
   (repos set `delete_branch_on_merge`), and a merge command that exits non-zero
