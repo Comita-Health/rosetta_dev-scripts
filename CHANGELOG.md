@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** `run --supervise --detach` works from a source checkout
+  again. The detached child was spawned as `process.execPath` plus the argv,
+  dropping the interpreter flags — running from source that is plain node and
+  a `.ts` entry, so the child died on `ERR_UNKNOWN_FILE_EXTENSION` before its
+  first wave. `process.execArgv` is now replayed into the child.
+- **team-setup:** the continuity daemon replays `execArgv` when relaunching a
+  supervisor (falling back to `tsx` for launch records written without it) and
+  probes the child before reporting a restart, so a relaunch that dies at
+  startup escalates instead of waking the operator to "confirm progress" on a
+  process that never ran.
+- **team-setup:** the continuity daemon no longer re-logs and re-kills a
+  stalled agent on every 60s tick. A killed agent never touches its heartbeat
+  again, so the condition is permanent once detected; the kill now fires once
+  per condition, matching the wake.
 - **sdlc-workflow:** `run --detach` no longer reports success when the child
   dies during startup. It printed `[supervise] detached` and exited 0 as soon
   as the spawn returned, so a bad `--spec` path, a still-`Draft` spec, or a

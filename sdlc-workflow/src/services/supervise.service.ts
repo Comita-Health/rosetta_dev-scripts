@@ -124,7 +124,10 @@ export class SuperviseService implements ISuperviseService {
     const childArgv = buildSuperviseChildArgv(input.detachArgv ?? process.argv);
     const { pid } = this._detachRepo.spawnDetached({
       command: process.execPath,
-      args: childArgv,
+      // Replay the interpreter flags. Running from source, execPath is plain
+      // node and the entry is a `.ts` file, so dropping them detaches into a
+      // guaranteed ERR_UNKNOWN_FILE_EXTENSION before the first wave.
+      args: [...process.execArgv, ...childArgv],
       cwd: process.cwd(),
       logPath,
       env: {

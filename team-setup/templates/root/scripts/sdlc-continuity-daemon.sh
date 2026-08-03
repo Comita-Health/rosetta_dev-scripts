@@ -83,19 +83,31 @@ relaunch_supervisor() {
     return
   fi
 
-  # Read argv as NUL-delimited so paths with spaces survive.
+  # Read argv as NUL-delimited so paths with spaces survive. `execArgv` carries
+  # the interpreter flags (the tsx loader when the engine runs from source);
+  # without replaying them the command is `node src/index.ts`, which dies on
+  # ERR_UNKNOWN_FILE_EXTENSION before reading anything.
   local -a argv=()
   while IFS= read -r -d '' item; do
     argv+=("$item")
   done < <(python3 -c '
 import json, sys
-for a in json.load(open(sys.argv[1])).get("argv", []):
+record = json.load(open(sys.argv[1]))
+for a in list(record.get("execArgv", [])) + list(record.get("argv", [])):
     sys.stdout.write(a + "\0")
 ' "$launch_file")
 
   if [[ ${#argv[@]} -eq 0 ]]; then
     log "  $run_id: launch.json has empty argv"
     return
+  fi
+
+  # Records written before execArgv was captured still say `node <file>.ts`.
+  # Route those through tsx rather than spawning a guaranteed crash loop.
+  if [[ "${argv[0]}" == *.ts && -x "$(command -v bunx || true)" ]]; then
+    local -a tsx_argv=(tsx "${argv[@]}")
+    argv=("${tsx_argv[@]}")
+    exec_path="$(command -v bunx)"
   fi
 
   (
@@ -105,6 +117,21 @@ for a in json.load(open(sys.argv[1])).get("argv", []):
   )
   local new_pid
   new_pid=$(cat "$run_dir/supervise.pid" 2>/dev/null || echo "?")
+
+  # A child that dies on startup must not be reported as a restart. Claiming
+  # "restarted, confirm it is progressing" for a process that never ran sends
+  # the human to look at a healthy-looking run while nothing is happening, and
+  # the next tick simply spawns another corpse.
+  sleep "${SDLC_RELAUNCH_PROBE_SECONDS:-3}"
+  if ! pid_alive "$new_pid"; then
+    log "  $run_id: relaunched pid $new_pid died during startup — not retrying"
+    rm -f "$run_dir/supervise.pid"
+    wake_emit_once sdlc_supervisor "$run_id-relaunch-failed" \
+      "The continuity daemon tried to relaunch SDLC run ${run_id} and the child died immediately. See the tail of ${run_dir}/supervise.log; the run needs a manual 'run --supervise --detach'." \
+      "$(printf '{"runId":"%s"}' "$run_id")" >/dev/null
+    return
+  fi
+
   log "  $run_id: relaunched supervisor as pid $new_pid"
   wake_emit sdlc_supervisor "$run_id-restarted" \
     "The SDLC supervisor for ${run_id} had died and the continuity daemon restarted it (pid ${new_pid}). Check the run status and confirm it is making progress." \
@@ -154,6 +181,14 @@ PY
   fi
 
   if [[ "${age:--1}" -gt 0 ]]; then
+    # A killed agent never touches its heartbeat again, so this condition is
+    # permanent once it fires. Re-logging and re-killing on every 60s tick
+    # buries every other run's output — one abandoned run produced 800 lines
+    # of "stalled — killing" over 13 hours while nothing else was visible.
+    if wake_notified sdlc_agent_timeout "$run_id-agent-stalled"; then
+      return 0
+    fi
+
     log "  $run_id: implementation agent stalled ${age}s — killing"
     pkill -f "cursor-agent.*${run_id}" 2>/dev/null || true
     wake_emit_once sdlc_agent_timeout "$run_id-agent-stalled" \
