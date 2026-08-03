@@ -5,6 +5,7 @@ import type { IAgentRunnerRepository } from '../repositories/agent-runner.reposi
 import type { IGitRepository } from '../repositories/git.repository';
 import type { IRunStateRepository } from '../repositories/run-state.repository';
 import type { ISpecDocRepository } from '../repositories/spec-doc.repository';
+import type { ISurfaceMapRepository } from '../repositories/surface-map.repository';
 import {
   ExecutorService,
   IExecutorService,
@@ -51,12 +52,18 @@ const baseState = (): RunState => ({
 describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
   let executor: IExecutorService;
   let specRead: jest.Mock;
+  let surfaceLoad: jest.Mock;
   let gitMock: jest.Mocked<IGitRepository>;
   let agentRun: jest.Mock;
   let stateMock: jest.Mocked<IRunStateRepository>;
 
   beforeEach(() => {
     specRead = jest.fn().mockReturnValue(makeSpec());
+    // The fixture envelope forbids 'ci-config'; the map must define it or
+    // every task blocks at intake on an unresolvable surface label.
+    surfaceLoad = jest
+      .fn()
+      .mockReturnValue({ 'ci-config': ['.github/workflows/**'] });
     gitMock = {
       // The primary checkout is at base-sha; a worktree the agent committed
       // in reports a new head (the no-commit guard compares the two).
@@ -112,6 +119,9 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
       .bind<ISpecDocRepository>(WORKFLOW_TOKENS.SpecDocRepository)
       .toConstantValue({ read: specRead });
     container
+      .bind<ISurfaceMapRepository>(WORKFLOW_TOKENS.SurfaceMapRepository)
+      .toConstantValue({ load: surfaceLoad });
+    container
       .bind<IGitRepository>(WORKFLOW_TOKENS.GitRepository)
       .toConstantValue(gitMock);
     container
@@ -145,6 +155,59 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
     );
     expect(agentRun).not.toHaveBeenCalled();
     expect(gitMock.addWorktree).not.toHaveBeenCalled();
+  });
+
+  // The envelope gate fails closed on a label it cannot resolve, so a
+  // forbiddenSurfaces entry the repo never defined breaches every task no
+  // matter what the diff contains. Catching it at intake costs nothing;
+  // catching it at the gate costs a full wave of agent work first.
+  it('blocks at intake on a forbiddenSurfaces label the repo does not define', async () => {
+    specRead.mockReturnValue(
+      makeSpec({
+        envelope: makeEnvelope({
+          forbiddenSurfaces: ['ci-config', 'migrations']
+        })
+      })
+    );
+
+    const pool = await executor.executeReady(INPUT);
+
+    expect(pool.kind).toBe('blocked');
+    expect(pool.detail).toBe('invalid-spec');
+    expect(stateMock.appendVerdict).toHaveBeenCalledWith(
+      '/runs',
+      expect.anything(),
+      expect.objectContaining({
+        gate: 'intake',
+        outcome: 'blocked',
+        wouldEscalate: true,
+        reasons: expect.arrayContaining([
+          'invalid-spec',
+          expect.stringContaining('migrations')
+        ])
+      })
+    );
+    // Nothing may be spent before the spec is known to be runnable.
+    expect(agentRun).not.toHaveBeenCalled();
+    expect(gitMock.addWorktree).not.toHaveBeenCalled();
+  });
+
+  it('reports the labels the repo does define, so the fix is obvious', async () => {
+    specRead.mockReturnValue(
+      makeSpec({ envelope: makeEnvelope({ forbiddenSurfaces: ['frontend'] }) })
+    );
+
+    await executor.executeReady(INPUT);
+
+    const verdict = stateMock.appendVerdict.mock.calls[0][2];
+    expect(verdict.reasons.join(' ')).toContain('defined: ci-config');
+  });
+
+  it('does not block when every forbidden label resolves', async () => {
+    const pool = await executor.executeReady(INPUT);
+
+    expect(pool.kind).not.toBe('blocked');
+    expect(surfaceLoad).toHaveBeenCalledWith('/repo');
   });
 
   it('starts only tasks whose dependencies are merged', async () => {

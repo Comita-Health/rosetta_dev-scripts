@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** a run now blocks at the intake gate when the spec envelope
+  names a `forbiddenSurfaces` label the target repo does not define in
+  `.sdlc/surfaces.json`. The envelope gate fails closed on an unresolvable
+  label, so an undefined one breached **every** task unconditionally, no matter
+  what the diff contained — and only after a full wave of agent work had been
+  paid for. The intake verdict lists each bad label alongside the labels the
+  repo does define. Spec synthesis routinely invents plausible names
+  (`migrations`, `frontend`, `handlers`) that no repo declares.
 - **sdlc-workflow:** `run --detach` no longer reports success when the child
   dies during startup. It printed `[supervise] detached` and exited 0 as soon
   as the spawn returned, so a bad `--spec` path, a still-`Draft` spec, or a

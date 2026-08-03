@@ -102,6 +102,53 @@ describe('validateSpec', () => {
       'spec contains no tasks'
     );
   });
+
+  describe('forbiddenSurfaces resolution', () => {
+    // The envelope gate treats an unresolvable label as a breach, so an
+    // undefined label silently dooms every task in the spec. It is only
+    // catchable here, where the repo's surface map is known.
+    it('rejects a label the repo does not define', () => {
+      const errors = validateSpec(
+        [makeTask()],
+        makeEnvelope({ forbiddenSurfaces: ['auth', 'migrations'] }),
+        ['auth', 'ci-config']
+      );
+
+      expect(errors).toHaveLength(1);
+      expect(errors[0]).toContain('"migrations"');
+      expect(errors[0]).toContain('defined: auth, ci-config');
+    });
+
+    it('accepts labels that all resolve', () => {
+      expect(
+        validateSpec(
+          [makeTask()],
+          makeEnvelope({ forbiddenSurfaces: ['auth'] }),
+          ['auth']
+        )
+      ).toEqual([]);
+    });
+
+    it('reports "none" when the repo defines no surfaces at all', () => {
+      const errors = validateSpec(
+        [makeTask()],
+        makeEnvelope({ forbiddenSurfaces: ['auth'] }),
+        []
+      );
+
+      expect(errors[0]).toContain('defined: none');
+    });
+
+    // Callers without repo context (pure format checks) must stay unaffected.
+    it('skips the check when no surface list is supplied', () => {
+      expect(
+        validateSpec(
+          [makeTask()],
+          makeEnvelope({ forbiddenSurfaces: ['does-not-exist'] })
+        )
+      ).toEqual([]);
+    });
+  });
 });
 
 describe('renderSpec', () => {
