@@ -5,6 +5,7 @@ import type { IAgentRunnerRepository } from '../repositories/agent-runner.reposi
 import type { IGitRepository } from '../repositories/git.repository';
 import type { IRunStateRepository } from '../repositories/run-state.repository';
 import type { ISpecDocRepository } from '../repositories/spec-doc.repository';
+import type { ISurfaceMapRepository } from '../repositories/surface-map.repository';
 import {
   ExecutorService,
   IExecutorService,
@@ -26,7 +27,9 @@ const makeSpec = (overrides: Partial<SpecDocument> = {}): SpecDocument => ({
 });
 
 const INPUT = {
-  specPath: '/specs/spec.md',
+  // In-repo: an enforcing run refuses a spec it cannot compare against the
+  // default branch, and a spec outside the repo has nothing to compare to.
+  specPath: '/repo/specs/spec.md',
   repoPath: '/repo',
   runId: 'run-1',
   runsDir: '/runs',
@@ -51,12 +54,18 @@ const baseState = (): RunState => ({
 describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
   let executor: IExecutorService;
   let specRead: jest.Mock;
+  let surfaceLoad: jest.Mock;
   let gitMock: jest.Mocked<IGitRepository>;
   let agentRun: jest.Mock;
   let stateMock: jest.Mocked<IRunStateRepository>;
 
   beforeEach(() => {
     specRead = jest.fn().mockReturnValue(makeSpec());
+    // The fixture envelope forbids 'ci-config'; the map must define it or
+    // every task blocks at intake on an unresolvable surface label.
+    surfaceLoad = jest
+      .fn()
+      .mockReturnValue({ 'ci-config': ['.github/workflows/**'] });
     gitMock = {
       // The primary checkout is at base-sha; a worktree the agent committed
       // in reports a new head (the no-commit guard compares the two).
@@ -72,7 +81,9 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
       push: jest.fn(),
       fetch: jest.fn(),
       resolveSha: jest.fn(),
-      defaultBranch: jest.fn(),
+      defaultBranch: jest.fn().mockReturnValue('build-env/dev'),
+      fileAtRef: jest.fn().mockReturnValue('spec contents'),
+      pathDiffersFromRef: jest.fn().mockReturnValue(false),
       revertMerge: jest.fn(),
       stageAll: jest.fn(),
       commit: jest.fn(),
@@ -113,6 +124,9 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
       .bind<ISpecDocRepository>(WORKFLOW_TOKENS.SpecDocRepository)
       .toConstantValue({ read: specRead });
     container
+      .bind<ISurfaceMapRepository>(WORKFLOW_TOKENS.SurfaceMapRepository)
+      .toConstantValue({ load: surfaceLoad });
+    container
       .bind<IGitRepository>(WORKFLOW_TOKENS.GitRepository)
       .toConstantValue(gitMock);
     container
@@ -146,6 +160,120 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
     );
     expect(agentRun).not.toHaveBeenCalled();
     expect(gitMock.addWorktree).not.toHaveBeenCalled();
+  });
+
+  // The envelope gate fails closed on a label it cannot resolve, so a
+  // forbiddenSurfaces entry the repo never defined breaches every task no
+  // matter what the diff contains. Catching it at intake costs nothing;
+  // catching it at the gate costs a full wave of agent work first.
+  it('blocks at intake on a forbiddenSurfaces label the repo does not define', async () => {
+    specRead.mockReturnValue(
+      makeSpec({
+        envelope: makeEnvelope({
+          forbiddenSurfaces: ['ci-config', 'migrations']
+        })
+      })
+    );
+
+    const pool = await executor.executeReady(INPUT);
+
+    expect(pool.kind).toBe('blocked');
+    expect(pool.detail).toBe('invalid-spec');
+    expect(stateMock.appendVerdict).toHaveBeenCalledWith(
+      '/runs',
+      expect.anything(),
+      expect.objectContaining({
+        gate: 'intake',
+        outcome: 'blocked',
+        wouldEscalate: true,
+        reasons: expect.arrayContaining([
+          'invalid-spec',
+          expect.stringContaining('migrations')
+        ])
+      })
+    );
+    // Nothing may be spent before the spec is known to be runnable.
+    expect(agentRun).not.toHaveBeenCalled();
+    expect(gitMock.addWorktree).not.toHaveBeenCalled();
+  });
+
+  it('reports the labels the repo does define, so the fix is obvious', async () => {
+    specRead.mockReturnValue(
+      makeSpec({ envelope: makeEnvelope({ forbiddenSurfaces: ['frontend'] }) })
+    );
+
+    await executor.executeReady(INPUT);
+
+    const verdict = stateMock.appendVerdict.mock.calls[0][2];
+    expect(verdict.reasons.join(' ')).toContain('defined: ci-config');
+  });
+
+  // The gate is a human approving the PR that lands the spec, so the only
+  // spec an enforcing run may execute is the one on the default branch.
+  // Without this an agent flips `status: Approved` in its own checkout and
+  // launches -- which is exactly how the first canary skipped its own gate.
+  describe('spec provenance', () => {
+    it('blocks when the spec has not landed on the default branch', async () => {
+      gitMock.fileAtRef.mockReturnValue(null);
+
+      const pool = await executor.executeReady(INPUT);
+
+      expect(pool.kind).toBe('blocked');
+      expect(pool.detail).toBe('spec-not-merged');
+      expect(gitMock.fileAtRef).toHaveBeenCalledWith(
+        '/repo',
+        'origin/build-env/dev',
+        'specs/spec.md'
+      );
+      expect(agentRun).not.toHaveBeenCalled();
+      expect(gitMock.addWorktree).not.toHaveBeenCalled();
+    });
+
+    it('blocks when the local copy differs from the merged one', async () => {
+      gitMock.pathDiffersFromRef.mockReturnValue(true);
+
+      const pool = await executor.executeReady(INPUT);
+
+      expect(pool.kind).toBe('blocked');
+      expect(pool.detail).toBe('spec-not-merged');
+      const verdict = stateMock.appendVerdict.mock.calls[0][2];
+      expect(verdict.reasons.join(' ')).toContain('differs from');
+      expect(agentRun).not.toHaveBeenCalled();
+    });
+
+    it('refuses a spec outside the repo, which has nothing to compare to', async () => {
+      const pool = await executor.executeReady({
+        ...INPUT,
+        specPath: '/elsewhere/spec.md'
+      });
+
+      expect(pool.kind).toBe('blocked');
+      expect(pool.detail).toBe('spec-not-merged');
+      const verdict = stateMock.appendVerdict.mock.calls[0][2];
+      expect(verdict.reasons.join(' ')).toContain('outside the repo');
+    });
+
+    it('fetches first so the comparison is against current origin', async () => {
+      await executor.executeReady(INPUT);
+
+      expect(gitMock.fetch).toHaveBeenCalledWith('/repo');
+    });
+
+    // Shadow runs never merge, so working from an unlanded spec is the point.
+    it('skips the check in shadow mode', async () => {
+      gitMock.fileAtRef.mockReturnValue(null);
+
+      const pool = await executor.executeReady({ ...INPUT, shadow: true });
+
+      expect(pool.kind).not.toBe('blocked');
+    });
+  });
+
+  it('does not block when every forbidden label resolves', async () => {
+    const pool = await executor.executeReady(INPUT);
+
+    expect(pool.kind).not.toBe('blocked');
+    expect(surfaceLoad).toHaveBeenCalledWith('/repo');
   });
 
   it('starts only tasks whose dependencies are merged', async () => {

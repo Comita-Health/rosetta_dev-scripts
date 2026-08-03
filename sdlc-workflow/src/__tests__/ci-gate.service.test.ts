@@ -99,6 +99,8 @@ describe('CiGateService (P3 T-03 live monitor + bounded fix cycle)', () => {
         fetch: jest.fn(),
         resolveSha: jest.fn(),
         defaultBranch: jest.fn(),
+        fileAtRef: jest.fn().mockReturnValue(null),
+        pathDiffersFromRef: jest.fn().mockReturnValue(false),
         revertMerge: jest.fn(),
         stageAll,
         commit,
