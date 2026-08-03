@@ -44,6 +44,36 @@ pid_alive() {
   [[ -n "${1:-}" ]] && kill -0 "$1" 2>/dev/null
 }
 
+# True when the run has at least one recorded needs-human exception and not
+# every one of them has been cleared (matching issue closed). A supervisor
+# that exits against a state like this is not crashing — it correctly found
+# the blocked task unresolvable and quit; relaunching it just reproduces the
+# exact same exit a few seconds later, on every single tick, forever.
+run_has_unresolved_blockers() {
+  local run_dir="$1" run_id="$2" launch_file="$run_dir/launch.json"
+  [[ -f "$launch_file" ]] || return 1
+  command -v gh >/dev/null 2>&1 || return 1
+
+  local repo_path engine_cwd
+  repo_path=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("repoPath",""))' "$launch_file")
+  engine_cwd=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("cwd",""))' "$launch_file")
+  [[ -d "$repo_path" && -d "$engine_cwd" ]] || return 1
+
+  local report
+  report=$(cd "$engine_cwd" && bunx tsx src/index.ts blockers \
+    --run-id "$run_id" --repo "$repo_path" --json 2>/dev/null) || return 1
+
+  printf '%s' "$report" | python3 -c '
+import json, sys
+try:
+    r = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+blockers = r.get("blockers") or []
+sys.exit(0 if blockers and not r.get("resumable") else 1)
+' 2>/dev/null
+}
+
 # Terminal runs must not be relaunched — that is an infinite restart loop.
 run_is_finished() {
   local state_file="$1"
@@ -110,32 +140,46 @@ for a in list(record.get("execArgv", [])) + list(record.get("argv", [])):
     exec_path="$(command -v bunx)"
   fi
 
+  rm -f "$run_dir/supervise.exit"
   (
     cd "$cwd" || exit 1
-    nohup "$exec_path" "${argv[@]}" >>"$run_dir/supervise.log" 2>&1 &
-    printf '%s\n' "$!" >"$run_dir/supervise.pid"
-  )
-  local new_pid
-  new_pid=$(cat "$run_dir/supervise.pid" 2>/dev/null || echo "?")
+    "$exec_path" "${argv[@]}" >>"$run_dir/supervise.log" 2>&1
+    echo $? >"$run_dir/supervise.exit"
+  ) &
+  disown 2>/dev/null || true
+  local new_pid=$!
+  printf '%s\n' "$new_pid" >"$run_dir/supervise.pid"
 
-  # A child that dies on startup must not be reported as a restart. Claiming
-  # "restarted, confirm it is progressing" for a process that never ran sends
-  # the human to look at a healthy-looking run while nothing is happening, and
-  # the next tick simply spawns another corpse.
+  # `--supervise` finishes its own process the moment a wave has nothing left
+  # to do (no ready task, blocked, or every task merged) — a run that hits a
+  # freshly-blocked gate can legitimately exit in well under this probe
+  # window. So a dead pid after the probe is not itself "died at startup";
+  # only a *nonzero* exit code is. Treating "exited fast" as a crash sent the
+  # human a false "died immediately" wake for a supervisor that ran fine and
+  # correctly reported the exact same blocker its needs-human issue already
+  # covers.
   sleep "${SDLC_RELAUNCH_PROBE_SECONDS:-3}"
-  if ! pid_alive "$new_pid"; then
-    log "  $run_id: relaunched pid $new_pid died during startup — not retrying"
-    rm -f "$run_dir/supervise.pid"
-    wake_emit_once sdlc_supervisor "$run_id-relaunch-failed" \
-      "The continuity daemon tried to relaunch SDLC run ${run_id} and the child died immediately. See the tail of ${run_dir}/supervise.log; the run needs a manual 'run --supervise --detach'." \
-      "$(printf '{"runId":"%s"}' "$run_id")" >/dev/null
+  if pid_alive "$new_pid"; then
+    log "  $run_id: relaunched supervisor as pid $new_pid"
+    wake_emit sdlc_supervisor "$run_id-restarted" \
+      "The SDLC supervisor for ${run_id} had died and the continuity daemon restarted it (pid ${new_pid}). Check the run status and confirm it is making progress." \
+      "$(printf '{"runId":"%s","pid":"%s"}' "$run_id" "$new_pid")" >/dev/null
     return
   fi
 
-  log "  $run_id: relaunched supervisor as pid $new_pid"
-  wake_emit sdlc_supervisor "$run_id-restarted" \
-    "The SDLC supervisor for ${run_id} had died and the continuity daemon restarted it (pid ${new_pid}). Check the run status and confirm it is making progress." \
-    "$(printf '{"runId":"%s","pid":"%s"}' "$run_id" "$new_pid")" >/dev/null
+  local exit_code
+  exit_code=$(cat "$run_dir/supervise.exit" 2>/dev/null || echo "")
+  rm -f "$run_dir/supervise.pid"
+
+  if [[ "$exit_code" == "0" ]]; then
+    log "  $run_id: relaunched pid $new_pid exited cleanly (blocked or wave complete) — not a crash, not retrying this tick"
+    return
+  fi
+
+  log "  $run_id: relaunched pid $new_pid died during startup (exit ${exit_code:-unknown}) — not retrying"
+  wake_emit_once sdlc_supervisor "$run_id-relaunch-failed" \
+    "The continuity daemon tried to relaunch SDLC run ${run_id} and the child exited immediately with code ${exit_code:-unknown}. See the tail of ${run_dir}/supervise.log; the run needs a manual 'run --supervise --detach'." \
+    "$(printf '{"runId":"%s","exitCode":"%s"}' "$run_id" "${exit_code:-unknown}")" >/dev/null
 }
 
 # Kill an implementation agent whose heartbeat has gone quiet, so the wave
@@ -253,6 +297,14 @@ tick() {
 
     pid=$(cat "$run_dir/supervise.pid" 2>/dev/null || true)
     if [[ -n "$pid" ]] && ! pid_alive "$pid"; then
+      if run_has_unresolved_blockers "$run_dir" "$run_id"; then
+        # check_cleared_blockers (above) already owns notifying once every
+        # blocker is cleared; relaunching here would just spawn a process
+        # that re-confirms the identical block and exits, every 60s, forever.
+        log "$run_id: supervisor dead but the run has an open needs-human blocker — not relaunching"
+        continue
+      fi
+
       local idle
       idle=$(python3 -c '
 import os, sys, time

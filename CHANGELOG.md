@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+- **team-setup:** `sdlc-continuity-daemon.sh` no longer reports a supervisor
+  that exited cleanly (exit code 0) as "died during startup." `--supervise`
+  finishes its own process the moment a wave has nothing left to do —
+  including the moment it discovers a task is blocked on a needs-human
+  gate — and that can legitimately happen well inside the post-relaunch
+  probe window. The daemon used to treat that fast exit as a crash, fire a
+  misleading "relaunch failed" wake, delete the pid file, and then never try
+  again (the outer tick loop only re-attempts a relaunch when the pid file
+  is non-empty). The relaunch wrapper now captures the real exit code via a
+  `supervise.exit` sidecar and only reports a crash when that code is
+  nonzero. The daemon also now checks `blockers --json` before attempting a
+  relaunch at all: a run with an open, uncleared needs-human blocker is
+  skipped outright rather than respawned every 60s just to reconfirm the
+  same block. Found live: a canary run's supervisor legitimately exited
+  twice after hitting a blocked gate, both attempted relaunches were
+  misreported as startup crashes, and the resulting wake sat unconsumed in
+  the local inbox with nobody watching.
+- **team-setup:** `wake-inbox.sh`'s `wake_emit` now fires a native macOS
+  notification banner (`osascript display notification`) alongside the
+  existing pending-file write, best-effort and non-blocking. The durable
+  file was already reachable by the Cursor stop hook, but that hook only
+  drains on the next turn boundary — a wake created while chat is fully
+  idle had no path to a human until they happened to start a new turn on
+  their own. The system notification reaches the human directly and closes
+  that idle-chat gap. Found live: a daemon relaunch-failed wake sat in
+  `~/.rosetta/wake/pending` for 30+ minutes during idle chat with nobody
+  alerted.
 - **sdlc-workflow:** task worktrees are now cleaned up automatically once
   their work has actually merged. `GitRepository.removeWorktreeAsync`
   dispatches `git worktree remove --force` without waiting for it —
