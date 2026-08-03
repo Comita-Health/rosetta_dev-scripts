@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** `run --detach` no longer reports success when the child
+  dies during startup. It printed `[supervise] detached` and exited 0 as soon
+  as the spawn returned, so a bad `--spec` path, a still-`Draft` spec, or a
+  non-worktree `--repo` looked identical to a healthy launch — and no
+  `state.json` exists that early, so the continuity daemon skipped the run too.
+  The parent now probes the child after a startup grace and, if it is gone,
+  surfaces the tail of the child's own log and exits 1.
 - **sdlc-workflow:** SPEC-PRD-0011-P4 path-aware sandbox deploy. The sandbox
   gate now exports `SDLC_SANDBOX_BASE_SHA` (the task's gate base; the run's
   frozen base at the phase boundary) alongside `SDLC_SANDBOX_SHA`, so
