@@ -511,7 +511,18 @@ export class RunHandler implements IRunHandler {
       verificationVerdict
     );
 
-    const phaseDigest = inputsDigest({ ...chain, step: 'phase' });
+    // Phase digest must include the four gate digests. Otherwise a tip-moved
+    // recover wave can re-pass envelope/reviewer under new digests while still
+    // cache-hitting a phase breach that was aggregated from the prior red
+    // gate pair under the same headSha (P0G T-03).
+    const phaseDigest = inputsDigest({
+      ...chain,
+      step: 'phase',
+      envelope: envelopeVerdict.inputsDigest,
+      reviewer: reviewerVerdict.inputsDigest,
+      verification: verificationVerdict.inputsDigest,
+      ci: ciVerdict.inputsDigest
+    });
     const phaseKey = stepKey('phase', task.id, phaseDigest);
     let phaseVerdict: GateVerdict;
     if (state.steps[phaseKey]?.verdict !== undefined) {
