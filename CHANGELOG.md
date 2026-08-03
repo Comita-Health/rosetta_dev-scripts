@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** an enforcing run now refuses a spec that is not the one on
+  the repo's default branch — missing there, or differing from the local copy.
+  The approval gate is a human approving the PR that lands the spec, but
+  nothing enforced it: `run --spec <path>` read a local file, so an agent could
+  flip `status: Approved` in its own checkout and launch. That is exactly how
+  the first PRD-9999 canary skipped its own gate. Branch protection cannot
+  cover this (private repo on a free plan, client-side husky guard, and the
+  implementation prompt tells agents to use `--no-verify`). `--shadow` runs are
+  exempt, since they never merge and iterating on an unlanded spec is the point.
 - **sdlc-workflow:** a run now blocks at the intake gate when the spec envelope
   names a `forbiddenSurfaces` label the target repo does not define in
   `.sdlc/surfaces.json`. The envelope gate fails closed on an unresolvable
