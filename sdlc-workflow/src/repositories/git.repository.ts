@@ -42,6 +42,16 @@ export interface IGitRepository {
   /** The repo's default branch name, from origin/HEAD (fallback: main). */
   defaultBranch(repoPath: string): string;
   /**
+   * Contents of a repo-relative path at a ref, or null when the ref does not
+   * carry that path (unmerged spec, deleted file, unknown ref).
+   */
+  fileAtRef(repoPath: string, ref: string, relPath: string): string | null;
+  /**
+   * True when the working-tree copy of `relPath` differs from the one at
+   * `ref`. Catches uncommitted edits and committed-but-unmerged ones alike.
+   */
+  pathDiffersFromRef(repoPath: string, ref: string, relPath: string): boolean;
+  /**
    * Revert a merge commit (first-parent mainline) with a signed-off commit
    * in the given checkout (P3 T-05 veto path).
    */
@@ -119,12 +129,38 @@ export class GitRepository implements IGitRepository {
   }
 
   defaultBranch(repoPath: string): string {
+    const prefix = 'refs/remotes/origin/';
     try {
       const ref = git(repoPath, 'symbolic-ref refs/remotes/origin/HEAD').trim();
-      const name = ref.split('/').pop();
-      return name !== undefined && name.length > 0 ? name : 'main';
+      // Strip the prefix rather than taking the last path segment: branch
+      // names may contain slashes (e.g. `build-env/dev`, which a `.pop()`
+      // would truncate to `dev`).
+      const name = ref.startsWith(prefix) ? ref.slice(prefix.length) : '';
+      return name.length > 0 ? name : 'main';
     } catch {
       return 'main';
+    }
+  }
+
+  fileAtRef(repoPath: string, ref: string, relPath: string): string | null {
+    try {
+      return git(repoPath, `show "${ref}:${relPath}"`);
+    } catch {
+      // `git show` exits non-zero for an unknown ref and for a path the ref
+      // does not carry. Both mean "not present there", which the caller
+      // treats the same way.
+      return null;
+    }
+  }
+
+  pathDiffersFromRef(repoPath: string, ref: string, relPath: string): boolean {
+    try {
+      git(repoPath, `diff --quiet "${ref}" -- "${relPath}"`);
+      return false;
+    } catch {
+      // `--quiet` exits 1 on any difference. A genuine git error also lands
+      // here and is reported as a difference, which fails closed.
+      return true;
     }
   }
 
@@ -175,7 +211,10 @@ export class GitRepository implements IGitRepository {
   }
 
   diffStat(repoPath: string, baseRef: string, headRef: string): DiffStat {
-    const raw = git(repoPath, `diff --numstat "${baseRef}".."${headRef}"`);
+    const raw = git(
+      repoPath,
+      `diff --numstat --no-renames "${baseRef}".."${headRef}"`
+    );
     const files: DiffStat['files'] = [];
     let totalLines = 0;
     for (const line of raw.split('\n')) {

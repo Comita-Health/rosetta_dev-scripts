@@ -5,6 +5,16 @@ import { WORKFLOW_TOKENS } from '../tokens';
 import { Envelope, GateVerdict } from '../types';
 import { matchesAnyGlob } from '../utils/glob-match';
 
+/** Mid-run edits under specs/ are forbidden even when listed in allowedPaths. */
+const SPEC_TREE_GLOBS = ['specs/**', '**/specs/**'] as const;
+
+/**
+ * True when a repo-relative path is under a `specs/` tree (ADR-0008 docs).
+ * Product-task diffs must not flip AC checkboxes or change `status:` here.
+ */
+export const isSpecTreePath = (filePath: string): boolean =>
+  matchesAnyGlob([...SPEC_TREE_GLOBS], filePath);
+
 export interface EnvelopeGateInput {
   repoPath: string;
   baseRef: string;
@@ -17,6 +27,10 @@ export interface EnvelopeGateInput {
  * blast-radius envelope. Shadow semantics — the verdict is computed and
  * returned with `wouldEscalate` on breach; it never blocks. Persistence
  * and flow control belong to the handler.
+ *
+ * Always breaches on any path under a specs/ tree (repo-root or nested), even
+ * if that path is listed in allowedPaths — checkbox / Done closeout is a
+ * separate docs PR after the phase, not a product-task diff.
  */
 export interface IEnvelopeGateService {
   evaluate(input: EnvelopeGateInput): Promise<GateVerdict>;
@@ -45,6 +59,15 @@ export class EnvelopeGateService implements IEnvelopeGateService {
       .map(file => file.path);
     if (outsideAllowed.length > 0) {
       reasons.push(`outside allowedPaths: ${outsideAllowed.join(', ')}`);
+    }
+
+    const midRunSpecEdits = diff.files
+      .filter(file => isSpecTreePath(file.path))
+      .map(file => file.path);
+    if (midRunSpecEdits.length > 0) {
+      reasons.push(
+        `mid-run specs/** edits are forbidden (closeout is a separate docs PR): ${midRunSpecEdits.join(', ')}`
+      );
     }
 
     for (const label of input.envelope.forbiddenSurfaces) {

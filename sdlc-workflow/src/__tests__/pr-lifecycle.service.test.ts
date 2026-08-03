@@ -56,6 +56,8 @@ describe('PrLifecycleService (P3 T-02)', () => {
         fetch: jest.fn(),
         resolveSha: jest.fn(),
         defaultBranch: jest.fn(),
+        fileAtRef: jest.fn(),
+        pathDiffersFromRef: jest.fn(),
         revertMerge: jest.fn(),
         stageAll: jest.fn(),
         commit: jest.fn(),

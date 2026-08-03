@@ -66,6 +66,7 @@ describe('GitRepository', () => {
       { path: 'src/b.ts', lines: 3 }
     ]);
     expect(diff.totalLines).toBe(15);
+    expect(execMock.mock.calls[0][0]).toContain('--no-renames');
   });
 
   it('fetches origin and resolves refs to SHAs (P3 T-05)', () => {
@@ -86,6 +87,36 @@ describe('GitRepository', () => {
       );
     });
     expect(repo.defaultBranch('/repo')).toBe('main');
+  });
+
+  it('preserves slash characters in default branch names', () => {
+    execMock.mockReturnValue('refs/remotes/origin/build-env/dev\n');
+    expect(repo.defaultBranch('/repo')).toBe('build-env/dev');
+  });
+
+  it('returns file contents at a ref, or null when absent', () => {
+    execMock.mockReturnValue('# spec\n');
+    expect(repo.fileAtRef('/repo', 'origin/main', 'specs/x.md')).toBe('# spec\n');
+    expect(execMock.mock.calls[0][0]).toContain('show "origin/main:specs/x.md"');
+
+    execMock.mockImplementation(() => {
+      throw new Error('fatal: path does not exist');
+    });
+    expect(repo.fileAtRef('/repo', 'origin/main', 'missing.md')).toBeNull();
+  });
+
+  it('reports pathDiffersFromRef from git diff --quiet', () => {
+    execMock.mockReturnValue('');
+    expect(repo.pathDiffersFromRef('/repo', 'origin/main', 'specs/x.md')).toBe(
+      false
+    );
+
+    execMock.mockImplementation(() => {
+      throw new Error('exit 1');
+    });
+    expect(repo.pathDiffersFromRef('/repo', 'origin/main', 'specs/x.md')).toBe(
+      true
+    );
   });
 
   it('reverts a merge commit first-parent with sign-off (P3 T-05)', () => {

@@ -26,7 +26,9 @@ const makeSpec = (overrides: Partial<SpecDocument> = {}): SpecDocument => ({
 });
 
 const INPUT = {
-  specPath: '/specs/spec.md',
+  // In-repo: an enforcing run refuses a spec it cannot compare against the
+  // default branch, and a spec outside the repo has nothing to compare to.
+  specPath: '/repo/specs/spec.md',
   repoPath: '/repo',
   runId: 'run-1',
   runsDir: '/runs',
@@ -51,12 +53,14 @@ const baseState = (): RunState => ({
 describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
   let executor: IExecutorService;
   let specRead: jest.Mock;
+  let specReadAtRef: jest.Mock;
   let gitMock: jest.Mocked<IGitRepository>;
   let agentRun: jest.Mock;
   let stateMock: jest.Mocked<IRunStateRepository>;
 
   beforeEach(() => {
     specRead = jest.fn().mockReturnValue(makeSpec());
+    specReadAtRef = jest.fn().mockReturnValue(makeSpec());
     gitMock = {
       // The primary checkout is at base-sha; a worktree the agent committed
       // in reports a new head (the no-commit guard compares the two).
@@ -72,7 +76,9 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
       push: jest.fn(),
       fetch: jest.fn(),
       resolveSha: jest.fn(),
-      defaultBranch: jest.fn(),
+      defaultBranch: jest.fn().mockReturnValue('build-env/dev'),
+      fileAtRef: jest.fn(),
+      pathDiffersFromRef: jest.fn().mockReturnValue(false),
       revertMerge: jest.fn(),
       stageAll: jest.fn(),
       commit: jest.fn(),
@@ -111,7 +117,7 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
     const container = new Container();
     container
       .bind<ISpecDocRepository>(WORKFLOW_TOKENS.SpecDocRepository)
-      .toConstantValue({ read: specRead });
+      .toConstantValue({ read: specRead, readAtRef: specReadAtRef });
     container
       .bind<IGitRepository>(WORKFLOW_TOKENS.GitRepository)
       .toConstantValue(gitMock);
@@ -128,7 +134,7 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
   });
 
   it('refuses an unapproved spec and records a blocked verdict', async () => {
-    specRead.mockReturnValue(makeSpec({ status: 'Draft' }));
+    specReadAtRef.mockReturnValue(makeSpec({ status: 'Draft' }));
 
     const pool = await executor.executeReady(INPUT);
 
@@ -146,6 +152,65 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
     );
     expect(agentRun).not.toHaveBeenCalled();
     expect(gitMock.addWorktree).not.toHaveBeenCalled();
+  });
+
+  describe('spec provenance', () => {
+    it('blocks when the spec has not landed on the default branch', async () => {
+      specReadAtRef.mockReturnValue(null);
+
+      const pool = await executor.executeReady(INPUT);
+
+      expect(pool.kind).toBe('blocked');
+      expect(pool.detail).toBe('spec-not-merged');
+      expect(specReadAtRef).toHaveBeenCalledWith(
+        '/repo',
+        'origin/build-env/dev',
+        'specs/spec.md'
+      );
+      expect(agentRun).not.toHaveBeenCalled();
+      expect(gitMock.addWorktree).not.toHaveBeenCalled();
+    });
+
+    it('does not block when the local working tree differs from origin', async () => {
+      // Stale operator checkout used to fail intake; enforce now trusts origin.
+      gitMock.pathDiffersFromRef.mockReturnValue(true);
+      specReadAtRef.mockReturnValue(makeSpec());
+
+      const pool = await executor.executeReady(INPUT);
+
+      expect(pool.kind).not.toBe('blocked');
+      expect(specReadAtRef).toHaveBeenCalled();
+      expect(gitMock.pathDiffersFromRef).not.toHaveBeenCalled();
+    });
+
+    it('refuses a spec outside the repo, which has nothing to compare to', async () => {
+      const pool = await executor.executeReady({
+        ...INPUT,
+        specPath: '/outside/spec.md'
+      });
+
+      expect(pool.kind).toBe('blocked');
+      expect(pool.detail).toBe('spec-not-merged');
+      const verdict = stateMock.appendVerdict.mock.calls[0][2];
+      expect(verdict.reasons.join(' ')).toContain('outside the repo');
+    });
+
+    it('fetches first so the origin blob is current', async () => {
+      await executor.executeReady(INPUT);
+
+      expect(gitMock.fetch).toHaveBeenCalledWith('/repo');
+    });
+
+    // Shadow runs never merge, so working from an unlanded spec is the point.
+    it('skips origin load in shadow mode and uses the local file', async () => {
+      specReadAtRef.mockReturnValue(null);
+
+      const pool = await executor.executeReady({ ...INPUT, shadow: true });
+
+      expect(pool.kind).not.toBe('blocked');
+      expect(specRead).toHaveBeenCalled();
+      expect(specReadAtRef).not.toHaveBeenCalled();
+    });
   });
 
   it('starts only tasks whose dependencies are merged', async () => {
@@ -485,7 +550,7 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
       });
 
     it('executes independent ready tasks concurrently in separate worktrees', async () => {
-      specRead.mockReturnValue(independentSpec());
+      specReadAtRef.mockReturnValue(independentSpec());
       // Neither agent resolves until both have been started — proof the
       // fan-out is concurrent, not sequential.
       const resolvers: ((v: { ok: boolean; output: string }) => void)[] = [];
@@ -521,7 +586,7 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
     });
 
     it('bounds the wave at maxParallel', async () => {
-      specRead.mockReturnValue(independentSpec());
+      specReadAtRef.mockReturnValue(independentSpec());
 
       const pool = await executor.executeReady({ ...INPUT, maxParallel: 2 });
 
@@ -530,7 +595,7 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
     });
 
     it('a failed task blocks its dependents while unrelated tasks proceed', async () => {
-      specRead.mockReturnValue(
+      specReadAtRef.mockReturnValue(
         makeSpec({
           tasks: [
             makeTask(),
@@ -696,7 +761,7 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
       const t01 = makeTask();
       const t02 = makeTask({ id: 'T-02', dependsOn: ['T-01'] });
       const t03 = makeTask({ id: 'T-03', dependsOn: ['T-02'] });
-      specRead.mockReturnValue(makeSpec({ tasks: [t01, t02, t03] }));
+      specReadAtRef.mockReturnValue(makeSpec({ tasks: [t01, t02, t03] }));
 
       const oldTip = 'merge-t01';
       const newTip = 'merge-t02';

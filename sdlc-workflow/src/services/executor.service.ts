@@ -16,6 +16,12 @@ export interface ExecutorInput {
   repoPath: string;
   runId: string;
   runsDir: string;
+  /**
+   * Calibration mode. Shadow runs never merge, so they are allowed to work
+   * from a spec that has not landed on the default branch yet — that is the
+   * point of a dry run. Enforcing runs are not.
+   */
+  shadow?: boolean;
 }
 
 /** Optional progress sink for native heartbeat (#39) — not a Service call. */
@@ -167,26 +173,14 @@ export class ExecutorService implements IExecutorService {
   ) {}
 
   async executeReady(input: PoolInput): Promise<PoolOutcome> {
-    const spec = this._specDocRepo.read(input.specPath);
-
-    if (spec.status !== 'Approved') {
-      // Refusal is recorded so the blocked run is visible to triage.
-      const state = this.loadOrInitState(input, spec);
-      this._runStateRepo.appendVerdict(input.runsDir, state, {
-        gate: 'intake',
-        outcome: 'blocked',
-        wouldEscalate: true,
-        reasons: ['unapproved-spec'],
-        recordedAt: new Date().toISOString()
-      });
-      return {
-        kind: 'blocked',
-        spec,
-        state,
-        detail: 'unapproved-spec',
-        outcomes: []
-      };
+    // Enforce loads the Approved blob from origin/<default> so a stale
+    // operator working tree cannot block wave N+1 after a task merge.
+    // Shadow keeps the local file (unlanded Draft specs are the point).
+    const loaded = this.loadSpecForRun(input);
+    if (loaded.kind === 'blocked') {
+      return loaded.outcome;
     }
+    const spec = loaded.spec;
 
     const existing = this._runStateRepo.load(input.runsDir, input.runId);
     const state: RunState = existing ?? this.initState(input, spec);
@@ -461,4 +455,131 @@ export class ExecutorService implements IExecutorService {
       this.initState(input, spec)
     );
   }
+
+  /**
+   * Resolve the SpecDocument for this invocation.
+   * Enforce: fetch + parse `origin/<defaultBranch>:<relPath>` (no working-tree
+   * identity check — that blocked automatic wave continuation when a merge
+   * updated the spec on origin while the operator checkout lagged).
+   * Shadow: local working-tree file; provenance skipped.
+   */
+  private loadSpecForRun(
+    input: PoolInput
+  ):
+    | { kind: 'ok'; spec: SpecDocument }
+    | { kind: 'blocked'; outcome: PoolOutcome } {
+    if (input.shadow === true) {
+      const spec = this._specDocRepo.read(input.specPath);
+      if (spec.status !== 'Approved') {
+        const state = this.loadOrInitState(input, spec);
+        this._runStateRepo.appendVerdict(input.runsDir, state, {
+          gate: 'intake',
+          outcome: 'blocked',
+          wouldEscalate: true,
+          reasons: ['unapproved-spec'],
+          recordedAt: new Date().toISOString()
+        });
+        return {
+          kind: 'blocked',
+          outcome: {
+            kind: 'blocked',
+            spec,
+            state,
+            detail: 'unapproved-spec',
+            outcomes: []
+          }
+        };
+      }
+      return { kind: 'ok', spec };
+    }
+
+    const relPath = path.relative(input.repoPath, input.specPath);
+    if (relPath.startsWith('..') || path.isAbsolute(relPath)) {
+      const reason = `spec is outside the repo (${input.specPath}), so its approval cannot be verified against the default branch`;
+      const stub = intakeStubSpec();
+      const state = this.loadOrInitState(input, stub);
+      this._runStateRepo.appendVerdict(input.runsDir, state, {
+        gate: 'intake',
+        outcome: 'blocked',
+        wouldEscalate: true,
+        reasons: ['spec-not-merged', reason],
+        recordedAt: new Date().toISOString()
+      });
+      return {
+        kind: 'blocked',
+        outcome: {
+          kind: 'blocked',
+          spec: stub,
+          state,
+          detail: 'spec-not-merged',
+          outcomes: []
+        }
+      };
+    }
+
+    this._gitRepo.fetch(input.repoPath);
+    const branch = this._gitRepo.defaultBranch(input.repoPath);
+    const ref = `origin/${branch}`;
+    const spec = this._specDocRepo.readAtRef(input.repoPath, ref, relPath);
+    if (spec === null) {
+      const reason = `${relPath} does not exist on ${ref} — approve and merge the spec PR first`;
+      const fallback = intakeStubSpec();
+      const state = this.loadOrInitState(input, fallback);
+      this._runStateRepo.appendVerdict(input.runsDir, state, {
+        gate: 'intake',
+        outcome: 'blocked',
+        wouldEscalate: true,
+        reasons: ['spec-not-merged', reason],
+        recordedAt: new Date().toISOString()
+      });
+      return {
+        kind: 'blocked',
+        outcome: {
+          kind: 'blocked',
+          spec: fallback,
+          state,
+          detail: 'spec-not-merged',
+          outcomes: []
+        }
+      };
+    }
+
+    if (spec.status !== 'Approved') {
+      const state = this.loadOrInitState(input, spec);
+      this._runStateRepo.appendVerdict(input.runsDir, state, {
+        gate: 'intake',
+        outcome: 'blocked',
+        wouldEscalate: true,
+        reasons: ['unapproved-spec'],
+        recordedAt: new Date().toISOString()
+      });
+      return {
+        kind: 'blocked',
+        outcome: {
+          kind: 'blocked',
+          spec,
+          state,
+          detail: 'unapproved-spec',
+          outcomes: []
+        }
+      };
+    }
+
+    return { kind: 'ok', spec };
+  }
 }
+
+/** Minimal SpecDocument for intake blocks before a parseable blob exists. */
+const intakeStubSpec = (): SpecDocument => ({
+  id: 'UNKNOWN',
+  prdId: '',
+  phase: 0,
+  status: 'Draft',
+  envelope: {
+    allowedPaths: [],
+    forbiddenSurfaces: [],
+    maxDiffLines: 0,
+    budgetK: 0
+  },
+  tasks: []
+});

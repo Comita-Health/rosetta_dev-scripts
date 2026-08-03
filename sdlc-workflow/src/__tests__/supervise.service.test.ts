@@ -81,7 +81,27 @@ describe('SuperviseService', () => {
       .toConstantValue({ runTask } as unknown as IRunHandler);
     container
       .bind<ISpecDocRepository>(WORKFLOW_TOKENS.SpecDocRepository)
-      .toConstantValue({ read } as unknown as ISpecDocRepository);
+      .toConstantValue({
+        read,
+        readAtRef: jest.fn().mockReturnValue(baseSpec)
+      } as unknown as ISpecDocRepository);
+    container.bind(WORKFLOW_TOKENS.GitRepository).toConstantValue({
+      fetch: jest.fn(),
+      defaultBranch: jest.fn().mockReturnValue('main'),
+      fileAtRef: jest.fn(),
+      pathDiffersFromRef: jest.fn(),
+      headSha: jest.fn(),
+      status: jest.fn(),
+      addWorktree: jest.fn(),
+      diffStat: jest.fn(),
+      diffText: jest.fn(),
+      push: jest.fn(),
+      resolveSha: jest.fn(),
+      revertMerge: jest.fn(),
+      stageAll: jest.fn(),
+      commit: jest.fn(),
+      removeWorktreeAsync: jest.fn()
+    });
     container
       .bind<IRunStateRepository>(WORKFLOW_TOKENS.RunStateRepository)
       .toConstantValue({ load } as unknown as IRunStateRepository);

@@ -50,6 +50,23 @@ Under `~/.rosetta/sdlc-runs/<runId>/`:
 
 Gate log lines are labeled `[enforce]` or `[shadow]` to match the mode. When supervise exits, `monitor.log` gets an `[hb-watch] stopped` line (the watch is not a healer — it only mirrors heartbeats while the loop runs).
 
+## Spec provenance (enforce)
+
+Enforce intake loads the Approved spec from `origin/<defaultBranch>`, not from
+the operator working tree. A stale local checkout of the spec file no longer
+blocks the next supervise wave after a merge updates the blob on origin.
+
+The launchd continuity daemon (`scripts/sdlc-continuity-daemon.sh`) still has a
+**one-shot safety net** for older engines / odd checkouts: before relaunching a
+dead supervisor, if recent `supervise.log` / `state.json` shows intake
+`spec-not-merged` (or “differs from origin”), it `git fetch`es and
+`git checkout origin/<default> -- <relSpecPath>` for the `launch.json` spec
+file only (no full branch switch), once per run (`spec-origin-sync.attempted`).
+
+Product-task diffs must not edit `specs/**` — the envelope gate hard-breaches
+those paths even when listed in `allowedPaths`. Checkbox / `status: Done`
+closeout stays a separate docs PR after the phase.
+
 ## Agent skill
 
 Workspace skill `sdlc-run-supervise` should prefer `--supervise --detach` over ad-hoc `/tmp` bash supervisors.
