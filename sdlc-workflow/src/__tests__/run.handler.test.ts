@@ -97,6 +97,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
   let stateLoad: jest.Mock;
   let openTaskPr: jest.Mock;
   let prMerge: jest.Mock;
+  let mergeCommitOid: jest.Mock;
   let recordRevert: jest.Mock;
   let itemTags: jest.Mock;
   let revertMerge: jest.Mock;
@@ -236,6 +237,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
       created: true
     });
     prMerge = jest.fn().mockReturnValue('merged-sha-abc');
+    mergeCommitOid = jest.fn().mockReturnValue(null);
     recordRevert = jest.fn().mockResolvedValue('chronicles/sdlc/run-1/revert');
     itemTags = jest.fn().mockReturnValue(null);
     revertMerge = jest.fn();
@@ -274,6 +276,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
         findByBranch: jest.fn().mockReturnValue(null),
         create: prCreate,
         merge: prMerge,
+        mergeCommitOid,
         comment: jest.fn()
       });
     container
@@ -853,16 +856,58 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
       prMerge.mockImplementation(() => {
         throw new WorkflowError('merge conflict', 'GH_FAILED', ['dirty']);
       });
+      mergeCommitOid.mockReturnValue(null);
 
       const result = await handler.runTask(INPUT);
 
       expect(result.outcome).toBe('executed');
+      expect(mergeCommitOid).toHaveBeenCalledWith('/repo', 7);
       expect(state.exceptions).toContainEqual(
         expect.objectContaining({
           trigger: 'merge-blocked',
           context: [expect.stringContaining('merge conflict')]
         })
       );
+      expect(escalationPost).toHaveBeenCalled();
+      expect(state.taskResults['T-01'].mergedSha).toBeUndefined();
+    });
+
+    it('reconciles a thrown merge when GitHub reports the PR already merged (checked-out branch false negative)', async () => {
+      // Repro: gh pr merge --delete-branch exits non-zero because the run
+      // worktree still has the branch checked out, even though the merge
+      // commit already landed on GitHub.
+      greenGates();
+      prMerge.mockImplementation(() => {
+        throw new WorkflowError('gh pr failed', 'GH_FAILED', [
+          'failed to delete local branch sdlc/run-1/T-01: cannot delete branch checked out at worktree'
+        ]);
+      });
+      mergeCommitOid.mockReturnValue('reconciled-merge-sha');
+
+      await handler.runTask({ ...INPUT, chronicleRepo: '/chronicle' });
+
+      expect(mergeCommitOid).toHaveBeenCalledWith('/repo', 7);
+      expect(state.taskResults['T-01'].mergedSha).toBe('reconciled-merge-sha');
+      expect(state.mergedSha).toBe('reconciled-merge-sha');
+      expect(state.exceptions).not.toContainEqual(
+        expect.objectContaining({ trigger: 'merge-blocked' })
+      );
+      expect(escalationPost).not.toHaveBeenCalled();
+      expect(recordMerge).toHaveBeenCalledWith(
+        expect.objectContaining({
+          mergedSha: 'reconciled-merge-sha',
+          taskId: 'T-01',
+          approvedBy: 'machine-gates'
+        })
+      );
+      expect(gitFetch).toHaveBeenCalledWith('/repo');
+      expect(removeWorktreeAsync).toHaveBeenCalled();
+      // Phase gate sees the task as merged → boundary runs.
+      expect(
+        deploy.mock.calls.filter(([arg]) =>
+          String(arg.worktreePath).includes('_phase')
+        )
+      ).toHaveLength(1);
     });
   });
 

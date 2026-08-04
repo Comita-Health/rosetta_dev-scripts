@@ -115,4 +115,30 @@ describe('PullRequestRepository (P3 T-02)', () => {
       );
     });
   });
+
+  describe('mergeCommitOid (merge reconciliation)', () => {
+    it('returns the merge commit OID when GitHub reports the PR merged', () => {
+      execMock.mockReturnValue('abc123def4567890abc123def4567890abc123de\n');
+
+      expect(repo.mergeCommitOid('/repo', 14)).toBe(
+        'abc123def4567890abc123def4567890abc123de'
+      );
+      expect(execMock.mock.calls[0][0]).toContain(
+        'gh pr view 14 --json mergeCommit'
+      );
+      expect(execMock.mock.calls[0][0]).toContain('.mergeCommit.oid // empty');
+    });
+
+    it('returns null when the PR has no merge commit (genuinely unmerged)', () => {
+      execMock.mockReturnValue('\n');
+
+      expect(repo.mergeCommitOid('/repo', 14)).toBeNull();
+    });
+
+    it('returns null for a non-SHA jq payload', () => {
+      execMock.mockReturnValue('null\n');
+
+      expect(repo.mergeCommitOid('/repo', 14)).toBeNull();
+    });
+  });
 });

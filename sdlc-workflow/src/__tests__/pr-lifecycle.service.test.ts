@@ -69,6 +69,7 @@ describe('PrLifecycleService (P3 T-02)', () => {
         findByBranch,
         create,
         merge: jest.fn(),
+        mergeCommitOid: jest.fn().mockReturnValue(null),
         comment: jest.fn()
       });
     container
