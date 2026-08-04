@@ -136,6 +136,7 @@ import {
 import { WORKFLOW_TOKENS } from './tokens';
 import { WorkflowError } from './types';
 import { resolveInferenceBackend } from './utils/backend-select';
+import { runExitCode } from './utils/run-exit';
 
 const container = new Container();
 const modelBinding = container.bind<IModelRepository>(
@@ -447,15 +448,10 @@ yargs(hideBin(process.argv))
         if (result.kind === 'detached') {
           process.exit(0);
         }
-        if (result.kind === 'failed') {
+        // Refused intake, blocked wave, or task failure all exit non-zero
+        // (#37 / fail-loud T-01) — mapping lives in utils for testability.
+        if (runExitCode(result) !== 0) {
           process.exit(1);
-        }
-        const last = result.lastWave;
-        if (last !== undefined) {
-          const anyFailed = last.tasks.some(task => task.kind === 'failed');
-          if (last.outcome === 'blocked' || anyFailed) {
-            process.exit(1);
-          }
         }
       } catch (err) {
         if (err instanceof WorkflowError) {

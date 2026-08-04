@@ -210,6 +210,15 @@ export class SuperviseService implements ISuperviseService {
     let waves = 0;
     let lastWave: RunTaskResult | undefined;
 
+    // Only an *intentional* terminal outcome clears our pid file. A crash —
+    // thrown error, SIGKILL, OOM — must leave supervise.pid in place: a dead
+    // pid behind a live file is exactly the continuity daemon's relaunch cue
+    // (#37). Clearing in `finally` would erase that cue on every throw.
+    const finish = (result: SuperviseResult): SuperviseResult => {
+      this.clearOwnSupervisePid(runDir);
+      return result;
+    };
+
     try {
       while (waves < maxWaves) {
         waves += 1;
@@ -230,13 +239,13 @@ export class SuperviseService implements ISuperviseService {
             `[supervise] ALL TASKS MERGED after wave ${waves}`
           );
           console.log(chalk.green('\n[supervise] all tasks merged — done'));
-          return {
+          return finish({
             kind: 'completed',
             waves,
             lastWave,
             monitorPath,
             detail: 'all-tasks-merged'
-          };
+          });
         }
 
         const anyFailed = lastWave.tasks.some(t => t.kind === 'failed');
@@ -245,13 +254,13 @@ export class SuperviseService implements ISuperviseService {
             monitorPath,
             `[supervise] stopped wave ${waves}: ${lastWave.outcome} failed=${anyFailed}`
           );
-          return {
+          return finish({
             kind: 'failed',
             waves,
             lastWave,
             monitorPath,
             detail: anyFailed ? 'task-failed' : 'blocked'
-          };
+          });
         }
 
         // Enforce: completed-but-unmerged after a red phase is a hard stop —
@@ -272,13 +281,13 @@ export class SuperviseService implements ISuperviseService {
               '\n[supervise] merge blocked — fix red gates or PR conflicts, then resume'
             )
           );
-          return {
+          return finish({
             kind: 'failed',
             waves,
             lastWave,
             monitorPath,
             detail: 'merge-blocked'
-          };
+          });
         }
 
         // Shadow mode: merges are human — stop after the wave for review.
@@ -292,13 +301,13 @@ export class SuperviseService implements ISuperviseService {
               '\n[supervise] shadow human gate — merge task PRs, record-merge, re-run with --supervise'
             )
           );
-          return {
+          return finish({
             kind: 'stopped',
             waves,
             lastWave,
             monitorPath,
             detail: 'shadow-human-gate'
-          };
+          });
         }
 
         if (lastWave.outcome === 'no-ready-task') {
@@ -306,13 +315,13 @@ export class SuperviseService implements ISuperviseService {
             monitorPath,
             `[supervise] no ready task and not all merged after wave ${waves}`
           );
-          return {
+          return finish({
             kind: 'stopped',
             waves,
             lastWave,
             monitorPath,
             detail: 'no-ready-task'
-          };
+          });
         }
 
         // Enforce wave merged something (or cached) — continue for dependents.
@@ -322,27 +331,31 @@ export class SuperviseService implements ISuperviseService {
         );
       }
 
-      return {
+      return finish({
         kind: 'failed',
         waves,
         lastWave,
         monitorPath,
         detail: `max-waves-${maxWaves}`
-      };
+      });
     } finally {
       this._hbWatch.note(
         monitorPath,
         `[hb-watch] stopped ${new Date().toISOString()}`
       );
       this._hbWatch.stop();
-      // Clear our pid on clean exit so the continuity daemon does not treat a
-      // finished invocation (intake refusal, wave complete, blocked gate) as a
-      // dead supervisor of an unfinished half-run and relaunch it (#37).
-      // A SIGKILL leaves the pid file in place — that is the daemon's cue.
-      this.clearOwnSupervisePid(runDir);
     }
   }
 
+  /**
+   * Remove supervise.pid when — and only when — it records this process.
+   *
+   * Called exclusively from the loop's `finish()` on intentional terminal
+   * outcomes (completed / blocked / merge-blocked / shadow gate /
+   * no-ready-task / max-waves) so the continuity daemon does not relaunch a
+   * finished invocation. Crashes never reach this: a thrown error, SIGKILL,
+   * or OOM leaves the pid file behind, which is the daemon's relaunch cue.
+   */
   private clearOwnSupervisePid(runDir: string): void {
     const pidPath = path.join(runDir, 'supervise.pid');
     try {

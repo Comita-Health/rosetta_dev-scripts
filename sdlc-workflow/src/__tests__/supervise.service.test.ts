@@ -338,6 +338,15 @@ describe('SuperviseService', () => {
     expect(existsSync(pidPath)).toBe(false);
   });
 
+  it('leaves supervise.pid in place on a crash so the daemon can relaunch (#37)', async () => {
+    runTask.mockRejectedValueOnce(new Error('boom mid-wave'));
+
+    await expect(supervise.run(input())).rejects.toThrow('boom mid-wave');
+
+    const pidPath = path.join(runsDir, 'run-1', 'supervise.pid');
+    expect(existsSync(pidPath)).toBe(true);
+  });
+
   it('stops when no ready task remains and work is incomplete', async () => {
     runTask.mockResolvedValue(wave('no-ready-task'));
     load.mockReturnValue({ taskResults: {} } as unknown as RunState);
