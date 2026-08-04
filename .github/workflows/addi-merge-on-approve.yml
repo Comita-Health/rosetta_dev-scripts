@@ -56,14 +56,6 @@ jobs:
           client-id: ${{ vars.ADDI_CLIENT_ID }}
           private-key: ${{ secrets.ADDI_APP_PRIVATE_KEY }}
 
-      # Needed only so the draft-spec flip script is on disk and can push to
-      # the PR head. Non-spec PRs never touch this checkout beyond a no-op.
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          token: ${{ steps.addi.outputs.token }}
-          fetch-depth: 0
-
       - name: Resolve PR numbers
         id: prs
         env:
@@ -178,42 +170,59 @@ jobs:
             esac
           }
 
-          FLIP_SCRIPT="${GITHUB_WORKSPACE}/team-setup/scripts/flip-spec-status.mjs"
-
           # On Approve of a PR that adds/changes Draft phase specs, push a
           # Draft→Approved flip commit (as Addi, DCO-signed) before merge.
-          # No-op when the PR file list has no specs/**/phase-*-spec.md entries
-          # — non-spec PRs keep the prior merge path.
+          # Detection is one read-only file-list call plus grep: non-spec PRs
+          # trigger no clone, no node, and take the prior merge path unchanged.
+          # `select(.status != "removed")` keeps deleted/renamed-away specs out
+          # of the flip entirely.
           maybe_flip_draft_specs() {
             local PR="$1"
-            local files spec_paths result action message head_ref bot_login bot_id
-            files=$(gh api "repos/$REPO/pulls/$PR/files" --paginate --jq '.[].filename')
-            spec_paths=$(printf '%s\n' "$files" | node "$FLIP_SCRIPT" --filter-paths)
+            local files spec_paths result action message head_ref bot_login bot_id workdir
+            files=$(gh api "repos/$REPO/pulls/$PR/files" --paginate \
+              --jq '.[] | select(.status != "removed") | .filename')
+            spec_paths=$(printf '%s\n' "$files" \
+              | grep -E '^specs/(.+/)?phase-[^/]+-spec\.md$' || true)
             if [ -z "$spec_paths" ]; then
               echo "No specs/**/phase-*-spec.md in PR #$PR; skip status flip."
               return 0
             fi
 
             head_ref=$(gh pr view "$PR" -R "$REPO" --json headRefName --jq '.headRefName')
-            git fetch --no-tags origin "$head_ref"
-            git checkout --force -B "flip-pr-$PR" "origin/$head_ref"
+            workdir=$(mktemp -d)
+            git clone --quiet --no-tags --filter=blob:none \
+              "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "$workdir"
+            git -C "$workdir" fetch --quiet --no-tags origin "$head_ref"
+            git -C "$workdir" checkout --quiet --force -B "flip-pr-$PR" FETCH_HEAD
 
-            result=$(printf '%s\n' "$spec_paths" | node "$FLIP_SCRIPT" --write-stdin)
+            # The flip script runs from the PR head so the reviewed script
+            # version and the executed one cannot diverge. Branches that
+            # predate the script skip the flip (interim manual path) rather
+            # than failing the merge job.
+            if [ ! -f "$workdir/team-setup/scripts/flip-spec-status.mjs" ]; then
+              echo "flip-spec-status.mjs missing at PR head; skip status flip."
+              rm -rf "$workdir"
+              return 0
+            fi
+            result=$(cd "$workdir" && printf '%s\n' "$spec_paths" \
+              | node team-setup/scripts/flip-spec-status.mjs --write-stdin)
             echo "$result"
             action=$(echo "$result" | jq -r '.action')
             if [ "$action" != "commit" ]; then
               echo "Spec files present but nothing to flip ($action); continue."
+              rm -rf "$workdir"
               return 0
             fi
 
             message=$(echo "$result" | jq -r '.message')
             bot_login=$(gh api user --jq '.login')
             bot_id=$(gh api user --jq '.id')
-            git add -- $(echo "$result" | jq -r '.flipped[]')
-            git -c "user.name=$bot_login" \
+            (cd "$workdir" && git add -- $(echo "$result" | jq -r '.flipped[]'))
+            git -C "$workdir" -c "user.name=$bot_login" \
               -c "user.email=${bot_id}+${bot_login}@users.noreply.github.com" \
               commit -s -m "$message"
-            git push origin "HEAD:refs/heads/$head_ref"
+            git -C "$workdir" push origin "HEAD:refs/heads/$head_ref"
+            rm -rf "$workdir"
             echo "Pushed draft→Approved flip to $head_ref as $bot_login"
             return 0
           }

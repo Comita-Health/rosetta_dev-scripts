@@ -7,7 +7,7 @@
  *   --write-stdin    flip matching paths on disk; print JSON plan
  *   --write <files>  same for argv files
  */
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -21,17 +21,24 @@ export function filterSpecPaths(paths) {
   return paths.filter(p => isSpecPath(p));
 }
 
-/** Rewrite only front-matter status value; comment + other lines unchanged. */
-export function flipDraftStatus(content) {
+/** Locate the leading `---` front-matter block, or null when absent. */
+function frontMatter(content) {
   const bodyStart = content.startsWith('---\n')
     ? 4
     : content.startsWith('---\r\n')
       ? 5
       : -1;
-  if (bodyStart < 0) return { content, changed: false };
+  if (bodyStart < 0) return null;
   const closeAt = content.indexOf('\n---', bodyStart);
-  if (closeAt < 0) return { content, changed: false };
-  const fm = content.slice(bodyStart, closeAt);
+  if (closeAt < 0) return null;
+  return { bodyStart, closeAt, fm: content.slice(bodyStart, closeAt) };
+}
+
+/** Rewrite only front-matter status value; comment + other lines unchanged. */
+export function flipDraftStatus(content) {
+  const parsed = frontMatter(content);
+  if (parsed === null) return { content, changed: false };
+  const { bodyStart, closeAt, fm } = parsed;
   const re = /^(status:[ \t]*)Draft([ \t]*(?:#.*)?)$/m;
   if (re.test(fm) === false) return { content, changed: false };
   return {
@@ -43,8 +50,14 @@ export function flipDraftStatus(content) {
   };
 }
 
+/**
+ * Spec id from the front-matter block only — an `id:` line in the document
+ * body must never leak into the conventional-commit subject.
+ */
 export function extractSpecId(content) {
-  const m = content.match(/^id:[ \t]*(.+)$/m);
+  const parsed = frontMatter(content);
+  if (parsed === null) return null;
+  const m = parsed.fm.match(/^id:[ \t]*(.+)$/m);
   return m === null ? null : m[1].trim();
 }
 
@@ -53,12 +66,18 @@ export function buildCommitMessage(flips) {
   return `docs(spec): approve ${ids.length > 0 ? ids.join(', ') : 'spec'} on human Approve`;
 }
 
+/**
+ * `readFile` returns file content, or null for paths absent on disk (deleted
+ * or renamed away in the PR) — those are skipped, never read blindly.
+ */
 export function planFlip(paths, readFile) {
   const specs = filterSpecPaths(paths);
   if (specs.length === 0) return { action: 'noop', reason: 'no-spec-paths' };
   const flips = [];
   for (const p of specs) {
-    const { content, changed } = flipDraftStatus(readFile(p));
+    const raw = readFile(p);
+    if (raw === null) continue;
+    const { content, changed } = flipDraftStatus(raw);
     if (changed === true)
       flips.push({ path: p, content, id: extractSpecId(content) });
   }
@@ -67,7 +86,9 @@ export function planFlip(paths, readFile) {
 }
 
 export function writeFlips(paths) {
-  const plan = planFlip(paths, p => readFileSync(p, 'utf8'));
+  const plan = planFlip(paths, p =>
+    existsSync(p) ? readFileSync(p, 'utf8') : null
+  );
   if (plan.action === 'noop') return { action: 'noop', reason: plan.reason };
   for (const flip of plan.flips) writeFileSync(flip.path, flip.content, 'utf8');
   return {

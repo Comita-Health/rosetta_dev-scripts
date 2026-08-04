@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildCommitMessage,
+  extractSpecId,
   filterSpecPaths,
   flipDraftStatus,
   isSpecPath,
@@ -58,7 +59,37 @@ describe('flipDraftStatus', () => {
   });
 });
 
+describe('extractSpecId', () => {
+  it('reads id: from front-matter only, never the document body', () => {
+    assert.equal(extractSpecId(DRAFT), 'SPEC-BUG-example-P1');
+    const bodyId = `---
+status: Draft
+---
+
+id: SPEC-FAKE-FROM-BODY-P9
+`;
+    assert.equal(extractSpecId(bodyId), null);
+    assert.equal(extractSpecId('no front matter\nid: SPEC-X-P1\n'), null);
+  });
+});
+
 describe('planFlip', () => {
+  it('skips paths whose readFile returns null (deleted/renamed away)', () => {
+    const plan = planFlip(
+      ['specs/gone/phase-1-spec.md', 'specs/BUG-example/phase-1-spec.md'],
+      p => (p === 'specs/gone/phase-1-spec.md' ? null : DRAFT)
+    );
+    assert.equal(plan.action, 'commit');
+    if (plan.action === 'commit') {
+      assert.equal(plan.flips.length, 1);
+      assert.equal(plan.flips[0].path, 'specs/BUG-example/phase-1-spec.md');
+    }
+    assert.deepEqual(
+      planFlip(['specs/gone/phase-1-spec.md'], () => null),
+      { action: 'noop', reason: 'already-approved' }
+    );
+  });
+
   it('noops without phase-*-spec.md paths (no flip commit)', () => {
     assert.deepEqual(
       planFlip(['src/foo.ts'], () => {
