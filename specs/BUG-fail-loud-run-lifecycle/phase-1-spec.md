@@ -2,7 +2,7 @@
 id: SPEC-BUG-fail-loud-run-lifecycle-P1
 prd: BUG-fail-loud-run-lifecycle # synthetic id — lightweight bug path, no PRD file
 phase: 1
-status: Draft # Draft | Approved | Done | Superseded
+status: Approved # Draft | Approved | Done | Superseded
 date: 2026-08-04
 owner: Russ Watson
 envelope:
@@ -113,7 +113,7 @@ the continuity layer's liveness check; document the boundary.
 - [ ] test: `run --detach` propagates a non-zero exit (never 0) when the
       spec path does not exist or intake refuses — covering the observed
       "exit 0 for a spec that didn't exist".
-- [ ] docs: README states the detection boundary — exit traps own
+- [ ] agent: README states the detection boundary — exit traps own
       trappable terminations; the continuity layer owns SIGKILL/power-loss
       via liveness.
 
