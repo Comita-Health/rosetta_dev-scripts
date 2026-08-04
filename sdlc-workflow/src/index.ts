@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import 'reflect-metadata';
 import { Container } from 'inversify';
+import { readFileSync } from 'fs';
 import path from 'path';
 import chalk from 'chalk';
 import yargs from 'yargs';
@@ -149,6 +150,7 @@ import { WORKFLOW_TOKENS } from './tokens';
 import { WorkflowError } from './types';
 import { resolveInferenceBackend } from './utils/backend-select';
 import { runExitCode } from './utils/run-exit';
+import { lintSpec } from './utils/spec-lint';
 
 const container = new Container();
 const modelBinding = container.bind<IModelRepository>(
@@ -314,6 +316,47 @@ yargs(hideBin(process.argv))
         }
         process.exit(1);
       }
+    }
+  )
+  .command(
+    'spec-lint',
+    'Validate an ADR-0008 spec file: front-matter parse, envelope schema, and checkbox integrity — no LLM call, no --repo required (hook/CI safe)',
+    y =>
+      y.option('spec', {
+        type: 'string',
+        demandOption: true,
+        describe: 'Path to the implementation spec Markdown file'
+      }),
+    argv => {
+      let markdown: string;
+      try {
+        markdown = readFileSync(argv.spec, 'utf-8');
+      } catch {
+        console.error(
+          chalk.red(`\n✗ SPEC_MALFORMED: spec file not found: ${argv.spec}`)
+        );
+        process.exit(1);
+        return;
+      }
+      const report = lintSpec(markdown);
+      if (report.ok) {
+        console.log(
+          chalk.green(`✓ ${report.specId} — ${report.status} — spec-lint clean`)
+        );
+        console.log(
+          chalk.gray(
+            `  tasks: ${report.taskCount}, acceptance criteria: ${report.criterionCount}`
+          )
+        );
+        return;
+      }
+      console.error(
+        chalk.red(`\n✗ spec-lint found ${report.findings.length} issue(s):`)
+      );
+      for (const finding of report.findings) {
+        console.error(chalk.red(`  - ${finding.code}: ${finding.message}`));
+      }
+      process.exit(1);
     }
   )
   .command(

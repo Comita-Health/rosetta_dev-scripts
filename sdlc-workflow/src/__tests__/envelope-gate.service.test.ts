@@ -159,6 +159,48 @@ describe('EnvelopeGateService (T-02)', () => {
     );
   });
 
+  // #40 / T-04: an agent editing its *own* spec file — the canonical
+  // self-ticking move, flipping its acceptance checkboxes in the same product
+  // diff — must hard-breach even when the spec path is explicitly allowed.
+  // Checkbox closeout is a separate docs PR (single-writer rule, PRD-0023).
+  it('breaches when a task diff edits its own spec file, even with allowedPaths covering it', async () => {
+    setDiff({
+      files: [
+        {
+          path: 'sdlc-workflow/src/services/envelope-gate.service.ts',
+          lines: 12
+        },
+        {
+          path: 'specs/BUG-envelope-spec-integrity/phase-1-spec.md',
+          lines: 1
+        }
+      ],
+      totalLines: 13
+    });
+
+    const verdict = await gate.evaluate({
+      ...INPUT,
+      envelope: makeEnvelope({
+        allowedPaths: [
+          'sdlc-workflow/src/**',
+          'specs/BUG-envelope-spec-integrity/**'
+        ],
+        forbiddenSurfaces: [],
+        maxDiffLines: 800
+      })
+    });
+
+    expect(verdict.outcome).toBe('breach');
+    expect(verdict.wouldEscalate).toBe(true);
+    expect(verdict.reasons.join(' ')).toContain('mid-run specs/**');
+    expect(verdict.reasons.join(' ')).toContain(
+      'specs/BUG-envelope-spec-integrity/phase-1-spec.md'
+    );
+    // The code path change alone is inside allowedPaths — the breach is the
+    // spec edit, not the source edit.
+    expect(verdict.reasons.join(' ')).not.toContain('outside allowedPaths');
+  });
+
   it('breaches on nested **/specs/** paths', async () => {
     setDiff({
       files: [{ path: 'packages/foo/specs/note.md', lines: 1 }],
