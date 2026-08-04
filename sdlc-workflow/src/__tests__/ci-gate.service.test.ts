@@ -104,6 +104,7 @@ describe('CiGateService (P3 T-03 live monitor + bounded fix cycle)', () => {
         revertMerge: jest.fn(),
         stageAll,
         commit,
+        listFiles: jest.fn().mockReturnValue([]),
         removeWorktreeAsync: jest.fn()
       });
     container

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** synthesized `allowedPaths` are grounded in the target
+  repo tree instead of trusted as LLM guesses (#35 /
+  SPEC-BUG-envelope-spec-integrity-P1 T-01). At `decompose`, every envelope
+  glob must match at least one existing path in the `--repo` checkout or be
+  justified as a new-path intent (a task naming the file it creates in its
+  engineering notes); anything else fails synthesis with
+  `ENVELOPE_UNGROUNDED` listing the offending globs. A diff-forecast
+  heuristic additionally warns — without blocking — when task engineering
+  notes reference a path outside the envelope, so the human reviews a
+  coherent envelope instead of discovering the gap as a mid-run breach.
+
 - **sdlc-workflow:** enforce-merge reconciles a thrown `gh pr merge` against
   GitHub (`mergeCommit.oid`) before filing `merge-blocked`. A
   `--delete-branch` false negative with the task branch still checked out

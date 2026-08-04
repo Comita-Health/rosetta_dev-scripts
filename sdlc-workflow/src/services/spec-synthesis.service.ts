@@ -1,4 +1,5 @@
 import { inject, injectable } from 'inversify';
+import type { IGitRepository } from '../repositories/git.repository';
 import type { IInferenceRepository } from '../repositories/inference.repository';
 import { WORKFLOW_TOKENS } from '../tokens';
 import {
@@ -8,6 +9,7 @@ import {
   SynthesizedSpec,
   WorkflowError
 } from '../types';
+import { groundAllowedPaths } from '../utils/envelope-grounding';
 import { JsonSchema } from '../utils/json-schema';
 import { renderSpec } from '../utils/spec-render';
 import { validateSpec } from '../utils/spec-validate';
@@ -19,6 +21,8 @@ export interface SpecSynthesisOptions {
   owner: string;
   budgetK: number;
   date: string; // YYYY-MM-DD
+  /** Target repo checkout whose tree grounds the envelope (#35). */
+  repoPath: string;
 }
 
 export interface ISpecSynthesisService {
@@ -102,6 +106,9 @@ const buildPrompt = (
     '- The envelope is the blast radius: allowedPaths globs the implementation',
     '  may modify, forbiddenSurfaces labels it must not touch (e.g.',
     '  "migrations", "auth", "ci-config"), maxDiffLines a hard size cap.',
+    '- Every allowedPaths glob must be grounded in the target repo tree:',
+    '  match paths that exist today, or cover a new file a task explicitly',
+    '  creates — name that new path in the task engineeringNotes.',
     '- engineeringNotes carry intent and constraints, not restated criteria.'
   ].join('\n');
 
@@ -116,7 +123,9 @@ interface SpecPayload {
 export class SpecSynthesisService implements ISpecSynthesisService {
   constructor(
     @inject(WORKFLOW_TOKENS.InferenceRepository)
-    private readonly _inference: IInferenceRepository
+    private readonly _inference: IInferenceRepository,
+    @inject(WORKFLOW_TOKENS.GitRepository)
+    private readonly _gitRepo: IGitRepository
   ) {}
 
   async synthesize(
@@ -148,6 +157,26 @@ export class SpecSynthesisService implements ISpecSynthesisService {
       );
     }
 
+    // #35: the envelope must describe reality, not an LLM guess. Every glob
+    // either matches the target tree or is justified by a task naming the
+    // new path it creates; anything else fails synthesis loudly.
+    const grounding = groundAllowedPaths(
+      envelope.allowedPaths,
+      tasks,
+      this._gitRepo.listFiles(options.repoPath)
+    );
+    if (grounding.ungroundedGlobs.length > 0) {
+      throw new WorkflowError(
+        'Synthesized allowedPaths are not grounded in the target repo tree',
+        'ENVELOPE_UNGROUNDED',
+        grounding.ungroundedGlobs.map(
+          glob =>
+            `ungrounded glob "${glob}": matches nothing in the repo tree ` +
+            `and no task names a new path under it`
+        )
+      );
+    }
+
     const specId = `SPEC-${options.prdId}-P${options.phase}`;
     const markdown = renderSpec({
       specId,
@@ -169,7 +198,8 @@ export class SpecSynthesisService implements ISpecSynthesisService {
       context: payload.context,
       tasks,
       envelope,
-      markdown
+      markdown,
+      warnings: grounding.warnings
     };
   }
 }
