@@ -181,6 +181,8 @@ jobs:
             local files spec_paths result action message head_ref bot_login bot_id workdir
             files=$(gh api "repos/$REPO/pulls/$PR/files" --paginate \
               --jq '.[] | select(.status != "removed") | .filename')
+            # `(.+/)?` spans nested segments too (`.` matches `/` in ERE), so
+            # specs/a/b/phase-1-spec.md is included — same shape as isSpecPath.
             spec_paths=$(printf '%s\n' "$files" \
               | grep -E '^specs/(.+/)?phase-[^/]+-spec\.md$' || true)
             if [ -z "$spec_paths" ]; then
@@ -192,20 +194,25 @@ jobs:
             workdir=$(mktemp -d)
             git clone --quiet --no-tags --filter=blob:none \
               "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "$workdir"
-            git -C "$workdir" fetch --quiet --no-tags origin "$head_ref"
-            git -C "$workdir" checkout --quiet --force -B "flip-pr-$PR" FETCH_HEAD
 
-            # The flip script runs from the PR head so the reviewed script
-            # version and the executed one cannot diverge. Branches that
-            # predate the script skip the flip (interim manual path) rather
-            # than failing the merge job.
-            if [ ! -f "$workdir/team-setup/scripts/flip-spec-status.mjs" ]; then
-              echo "flip-spec-status.mjs missing at PR head; skip status flip."
+            # SECURITY: the flip script is taken from the trusted default
+            # branch (the clone's HEAD), never from the PR head — a PR that
+            # modifies the script must not get its version executed in this
+            # push-credentialed job. Clones predating the script skip the
+            # flip (interim manual path) rather than failing the merge job.
+            flip_script="$(mktemp -d)/flip-spec-status.mjs"
+            if ! git -C "$workdir" show HEAD:team-setup/scripts/flip-spec-status.mjs \
+              > "$flip_script" 2>/dev/null; then
+              echo "flip-spec-status.mjs missing on default branch; skip status flip."
               rm -rf "$workdir"
               return 0
             fi
+
+            git -C "$workdir" fetch --quiet --no-tags origin "$head_ref"
+            git -C "$workdir" checkout --quiet --force -B "flip-pr-$PR" FETCH_HEAD
+
             result=$(cd "$workdir" && printf '%s\n' "$spec_paths" \
-              | node team-setup/scripts/flip-spec-status.mjs --write-stdin)
+              | node "$flip_script" --write-stdin)
             echo "$result"
             action=$(echo "$result" | jq -r '.action')
             if [ "$action" != "commit" ]; then
@@ -222,8 +229,16 @@ jobs:
               -c "user.email=${bot_id}+${bot_login}@users.noreply.github.com" \
               commit -s -m "$message"
             git -C "$workdir" push origin "HEAD:refs/heads/$head_ref"
+            flip_sha=$(git -C "$workdir" rev-parse HEAD)
             rm -rf "$workdir"
-            echo "Pushed draft→Approved flip to $head_ref as $bot_login"
+            echo "Pushed draft→Approved flip $flip_sha to $head_ref as $bot_login"
+
+            # Re-pin: wait until the PR head reflects the flip commit so the
+            # checks rollup below waits on the post-flip SHA, not a stale one.
+            for _ in 1 2 3 4 5 6; do
+              [ "$(gh pr view "$PR" -R "$REPO" --json headRefOid --jq '.headRefOid')" = "$flip_sha" ] && break
+              sleep 5
+            done
             return 0
           }
 
