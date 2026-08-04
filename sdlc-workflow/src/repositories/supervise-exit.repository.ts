@@ -42,13 +42,15 @@ export class SuperviseExitRepository implements ISuperviseExitRepository {
     try {
       const raw = readFileSync(file, 'utf-8').trim();
       // Continuity daemon may overwrite with a bare integer after a relaunch
-      // probe; accept both shapes so operators can still inspect the file.
+      // probe. That shape carries no completion evidence, so it can never
+      // certify a normal exit: a bare `0` could mask a zero-exit that left
+      // tasks unmerged. Fail loud — treat every bare-integer record as
+      // abnormal and let the operator (or run state) prove completion.
       if (/^-?\d+$/.test(raw)) {
-        const code = Number(raw);
         return {
-          code,
-          reason: 'daemon-probe',
-          abnormal: code !== 0,
+          code: Number(raw),
+          reason: 'daemon-probe (bare exit code — completion unverifiable)',
+          abnormal: true,
           at: new Date(0).toISOString()
         };
       }

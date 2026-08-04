@@ -25,12 +25,12 @@ describe('SuperviseExitRepository', () => {
     expect(repo.read(dir)).toEqual(written);
   });
 
-  it('accepts a bare integer left by the continuity daemon probe', () => {
+  it('treats a bare daemon-probe integer as abnormal — even zero — since completion is unverifiable', () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'sdlc-exit-'));
     const repo = new SuperviseExitRepository();
     writeFileSync(path.join(dir, 'supervise.exit'), '0\n');
     expect(repo.read(dir)).toEqual(
-      expect.objectContaining({ code: 0, abnormal: false })
+      expect.objectContaining({ code: 0, abnormal: true })
     );
     writeFileSync(path.join(dir, 'supervise.exit'), '1\n');
     expect(repo.read(dir)).toEqual(
