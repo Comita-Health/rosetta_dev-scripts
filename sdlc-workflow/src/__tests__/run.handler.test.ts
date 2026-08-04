@@ -249,7 +249,9 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
       number: 99
     });
     specRead = jest.fn().mockReturnValue(SPEC);
-    escalationPost = jest.fn().mockReturnValue({ posted: [] });
+    escalationPost = jest
+      .fn()
+      .mockReturnValue({ posted: [], wakes: [], issues: {} });
 
     const container = new Container();
     container

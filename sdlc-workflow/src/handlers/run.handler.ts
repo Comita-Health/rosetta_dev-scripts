@@ -59,6 +59,18 @@ export interface RunTaskInput extends PoolInput {
    * `<runsDir>/<runId>/heartbeat.jsonl`.
    */
   heartbeatSeconds?: number;
+  /**
+   * GitHub login for needs-human escalation assignees (fail-loud T-04).
+   * Consumed at launch via `--operator` / `SDLC_OPERATOR`; never hardcoded.
+   */
+  operator?: string;
+  /**
+   * Live monitor log path for loud escalation warnings. Defaults to
+   * `<runsDir>/<runId>/monitor.log` when omitted.
+   */
+  monitorPath?: string;
+  /** Override wake-inbox root for tests. */
+  wakeDir?: string;
 }
 
 export interface RunTaskResult {
@@ -758,9 +770,10 @@ export class RunHandler implements IRunHandler {
   }
 
   /**
-   * P3 T-06: post action-required queue items for every exception entry.
-   * Evidence IDs are gathered from the task's recorded verdicts so the
-   * queue item alone is enough to triage.
+   * P3 T-06 / fail-loud T-04: post action-required queue items, assigned
+   * needs-human GitHub issues, and durable wake-inbox events for every
+   * exception entry. Evidence IDs are gathered from the task's recorded
+   * verdicts so the queue item alone is enough to triage.
    */
   private postEscalations(
     input: RunTaskInput,
@@ -772,11 +785,17 @@ export class RunHandler implements IRunHandler {
     const evidenceIds = state.verdicts
       .filter(verdict => verdict.taskId === taskId)
       .flatMap(verdict => verdict.evidenceIds ?? []);
+    const monitorPath =
+      input.monitorPath ?? path.join(input.runsDir, input.runId, 'monitor.log');
     const outcome = this._escalation.post({
       chronicleRepo: input.chronicleRepo,
       runId: input.runId,
       entries,
-      evidenceIds
+      evidenceIds,
+      repoPath: input.repoPath,
+      operator: input.operator,
+      monitorPath,
+      wakeDir: input.wakeDir
     });
     for (const title of outcome.posted) {
       console.log(chalk.yellow(`  [escalate] ${title}`));

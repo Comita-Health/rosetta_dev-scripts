@@ -32,12 +32,13 @@ export const WORKFLOW_TOKENS = {
   RunHandler: Symbol.for('RunHandler'),
   // SPEC-PRD-0011-P3
   PullRequestRepository: Symbol.for('PullRequestRepository'),
+  IssueRepository: Symbol.for('IssueRepository'),
+  WakeInboxRepository: Symbol.for('WakeInboxRepository'),
   PrLifecycleService: Symbol.for('PrLifecycleService'),
   EscalationService: Symbol.for('EscalationService'),
   HeartbeatService: Symbol.for('HeartbeatService'),
   HeartbeatWatchService: Symbol.for('HeartbeatWatchService'),
   ProcessDetachRepository: Symbol.for('ProcessDetachRepository'),
   SuperviseExitRepository: Symbol.for('SuperviseExitRepository'),
-  WakeInboxRepository: Symbol.for('WakeInboxRepository'),
   SuperviseService: Symbol.for('SuperviseService')
 } as const;

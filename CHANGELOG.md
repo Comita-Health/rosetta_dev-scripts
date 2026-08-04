@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** needs-human escalations are assigned and delivered, not
+  parked. `run --operator <login>` (or `SDLC_OPERATOR`) assigns the GitHub
+  issue created for each exception entry; without an operator the issue still
+  posts and `monitor.log` warns. Every escalation also emits one durable
+  wake-inbox event (title-idempotent across resume) alongside the existing
+  queue item. Swallowed `gh issue create` failures append a loud
+  `monitor.log` warning while the run continues
+  (SPEC-BUG-fail-loud-run-lifecycle-P1 T-04).
+
 - **sdlc-workflow:** supervise / detached children install exit traps so any
   trappable termination (clean exit, thrown error, SIGTERM/SIGINT) writes
   `supervise.exit` (`code` + `reason` + `abnormal`), a terminal

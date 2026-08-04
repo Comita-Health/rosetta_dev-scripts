@@ -67,6 +67,8 @@ bun run dev -- run --spec ../specs/PRD-0011/phase-3-spec.md --repo .. \
 #   --shadow          record gate verdicts but never merge (calibration mode)
 #   --heartbeat       emit structured progress every N seconds (default: 30;
 #                     0 disables). Also appends <runsDir>/<runId>/heartbeat.jsonl
+#   --operator        GitHub login assigned on needs-human escalation issues
+#                     (also accepted via SDLC_OPERATOR env; never hardcoded)
 
 # Operator default: detach with --supervise --detach + --heartbeat, then check
 # in on wakes — do not block the agent chat on sandbox waits.
@@ -268,8 +270,13 @@ Handler / Service / Repository with InversifyJS (workspace rule):
   envelope into one phase verdict and derives exception-ledger entries
   (reviewer disagreement, third CI fix attempt, envelope breach, budget
   exhaustion) (P2 T-06).
-- `services/escalation.service.ts` — P3 T-06: turns exception entries into
-  interrupting `action-required` queue items (idempotent by title).
+- `services/escalation.service.ts` — P3 T-06 / fail-loud T-04: turns
+  exception entries into interrupting `action-required` queue items,
+  assigned needs-human GitHub issues (`--operator` / `SDLC_OPERATOR`), and
+  durable wake-inbox events (idempotent by title). Swallowed GitHub failures
+  append a loud `monitor.log` warning without blocking the run.
+- `repositories/issue.repository.ts` — `gh issue` create / find-by-title.
+- `repositories/wake-inbox.repository.ts` — durable `~/.rosetta/wake` emits.
 - `services/ci-gate.service.ts` — the live CI gate (P3 T-03): polls the
   pushed branch's check runs to terminal, dispatches a fix agent on
   failure (failing logs in the prompt, ≤3 attempts persisted in
