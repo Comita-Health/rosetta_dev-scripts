@@ -25,12 +25,15 @@ describe('EnvelopeGateService (T-02)', () => {
   let gate: IEnvelopeGateService;
   let diffStat: jest.Mock;
   let loadSurfaces: jest.Mock;
+  let loadSurfacesAtRef: jest.Mock;
 
   const setDiff = (diff: DiffStat) => diffStat.mockReturnValue(diff);
 
   beforeEach(() => {
     diffStat = jest.fn();
-    loadSurfaces = jest.fn().mockReturnValue({ auth: ['src/auth/**'] });
+    // The local-checkout reader: gates must never consult it (T-03).
+    loadSurfaces = jest.fn().mockReturnValue({});
+    loadSurfacesAtRef = jest.fn().mockReturnValue({ auth: ['src/auth/**'] });
 
     const container = new Container();
     container
@@ -50,11 +53,12 @@ describe('EnvelopeGateService (T-02)', () => {
         revertMerge: jest.fn(),
         stageAll: jest.fn(),
         commit: jest.fn(),
+        listFiles: jest.fn().mockReturnValue([]),
         removeWorktreeAsync: jest.fn()
       });
     container
       .bind<ISurfaceMapRepository>(WORKFLOW_TOKENS.SurfaceMapRepository)
-      .toConstantValue({ load: loadSurfaces });
+      .toConstantValue({ load: loadSurfaces, loadAtRef: loadSurfacesAtRef });
     container
       .bind<IEnvelopeGateService>(WORKFLOW_TOKENS.EnvelopeGateService)
       .to(EnvelopeGateService);
@@ -123,7 +127,7 @@ describe('EnvelopeGateService (T-02)', () => {
   });
 
   it('reports an unresolvable surface label instead of ignoring it', async () => {
-    loadSurfaces.mockReturnValue({});
+    loadSurfacesAtRef.mockReturnValue({});
     setDiff({ files: [{ path: 'src/a.ts', lines: 1 }], totalLines: 1 });
 
     const verdict = await gate.evaluate(INPUT);
@@ -218,5 +222,61 @@ describe('EnvelopeGateService (T-02)', () => {
 
     expect(verdict.outcome).toBe('breach');
     expect(verdict.reasons.join(' ')).toContain('packages/foo/specs/note.md');
+  });
+
+  describe('contract resolution from the judged tree (T-03)', () => {
+    it('resolves surfaces.json at headRef and never reads the local checkout', async () => {
+      // A local (uncommitted) copy that would exonerate the touched path —
+      // the gate must judge with the headRef blob instead.
+      loadSurfaces.mockReturnValue({ auth: ['nothing/**'] });
+      setDiff({
+        files: [{ path: 'src/auth/token.ts', lines: 3 }],
+        totalLines: 3
+      });
+
+      const verdict = await gate.evaluate(INPUT);
+
+      expect(loadSurfacesAtRef).toHaveBeenCalledWith(
+        '/repo',
+        'sdlc/run-1/T-01'
+      );
+      expect(loadSurfaces).not.toHaveBeenCalled();
+      expect(verdict.outcome).toBe('breach');
+      expect(verdict.reasons.join(' ')).toContain(
+        'forbidden surface "auth" touched: src/auth/token.ts'
+      );
+    });
+
+    it('names the missing contract when the judged tree carries no surfaces.json', async () => {
+      loadSurfacesAtRef.mockReturnValue(null);
+      setDiff({ files: [{ path: 'src/a.ts', lines: 1 }], totalLines: 1 });
+
+      const verdict = await gate.evaluate(INPUT);
+
+      expect(loadSurfaces).not.toHaveBeenCalled();
+      expect(verdict.outcome).toBe('breach');
+      expect(verdict.wouldEscalate).toBe(true);
+      expect(verdict.reasons.join(' ')).toContain(
+        'surface contract .sdlc/surfaces.json missing from judged tree sdlc/run-1/T-01'
+      );
+      expect(verdict.reasons.join(' ')).toContain('auth');
+    });
+
+    it('passes without a contract when the envelope declares no forbiddenSurfaces', async () => {
+      loadSurfacesAtRef.mockReturnValue(null);
+      setDiff({ files: [{ path: 'src/a.ts', lines: 1 }], totalLines: 1 });
+
+      const verdict = await gate.evaluate({
+        ...INPUT,
+        envelope: makeEnvelope({
+          allowedPaths: ['src/**'],
+          forbiddenSurfaces: [],
+          maxDiffLines: 100
+        })
+      });
+
+      expect(verdict.outcome).toBe('pass');
+      expect(verdict.reasons).toEqual([]);
+    });
   });
 });

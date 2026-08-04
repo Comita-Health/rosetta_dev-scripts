@@ -1,6 +1,9 @@
 import { inject, injectable } from 'inversify';
 import type { IGitRepository } from '../repositories/git.repository';
-import type { ISurfaceMapRepository } from '../repositories/surface-map.repository';
+import {
+  SURFACES_CONTRACT_PATH,
+  type ISurfaceMapRepository
+} from '../repositories/surface-map.repository';
 import { WORKFLOW_TOKENS } from '../tokens';
 import { Envelope, GateVerdict } from '../types';
 import { matchesAnyGlob } from '../utils/glob-match';
@@ -31,6 +34,12 @@ export interface EnvelopeGateInput {
  * Always breaches on any path under a specs/ tree (repo-root or nested), even
  * if that path is listed in allowedPaths — checkbox / Done closeout is a
  * separate docs PR after the phase, not a product-task diff.
+ *
+ * Contract resolution (SPEC-BUG-envelope-spec-integrity-P1 T-03): the
+ * surface map is read from the git tree under judgment (`headRef` — the
+ * task PR tip, or the merged integration tip for phase-level checks),
+ * never from the operator's local checkout. A contract missing at that
+ * tree is a named breach reason, not a local-file fallback.
  */
 export interface IEnvelopeGateService {
   evaluate(input: EnvelopeGateInput): Promise<GateVerdict>;
@@ -51,7 +60,13 @@ export class EnvelopeGateService implements IEnvelopeGateService {
       input.baseRef,
       input.headRef
     );
-    const surfaceMap = this._surfaceRepo.load(input.repoPath);
+    // T-03 (SPEC-BUG-envelope-spec-integrity-P1): the contract is read from
+    // the tree under judgment — the headRef blob — never the operator's
+    // working copy, so a locally edited surfaces.json cannot sway a verdict.
+    const surfaceMap = this._surfaceRepo.loadAtRef(
+      input.repoPath,
+      input.headRef
+    );
     const reasons: string[] = [];
 
     const outsideAllowed = diff.files
@@ -70,19 +85,31 @@ export class EnvelopeGateService implements IEnvelopeGateService {
       );
     }
 
-    for (const label of input.envelope.forbiddenSurfaces) {
-      const globs = surfaceMap[label];
-      if (globs === undefined) {
-        reasons.push(`unresolvable surface label: ${label}`);
-        continue;
-      }
-      const touched = diff.files
-        .filter(file => matchesAnyGlob(globs, file.path))
-        .map(file => file.path);
-      if (touched.length > 0) {
+    if (surfaceMap === null) {
+      if (input.envelope.forbiddenSurfaces.length > 0) {
+        // Named error, not a local-disk fallback: labels cannot be resolved
+        // when the judged tree carries no surface contract.
         reasons.push(
-          `forbidden surface "${label}" touched: ${touched.join(', ')}`
+          `surface contract ${SURFACES_CONTRACT_PATH} missing from judged ` +
+            `tree ${input.headRef}; cannot resolve forbiddenSurfaces: ` +
+            input.envelope.forbiddenSurfaces.join(', ')
         );
+      }
+    } else {
+      for (const label of input.envelope.forbiddenSurfaces) {
+        const globs = surfaceMap[label];
+        if (globs === undefined) {
+          reasons.push(`unresolvable surface label: ${label}`);
+          continue;
+        }
+        const touched = diff.files
+          .filter(file => matchesAnyGlob(globs, file.path))
+          .map(file => file.path);
+        if (touched.length > 0) {
+          reasons.push(
+            `forbidden surface "${label}" touched: ${touched.join(', ')}`
+          );
+        }
       }
     }
 
