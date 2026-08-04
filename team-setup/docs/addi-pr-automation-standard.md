@@ -52,10 +52,20 @@ Spike notes and historical troubleshooting remain in
 ### Spec status flip (before merge)
 
 When the Approved PR includes `specs/**/phase-*-spec.md` still at
-`status: Draft`, the workflow runs `team-setup/scripts/flip-spec-status.mjs`,
-pushes `docs(spec): approve SPEC-… on human Approve` (DCO, as Addi), then
-continues checks → merge. Non-spec PRs are unchanged. Tests:
-`node --test team-setup/scripts/flip-spec-status.test.mjs`.
+`status: Draft`, the merge job runs this sequence with no human step between
+Approve and merge:
+
+1. **Detect** — read-only PR file list + path filter (non-spec PRs stop here:
+   no clone, no `node`, prior merge path byte-identical).
+2. **Flip commit** — clone, extract `team-setup/scripts/flip-spec-status.mjs`
+   from the **trusted default-branch HEAD** (never the PR head), check out the
+   PR branch, rewrite only `status: Draft` → `Approved`, push as Addi
+   (`docs(spec): approve SPEC-… on human Approve`, DCO-signed).
+3. **Head re-pin** — wait until `headRefOid` matches the flip SHA.
+4. **Checks → merge** — existing statusCheckRollup wait, then squash /
+   merge-async as before.
+
+Tests: `node --test team-setup/scripts/flip-spec-status.test.mjs`.
 
 ## Credentials
 
