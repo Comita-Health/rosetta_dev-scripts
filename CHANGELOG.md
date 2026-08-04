@@ -2,13 +2,6 @@
 
 ## Unreleased
 
-- **sdlc-workflow:** enforce-merge reconciles a thrown `gh pr merge` against
-  GitHub (`mergeCommit.oid`) before filing `merge-blocked`. A
-  `--delete-branch` false negative with the task branch still checked out
-  in the run worktree now records the real `mergedSha` and unblocks the
-  phase gate instead of posting a spurious needs-human
-  (SPEC-BUG-fail-loud-run-lifecycle-P1 T-03).
-
 - **team-setup / Addi merge-on-approve:** after merging a PR that touches
   `specs/**/phase-*-spec.md`, emit `repository_dispatch` type
   `sdlc-run-launch` with `client_payload: { specPaths, mergedSha, prNumber }`

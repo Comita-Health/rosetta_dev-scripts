@@ -26,11 +26,7 @@ PRD-0011 (Full-Loop SDLC Automation):
   enforcement — all four gates green auto-merges the task PR (merge SHA
   recorded in run state and the `sdlc.merge.v1` artifact, attributed to
   `machine-gates`), any red gate blocks with a `merge-blocked`
-  escalation, and a thrown `gh pr merge` is reconciled against GitHub
-  before escalating (so a `--delete-branch` false negative with the
-  branch still checked out in the run worktree records the real
-  `mergedSha` instead of a spurious needs-human), and `--shadow`
-  restores the record-only calibration mode;
+  escalation, and `--shadow` restores the record-only calibration mode;
   and T-05 phase boundary — once every task has merged, the merged
   default branch deploys to the sandbox (SHA-idempotent, step-cached)
   and the phase digest posts to the PRD-0007 queue with merge links; a
@@ -216,8 +212,7 @@ Handler / Service / Repository with InversifyJS (workspace rule):
 - `handlers/workflow.handler.ts` — Phase 1 pipeline, prints the gate.
 - `handlers/run.handler.ts` — pooled task loop: parallel executor wave +
   per-task gates + P3 T-04 enforcement (auto-merge on green, escalate on
-  red, reconcile thrown merges against GitHub before `merge-blocked`,
-  `--shadow` to record only) + digest/Chronicle steps, all through
+  red, `--shadow` to record only) + digest/Chronicle steps, all through
   the T-09 step cache.
 - `services/decompose.service.ts` — PRD → `ProductStory[]` (right-sizing prompt).
 - `services/spec-synthesis.service.ts` — stories → tasks + envelope → validated
