@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** enforce-merge reconciles a thrown `gh pr merge` against
+  GitHub (`mergeCommit.oid`) before filing `merge-blocked`. A
+  `--delete-branch` false negative with the task branch still checked out
+  in the run worktree now records the real `mergedSha` and unblocks the
+  phase gate instead of posting a spurious needs-human
+  (SPEC-BUG-fail-loud-run-lifecycle-P1 T-03; entry deferred from the task
+  PR for envelope compliance).
+
 - **sdlc-workflow:** needs-human escalations are assigned and delivered, not
   parked. `run --operator <login>` (or `SDLC_OPERATOR`) assigns the GitHub
   issue created for each exception entry; without an operator the issue still

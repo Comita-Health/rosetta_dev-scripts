@@ -2,7 +2,7 @@
 id: SPEC-BUG-fail-loud-run-lifecycle-P1
 prd: BUG-fail-loud-run-lifecycle # synthetic id — lightweight bug path, no PRD file
 phase: 1
-status: Approved # Draft | Approved | Done | Superseded
+status: Done # Draft | Approved | Done | Superseded
 date: 2026-08-04
 owner: Russ Watson
 envelope:
@@ -77,14 +77,14 @@ half-runs that the continuity daemon would relaunch).
 
 ### Acceptance criteria
 
-- [ ] test: a run killed between intake and the first recorded step leaves a
+- [x] test: a run killed between intake and the first recorded step leaves a
       readable `state.json` with run id, spec digest, and `startedAt`; a
       subsequent `status --run-id` reports the run instead of
       `RUN_NOT_FOUND`.
-- [ ] test: a refused intake (e.g. spec not Approved) records the refusal
+- [x] test: a refused intake (e.g. spec not Approved) records the refusal
       reason in run state (or provably persists nothing the daemon would
       relaunch), and exits non-zero.
-- [ ] test: existing resume behavior over the step cache is unchanged for a
+- [x] test: existing resume behavior over the step cache is unchanged for a
       normally-progressing run.
 
 ## Task T-02: A detached run can never exit silently (#38)
@@ -104,16 +104,16 @@ the continuity layer's liveness check; document the boundary.
 
 ### Acceptance criteria
 
-- [ ] test: a supervise loop that throws after wave 1 writes `supervise.exit`
+- [x] test: a supervise loop that throws after wave 1 writes `supervise.exit`
       with a non-zero code and reason, appends a terminal `monitor.log`
       line, and emits a wake event.
-- [ ] test: clean all-merged completion writes `supervise.exit` code 0 and is
+- [x] test: clean all-merged completion writes `supervise.exit` code 0 and is
       distinguishable from an abnormal zero-exit (incomplete tasks) in the
       recorded artifacts.
-- [ ] test: `run --detach` propagates a non-zero exit (never 0) when the
+- [x] test: `run --detach` propagates a non-zero exit (never 0) when the
       spec path does not exist or intake refuses — covering the observed
       "exit 0 for a spec that didn't exist".
-- [ ] agent: README states the detection boundary — exit traps own
+- [x] agent: README states the detection boundary — exit traps own
       trappable terminations; the continuity layer owns SIGKILL/power-loss
       via liveness.
 
@@ -134,12 +134,12 @@ tests pinning the checked-out-branch scenario end-to-end (no spurious
 
 ### Acceptance criteria
 
-- [ ] test: merge call throws but the PR reports merged → task records the
+- [x] test: merge call throws but the PR reports merged → task records the
       real merge SHA, no `merge-blocked` exception is filed, no needs-human
       issue is posted, and the phase gate sees the task as merged.
-- [ ] test: merge call throws and the PR is genuinely unmerged → existing
+- [x] test: merge call throws and the PR is genuinely unmerged → existing
       escalation behavior is preserved.
-- [ ] agent: diff confined to the merge step, its repositories, and tests.
+- [x] agent: diff confined to the merge step, its repositories, and tests.
 
 ## Task T-04: Escalations are assigned and delivered, not parked
 
@@ -157,12 +157,12 @@ loud line to `monitor.log`.
 
 ### Acceptance criteria
 
-- [ ] test: with an operator configured, posted needs-human issues include
+- [x] test: with an operator configured, posted needs-human issues include
       the assignee; without one, issues still post (no crash) and
       `monitor.log` warns that no assignee is configured.
-- [ ] test: every escalation entry emits exactly one wake event (idempotent
+- [x] test: every escalation entry emits exactly one wake event (idempotent
       across resume, matching the existing title-idempotence).
-- [ ] test: a failed GitHub issue post appends a visible `monitor.log`
+- [x] test: a failed GitHub issue post appends a visible `monitor.log`
       warning while the run continues.
 
 ## Out of scope
