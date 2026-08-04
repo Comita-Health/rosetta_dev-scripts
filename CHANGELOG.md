@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **team-setup / Addi merge-on-approve:** on Approve of an Addi PR that
+  touches Draft `specs/**/phase-*-spec.md`, push a DCO-signed
+  `docs(spec): approve SPEC-… on human Approve` flip (Addi App) before
+  merge. Script: `team-setup/scripts/flip-spec-status.mjs`. Non-spec PRs
+  unchanged (SPEC-BUG-one-click-spec-approval-P1 T-01).
 - **sdlc-workflow:** enforce intake / supervise re-read the Approved spec from
   `origin/<defaultBranch>` (`SpecDocRepository.readAtRef`) instead of comparing
   the operator working tree to origin. Stale local checkbox edits no longer

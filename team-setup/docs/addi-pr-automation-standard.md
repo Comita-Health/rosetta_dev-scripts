@@ -13,6 +13,7 @@ which path owns what.
 | Situation                                                                 | Owner                          | Mechanism                                                                       |
 | ------------------------------------------------------------------------- | ------------------------------ | ------------------------------------------------------------------------------- |
 | Human **Approves** an **Addi-authored** topic PR; checks green; mergeable | **GHA (gold)**                 | `addi-merge-on-approve.yml` merges as Addi                                      |
+| Same, and the PR touches `specs/**/phase-*-spec.md` still `status: Draft` | **GHA (gold)**                 | Before merge, flip script pushes `Draft → Approved` as Addi (DCO, conventional) |
 | Same, but `mergeable=CONFLICTING`                                         | **GHA + Agent**                | GHA comments only (no force-merge). **Agent** merges/rebases onto base, pushes  |
 | Stacked PR (`pull.stack` set), Approved + mergeable                       | **GHA (gold)**                 | `PUT .../merge-async` with `merge_method=merge` (sync `gh pr merge` fails)      |
 | Stack blocked because a **lower** PR is CONFLICTING                       | **Agent / human**              | Fix bottom-up; GHA comments only — does not auto-resolve conflicts              |
@@ -47,6 +48,14 @@ Spike notes and historical troubleshooting remain in
 4. **`schedule` every 10 minutes** — last-resort poll (GitHub may delay or skip
    schedules on quiet repos).
 5. **`workflow_dispatch`** with `pr_number` — manual / proof.
+
+### Spec status flip (before merge)
+
+When the Approved PR includes `specs/**/phase-*-spec.md` still at
+`status: Draft`, the workflow runs `team-setup/scripts/flip-spec-status.mjs`,
+pushes `docs(spec): approve SPEC-… on human Approve` (DCO, as Addi), then
+continues checks → merge. Non-spec PRs are unchanged. Tests:
+`node --test team-setup/scripts/flip-spec-status.test.mjs`.
 
 ## Credentials
 
