@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **ci:** `.github/workflows/ci.yml`'s `test` job now runs `bun run typecheck`
+  (`tsc --noEmit`) for `team-setup` and `sdlc-workflow`, each before that
+  package's `test:coverage` step (SPEC-BUG-ci-typecheck-gate-P1 T-01). Jest
+  runs through `@swc/jest`, which strips TypeScript types without checking
+  them, so a `tsc`-only defect (duplicate object property, mismatched type,
+  missing interface member) could ride onto `main` with CI green the whole
+  time. The new step fails the build fast on that class of error instead of
+  requiring someone to run `bun run build` by hand to notice.
 - **sdlc-workflow:** synthesized `allowedPaths` are grounded in the target
   repo tree instead of trusted as LLM guesses (#35 /
   SPEC-BUG-envelope-spec-integrity-P1 T-01). At `decompose`, every envelope
