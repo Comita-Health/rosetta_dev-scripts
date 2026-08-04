@@ -198,14 +198,18 @@ jobs:
             # SECURITY: the flip script is taken from the trusted default
             # branch (the clone's HEAD), never from the PR head — a PR that
             # modifies the script must not get its version executed in this
-            # push-credentialed job. Clones predating the script skip the
-            # flip (interim manual path) rather than failing the merge job.
+            # push-credentialed job. Genuinely-absent script (default branch
+            # predates the feature) skips the flip; any other extraction
+            # error fails the job loudly instead of silently omitting flips.
             flip_script="$(mktemp -d)/flip-spec-status.mjs"
-            if ! git -C "$workdir" show HEAD:team-setup/scripts/flip-spec-status.mjs \
-              > "$flip_script" 2>/dev/null; then
-              echo "flip-spec-status.mjs missing on default branch; skip status flip."
+            if ! git -C "$workdir" cat-file -e HEAD:team-setup/scripts/flip-spec-status.mjs 2>/dev/null; then
+              echo "flip-spec-status.mjs absent on default branch; skip status flip."
               rm -rf "$workdir"
               return 0
+            fi
+            if ! git -C "$workdir" show HEAD:team-setup/scripts/flip-spec-status.mjs > "$flip_script"; then
+              echo "::error::failed to extract flip-spec-status.mjs from default-branch HEAD"
+              exit 1
             fi
 
             git -C "$workdir" fetch --quiet --no-tags origin "$head_ref"
@@ -233,12 +237,21 @@ jobs:
             rm -rf "$workdir"
             echo "Pushed draft→Approved flip $flip_sha to $head_ref as $bot_login"
 
-            # Re-pin: wait until the PR head reflects the flip commit so the
-            # checks rollup below waits on the post-flip SHA, not a stale one.
+            # Re-pin: the checks rollup and merge below must observe the
+            # post-flip SHA. Proceeding on a stale pre-flip head would merge
+            # content the human never saw flipped — hard-fail instead.
+            repinned=""
             for _ in 1 2 3 4 5 6; do
-              [ "$(gh pr view "$PR" -R "$REPO" --json headRefOid --jq '.headRefOid')" = "$flip_sha" ] && break
+              if [ "$(gh pr view "$PR" -R "$REPO" --json headRefOid --jq '.headRefOid')" = "$flip_sha" ]; then
+                repinned="yes"
+                break
+              fi
               sleep 5
             done
+            if [ -z "$repinned" ]; then
+              echo "::error::PR #$PR head never advanced to flip commit $flip_sha; aborting before checks/merge."
+              exit 1
+            fi
             return 0
           }
 
