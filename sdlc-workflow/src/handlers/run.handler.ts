@@ -416,29 +416,27 @@ export class RunHandler implements IRunHandler {
 
     // T-03: SHA-idempotent sandbox deploy; the step cache additionally
     // guarantees kill-resume produces no duplicate deployments. The
-    // test-tier verification check has no dependency on the deployed
-    // sandbox — only agent-tier criteria consume the health report — so it
-    // runs concurrently with the deploy instead of paying for both
-    // sequentially. On a resume where verification is already step-cached
-    // this duplicates one test run for nothing; that's cheaper than the
-    // complexity of pre-checking the cache before deciding to dispatch it.
-    const sandboxPromise = this.sandboxStep(
+    // test-tier check is logically independent of the deployed sandbox,
+    // but both contracts typically begin with a package-manager install in
+    // the same worktree — running them concurrently races binary linking
+    // (observed: repeated transient `bun install` EEXIST breaches on
+    // one-click-spec-approval-2026-08-04, 2 of 3 gate rounds). Sequential
+    // on purpose until a safe shared-install contract exists (PRD-0022).
+    // Test tier goes first: it is the cheaper command and shortens
+    // time-to-red for plain test failures.
+    const precomputedTestTier = await this._verification.verifyTestTierOnly({
+      worktreePath,
+      runsDir: input.runsDir,
+      runId: input.runId,
+      task
+    });
+    const sandboxOutcome = await this.sandboxStep(
       input,
       state,
       task,
       worktreePath,
       inputsDigest({ ...chain, step: 'sandbox' })
     );
-    const testTierPromise = this._verification.verifyTestTierOnly({
-      worktreePath,
-      runsDir: input.runsDir,
-      runId: input.runId,
-      task
-    });
-    const [sandboxOutcome, precomputedTestTier] = await Promise.all([
-      sandboxPromise,
-      testTierPromise
-    ]);
 
     const verificationVerdict = await this.verificationStep(
       input,
