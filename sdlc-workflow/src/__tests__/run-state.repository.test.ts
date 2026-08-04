@@ -122,6 +122,9 @@ describe('RunStateRepository', () => {
     delete legacy.tokenSpendK;
     delete legacy.ciFixAttempts;
     delete legacy.steps;
+    delete legacy.startedAt;
+    delete legacy.specDigest;
+    delete legacy.launchArgv;
     mkdirSync(path.join(dir, 'run-1'), { recursive: true });
     writeFileSync(
       path.join(dir, 'run-1', 'state.json'),
@@ -133,6 +136,9 @@ describe('RunStateRepository', () => {
     expect(loaded?.tokenSpendK).toBe(0);
     expect(loaded?.ciFixAttempts).toEqual({});
     expect(loaded?.steps).toEqual({});
+    expect(loaded?.startedAt).toBe(legacy.updatedAt);
+    expect(loaded?.specDigest).toBe('');
+    expect(loaded?.launchArgv).toEqual([]);
   });
 
   it('records step results under their cache key (T-09)', () => {

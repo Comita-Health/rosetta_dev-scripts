@@ -1217,6 +1217,23 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
     ).toThrow(WorkflowError);
   });
 
+  it('status reports a launch-only run (startedAt + digest) instead of RUN_NOT_FOUND (#37)', () => {
+    const launchOnly = makeState();
+    launchOnly.startedAt = '2026-08-04T12:00:00.000Z';
+    launchOnly.specDigest = 'abcdef0123456789digest';
+    launchOnly.launchArgv = ['node', 'sdlc-workflow', 'run'];
+    stateLoad.mockReturnValue(launchOnly);
+
+    handler.showStatus({ runsDir: '/runs', runId: 'run-1' });
+
+    const output = (console.log as jest.Mock).mock.calls
+      .map(call => String(call[0]))
+      .join('\n');
+    expect(output).toContain('Run run-1');
+    expect(output).toContain('started: 2026-08-04T12:00:00.000Z');
+    expect(output).toContain('digest: abcdef012345');
+  });
+
   it('status falls back to recorded results when the spec file is gone', () => {
     specRead.mockImplementation(() => {
       throw new Error('ENOENT');

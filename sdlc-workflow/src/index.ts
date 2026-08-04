@@ -441,7 +441,8 @@ yargs(hideBin(process.argv))
           supervise: argv.supervise === true || argv.detach === true,
           detach: argv.detach === true,
           maxWaves: argv['max-waves'],
-          monitorPath: argv.monitor
+          monitorPath: argv.monitor,
+          launchArgv: process.argv
         });
         if (result.kind === 'detached') {
           process.exit(0);

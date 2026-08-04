@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** persist `state.json` at run invocation start — before
+  intake completes and before the first step-cache boundary — so a crash
+  never leaves `status --run-id` answering `RUN_NOT_FOUND` (#37 /
+  SPEC-BUG-fail-loud-run-lifecycle-P1 T-01). Launch record carries run id,
+  spec path/digest, base SHA, launch argv, `startedAt`, and an empty step
+  map. Refused intake still records the blocked verdict and exits non-zero;
+  supervise clears its `supervise.pid` on clean exit so the continuity
+  daemon does not treat a terminal refusal as a relaunchable half-run.
+
 - **team-setup / Addi merge-on-approve:** after merging a PR that touches
   `specs/**/phase-*-spec.md`, emit `repository_dispatch` type
   `sdlc-run-launch` with `client_payload: { specPaths, mergedSha, prNumber }`

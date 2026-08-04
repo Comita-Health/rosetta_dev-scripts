@@ -22,6 +22,11 @@ export interface ExecutorInput {
    * point of a dry run. Enforcing runs are not.
    */
   shadow?: boolean;
+  /**
+   * Process argv captured at invocation start for the launch record (#37).
+   * Defaults to `process.argv` when omitted.
+   */
+  launchArgv?: string[];
 }
 
 /** Optional progress sink for native heartbeat (#39) — not a Service call. */
@@ -173,6 +178,14 @@ export class ExecutorService implements IExecutorService {
   ) {}
 
   async executeReady(input: PoolInput): Promise<PoolOutcome> {
+    // #37 / fail-loud T-01: persist the launch record *before* intake so a
+    // crash between invocation start and the first step-cache boundary never
+    // leaves `status` answering RUN_NOT_FOUND. Resume loads this same file.
+    const prior = this._runStateRepo.load(input.runsDir, input.runId);
+    if (prior === null) {
+      this._runStateRepo.save(input.runsDir, this.createLaunchState(input));
+    }
+
     // Enforce loads the Approved blob from origin/<default> so a stale
     // operator working tree cannot block wave N+1 after a task merge.
     // Shadow keeps the local file (unlanded Draft specs are the point).
@@ -183,12 +196,16 @@ export class ExecutorService implements IExecutorService {
     const spec = loaded.spec;
 
     const existing = this._runStateRepo.load(input.runsDir, input.runId);
-    const state: RunState = existing ?? this.initState(input, spec);
+    const state: RunState = existing ?? this.createLaunchState(input, spec);
+
     const selected = selectReadyTasks(spec, state, input.maxParallel);
     if (selected.length === 0) {
-      // No side effects: nothing is persisted for a no-op invocation.
+      // No further side effects for a no-op wave (launch record may already
+      // exist from this or a prior invocation — do not wipe or rewrite it).
       return { kind: 'no-ready-task', spec, state: existing, outcomes: [] };
     }
+
+    this.enrichLaunchFromSpec(input.runsDir, state, spec);
 
     // Worktree creation mutates the shared .git directory — do it
     // sequentially; only the agent runs themselves fan out. Tip is the
@@ -432,12 +449,38 @@ export class ExecutorService implements IExecutorService {
     }
   }
 
-  private initState(input: ExecutorInput, spec: SpecDocument): RunState {
+  /**
+   * Launch record written at invocation start (#37). When `spec` is known
+   * (intake path), prefer it; otherwise best-effort parse the local file for
+   * forensics — intake still owns the approval decision.
+   */
+  private createLaunchState(
+    input: ExecutorInput,
+    spec?: SpecDocument
+  ): RunState {
+    const now = new Date().toISOString();
+    let specId = 'UNKNOWN';
+    let specDigest = '';
+    if (spec !== undefined) {
+      specId = spec.id;
+      specDigest = inputsDigest(spec);
+    } else {
+      try {
+        const local = this._specDocRepo.read(input.specPath);
+        specId = local.id;
+        specDigest = inputsDigest(local);
+      } catch {
+        // Missing / malformed — intake records the concrete refusal reason.
+      }
+    }
     return {
       runId: input.runId,
-      specId: spec.id,
+      specId,
       specPath: input.specPath,
+      specDigest,
       baseSha: this._gitRepo.headSha(input.repoPath),
+      launchArgv: [...(input.launchArgv ?? process.argv)],
+      startedAt: now,
       taskResults: {},
       verdicts: [],
       exceptions: [],
@@ -445,15 +488,41 @@ export class ExecutorService implements IExecutorService {
       steps: {},
       tokenSpendK: 0,
       ciFixAttempts: {},
-      updatedAt: new Date().toISOString()
+      updatedAt: now
     };
   }
 
+  /** After intake passes, pin the Approved-spec id/digest onto the launch record. */
+  private enrichLaunchFromSpec(
+    runsDir: string,
+    state: RunState,
+    spec: SpecDocument
+  ): void {
+    const digest = inputsDigest(spec);
+    if (state.specId === spec.id && state.specDigest === digest) {
+      return;
+    }
+    state.specId = spec.id;
+    state.specDigest = digest;
+    this._runStateRepo.save(runsDir, state);
+  }
+
   private loadOrInitState(input: ExecutorInput, spec: SpecDocument): RunState {
-    return (
-      this._runStateRepo.load(input.runsDir, input.runId) ??
-      this.initState(input, spec)
-    );
+    const existing = this._runStateRepo.load(input.runsDir, input.runId);
+    if (existing !== null) {
+      // Do not clobber a best-effort launch identity with an intake stub
+      // (id UNKNOWN) — only promote when intake resolved a real document.
+      if (
+        spec.id !== 'UNKNOWN' &&
+        (existing.specId !== spec.id ||
+          existing.specDigest !== inputsDigest(spec))
+      ) {
+        existing.specId = spec.id;
+        existing.specDigest = inputsDigest(spec);
+      }
+      return existing;
+    }
+    return this.createLaunchState(input, spec);
   }
 
   /**

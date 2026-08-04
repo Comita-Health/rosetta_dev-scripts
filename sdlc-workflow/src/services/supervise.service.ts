@@ -1,4 +1,11 @@
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync
+} from 'fs';
 import { inject, injectable } from 'inversify';
 import path from 'path';
 import chalk from 'chalk';
@@ -328,6 +335,25 @@ export class SuperviseService implements ISuperviseService {
         `[hb-watch] stopped ${new Date().toISOString()}`
       );
       this._hbWatch.stop();
+      // Clear our pid on clean exit so the continuity daemon does not treat a
+      // finished invocation (intake refusal, wave complete, blocked gate) as a
+      // dead supervisor of an unfinished half-run and relaunch it (#37).
+      // A SIGKILL leaves the pid file in place — that is the daemon's cue.
+      this.clearOwnSupervisePid(runDir);
+    }
+  }
+
+  private clearOwnSupervisePid(runDir: string): void {
+    const pidPath = path.join(runDir, 'supervise.pid');
+    try {
+      if (!existsSync(pidPath)) return;
+      const recorded = readFileSync(pidPath, 'utf-8').trim();
+      if (recorded === String(process.pid)) {
+        unlinkSync(pidPath);
+      }
+    } catch {
+      // Best-effort — a stale pid is worse than a missing one only when the
+      // daemon would relaunch a terminal refusal; ignore FS races.
     }
   }
 
