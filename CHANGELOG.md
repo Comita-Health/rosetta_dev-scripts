@@ -12,6 +12,16 @@
   heuristic additionally warns — without blocking — when task engineering
   notes reference a path outside the envelope, so the human reviews a
   coherent envelope instead of discovering the gap as a mid-run breach.
+- **sdlc-workflow:** `forbiddenSurfaces` fail closed at synthesis (#36 /
+  SPEC-BUG-envelope-spec-integrity-P1 T-02). `decompose` resolves every
+  synthesized surface label against the target repo's `.sdlc/surfaces.json`
+  and aborts with `SURFACE_UNRESOLVABLE` — each unresolvable label named and
+  the repo's known labels listed — instead of letting a label no gate can
+  enforce ship (or vanish) before a human reviews the spec. The known labels
+  are also fed into the synthesis prompt so the model picks from real
+  surfaces. Specs whose labels all resolve render byte-identically to prior
+  behavior, and arbitrary consumer labels (e.g. a healthcare
+  `payments-phi-boundary`) round-trip PRD → spec → intake without loss.
 
 - **sdlc-workflow:** enforce-merge reconciles a thrown `gh pr merge` against
   GitHub (`mergeCommit.oid`) before filing `merge-blocked`. A

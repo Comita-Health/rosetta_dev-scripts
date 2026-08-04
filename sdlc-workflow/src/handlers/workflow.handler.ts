@@ -44,6 +44,7 @@ export class WorkflowHandler implements IWorkflowHandler {
       `Phase ${input.phase}`;
     const spec = await this._synthesis.synthesize(stories, {
       prdId: input.prdId,
+      repoPath: input.repoPath,
       phase: input.phase,
       phaseTitle,
       owner: prd.owner,
