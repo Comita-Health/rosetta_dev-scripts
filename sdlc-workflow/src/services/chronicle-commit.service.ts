@@ -4,9 +4,12 @@ import type { IRunStateRepository } from '../repositories/run-state.repository';
 import { WORKFLOW_TOKENS } from '../tokens';
 import {
   ChronicleArtifact,
+  GateVerdict,
+  OutcomeArtifactPayload,
   RunState,
   SpecDocument,
   VerdictArtifactPayload,
+  VerdictOutcome,
   WorkflowError
 } from '../types';
 import { inputsDigest } from '../utils/digest';
@@ -55,6 +58,12 @@ export interface RecordRevertInput {
   revertSha: string;
   /** PR carrying the revert to the default branch. */
   prUrl: string;
+  /**
+   * BUG-reviewer-house-bar-P1 T-02: the reverted tasks' gate verdicts,
+   * annotated `outcome: vetoed` (one outcome record per task/gate) so
+   * gate precision is computable from the ledger.
+   */
+  revertedVerdicts?: GateVerdict[];
 }
 
 export interface IChronicleCommitService {
@@ -164,6 +173,15 @@ export class ChronicleCommitService implements IChronicleCommitService {
         input.taskId,
         input.mergedSha
       );
+      // T-02: the merge stood — annotate this task's gate verdicts so
+      // per-gate precision is computable from the ledger.
+      this.writeOutcomes(
+        input.chronicleRepo,
+        input.runId,
+        state.specId,
+        state.verdicts.filter(verdict => verdict.taskId === input.taskId),
+        'stood'
+      );
     }
 
     const path = this._artifactRepo.writeArtifact(
@@ -191,6 +209,20 @@ export class ChronicleCommitService implements IChronicleCommitService {
   }
 
   async recordRevert(input: RecordRevertInput): Promise<string> {
+    // T-02: the merge was vetoed — annotate the reverted tasks' gate
+    // verdicts so per-gate precision is computable from the ledger.
+    if (
+      input.revertedVerdicts !== undefined &&
+      input.revertedVerdicts.length > 0
+    ) {
+      this.writeOutcomes(
+        input.chronicleRepo,
+        input.runId,
+        input.specId,
+        input.revertedVerdicts,
+        'vetoed'
+      );
+    }
     const path = this._artifactRepo.writeArtifact(
       input.chronicleRepo,
       input.runId,
@@ -214,5 +246,49 @@ export class ChronicleCommitService implements IChronicleCommitService {
       `${input.runId} veto revert at ${input.revertSha.slice(0, 12)}`
     );
     return path;
+  }
+
+  /**
+   * T-02: write one `sdlc.outcome.v1` artifact per gate present in
+   * `verdicts`, keyed by `outcome-<taskId>-<gate>` so re-recording the same
+   * outcome (e.g. a resumed run replaying a cached step) overwrites the
+   * same file instead of appending a duplicate. When a gate recorded more
+   * than one verdict for this task (retries), the most recent one wins.
+   */
+  private writeOutcomes(
+    chronicleRepo: string,
+    runId: string,
+    specId: string,
+    verdicts: GateVerdict[],
+    outcome: VerdictOutcome
+  ): void {
+    const now = new Date().toISOString();
+    const latestByGate = new Map<string, GateVerdict>();
+    for (const verdict of verdicts) {
+      latestByGate.set(verdict.gate, verdict);
+    }
+    for (const verdict of latestByGate.values()) {
+      const taskId = verdict.taskId ?? 'run';
+      const payload: OutcomeArtifactPayload = {
+        taskId,
+        gate: verdict.gate,
+        verdictInputsDigest:
+          verdict.inputsDigest ??
+          inputsDigest({ gate: verdict.gate, taskId, reasons: verdict.reasons }),
+        outcome
+      };
+      this._artifactRepo.writeArtifact(
+        chronicleRepo,
+        runId,
+        `outcome-${taskId}-${verdict.gate}`,
+        {
+          schema: 'sdlc.outcome.v1',
+          runId,
+          specId,
+          recordedAt: now,
+          payload
+        }
+      );
+    }
   }
 }

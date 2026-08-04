@@ -330,6 +330,15 @@ trailers. Verdict artifacts carry gate identity, inputs digest, outcome,
 and resolvable evidence refs, and read back through
 `GatePolicyQueryService` so future gate policy can learn from track record.
 
+**Verdict outcomes (BUG-reviewer-house-bar-P1 T-02):** `record-merge --task`
+and `check-veto`'s revert path each annotate the affected task's gate
+verdicts with a compact `sdlc.outcome.v1` artifact — `outcome: stood` when
+the merge holds, `outcome: vetoed` when a queue veto reverts it — one
+record per `(runId, taskId, gate)`, keyed so a resumed run overwrites
+rather than duplicates. This makes per-gate precision (how often a concur
+preceded a veto/rework, how often a breach was overridden) computable from
+the ledger; no read-side reporting ships in this task.
+
 ## Environment
 
 Inference runs over one of three transports, selected automatically:
@@ -410,7 +419,9 @@ Handler / Service / Repository with InversifyJS (workspace rule):
   that reads the item back (T-07 / P3 T-05).
 - `services/chronicle-commit.service.ts` — versioned run artifacts +
   merged-SHA / veto-revert recording (`sdlc.merge.v1`, `sdlc.revert.v1`),
-  committed per ADR-0007 (T-08 / P3 T-05).
+  committed per ADR-0007 (T-08 / P3 T-05); also annotates the affected
+  tasks' gate verdicts `stood` / `vetoed` via `sdlc.outcome.v1`
+  (BUG-reviewer-house-bar-P1 T-02).
 - `services/gate-policy-query.service.ts` — reads verdict artifacts back
   for gate-policy consumption (T-08).
 - `repositories/` — PRD parsing (`prd`), model transports (`anthropic`,

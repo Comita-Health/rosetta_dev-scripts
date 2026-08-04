@@ -1096,6 +1096,48 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
         expect(revertMerge).toHaveBeenCalledTimes(2); // no new reverts
       });
 
+      it('BUG-reviewer-house-bar-P1 T-02: passes the reverted tasks\u2019 gate verdicts to the Chronicle so they can be annotated vetoed', async () => {
+        itemTags.mockReturnValue(['veto']);
+        const vetoState = makeState();
+        vetoState.taskResults['T-01'] = {
+          taskId: 'T-01',
+          status: 'completed',
+          branch: 'sdlc/run-1/T-01',
+          mergedSha: 'merge-sha-1',
+          recordedAt: '2026-08-01T00:00:00Z'
+        };
+        vetoState.taskResults['T-02'] = {
+          taskId: 'T-02',
+          status: 'completed',
+          branch: 'sdlc/run-1/T-02',
+          mergedSha: 'merge-sha-2',
+          recordedAt: '2026-08-01T01:00:00Z'
+        };
+        vetoState.verdicts = [
+          { ...verdictOf('reviewer', 'pass'), taskId: 'T-01' },
+          { ...verdictOf('ci', 'pass'), taskId: 'T-02' },
+          // Not part of the reverted phase — must not be forwarded.
+          { ...verdictOf('envelope', 'pass'), taskId: 'T-03' }
+        ];
+        stateLoad.mockReturnValue(vetoState);
+
+        await handler.checkVeto(VETO_INPUT);
+
+        expect(recordRevert).toHaveBeenCalledWith(
+          expect.objectContaining({
+            revertedVerdicts: expect.arrayContaining([
+              expect.objectContaining({ gate: 'reviewer', taskId: 'T-01' }),
+              expect.objectContaining({ gate: 'ci', taskId: 'T-02' })
+            ])
+          })
+        );
+        const forwarded = recordRevert.mock.calls[0][0].revertedVerdicts;
+        expect(forwarded).toHaveLength(2);
+        expect(
+          forwarded.some((v: GateVerdict) => v.taskId === 'T-03')
+        ).toBe(false);
+      });
+
       it('absence of a veto tag changes nothing', async () => {
         itemTags.mockReturnValue(['follow-up']);
 

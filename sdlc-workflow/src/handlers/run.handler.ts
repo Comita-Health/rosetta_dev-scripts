@@ -960,6 +960,13 @@ export class RunHandler implements IRunHandler {
     }
 
     const mergedShas = merged.map(result => result.mergedSha as string);
+    // T-02: the reverted tasks' gate verdicts, annotated `vetoed` on the
+    // Chronicle so per-gate precision is computable from the ledger.
+    const revertedTaskIds = new Set(merged.map(result => result.taskId));
+    const revertedVerdicts = state.verdicts.filter(
+      verdict =>
+        verdict.taskId !== undefined && revertedTaskIds.has(verdict.taskId)
+    );
     const digest = inputsDigest({ step: 'revert', mergedShas });
     const key = stepKey('revert', 'phase', digest);
     const cached = state.steps[key];
@@ -1030,7 +1037,8 @@ export class RunHandler implements IRunHandler {
       specId: state.specId,
       revertedShas: mergedShas,
       revertSha,
-      prUrl: pr.url
+      prUrl: pr.url,
+      revertedVerdicts
     });
 
     this._runStateRepo.recordStep(input.runsDir, state, key, {
