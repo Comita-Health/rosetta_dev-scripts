@@ -96,7 +96,8 @@ blocked verdict in `state.json`, and exits non-zero. A launch record
 steps) is written at invocation start — before intake — so a crash never
 leaves `status` answering `RUN_NOT_FOUND` (#37). The envelope
 gate evaluates the task branch diff against the spec's blast-radius envelope
-(forbidden-surface labels resolve via `<repo>/.sdlc/surfaces.json`). Since
+(forbidden-surface labels resolve via `.sdlc/surfaces.json` read from the
+tree under judgment — see the tree-resolution rule below). Since
 P3 T-04 the gates enforce by default: green across the board merges the
 task PR automatically; any red gate blocks and escalates (`--shadow`
 disables enforcement for calibration).
@@ -173,7 +174,35 @@ declares them:
 
 A missing contract never fails the run: the corresponding gate records
 itself `blocked` (sandbox) or degrades the criteria to `human-required`
-(verification), keeping the shadow-mode phase verdict honest.
+(verification), keeping the shadow-mode phase verdict honest. The one
+exception is the surface map: an envelope that declares
+`forbiddenSurfaces` cannot be judged without it, so a missing
+`surfaces.json` at the judged tree is a named breach reason (see below).
+
+### Tree-resolution rule for evaluation-time `.sdlc/` reads
+
+Any gate that reads a `.sdlc/` contract while judging a change must read
+it from the **git tree under judgment** — the task's PR tip (or the merged
+integration tip for phase-level checks) — never from the operator's local
+checkout (SPEC-BUG-envelope-spec-integrity-P1 T-03). A locally edited
+(uncommitted) contract therefore cannot sway a verdict, and a contract
+missing from the judged tree is a **named gate error**, not a silent
+local-file fallback.
+
+Audit of evaluation-time `.sdlc/` call sites and how each complies:
+
+- **Envelope gate → `surfaces.json`** — resolved as a git blob at the
+  gate's `headRef` via `SurfaceMapRepository.loadAtRef` (`git show
+  <ref>:.sdlc/surfaces.json`). Missing at that ref with
+  `forbiddenSurfaces` declared → breach reason naming the contract path
+  and the judged ref. `SurfaceMapRepository.load` (working-tree read)
+  remains for synthesis-time use only; gates must not call it.
+- **Sandbox gate → `environments.json`** — loaded from the task
+  **worktree**, which is the engine-owned checkout of the judged branch
+  tip (commands must execute from a filesystem checkout). Compliant: the
+  worktree *is* the judged tree.
+- **Verification (test tier) → `verification.json`** — same worktree
+  rule as the sandbox contract. Compliant for the same reason.
 
 ## Resumable step graph (T-09)
 
@@ -251,7 +280,8 @@ Handler / Service / Repository with InversifyJS (workspace rule):
   fan-out, one worktree per task. Persists the #37 launch record
   (`state.json`) before intake so forensics survive a mid-start crash.
 - `services/envelope-gate.service.ts` — diff vs blast-radius envelope,
-  shadow-mode verdict (T-02).
+  shadow-mode verdict (T-02); resolves `surfaces.json` at the judged ref,
+  never local disk (envelope-spec-integrity T-03).
 - `services/pr-lifecycle.service.ts` — P3 T-02: push the task branch,
   find-or-create its PR with deterministic title/body (`utils/pr-content`).
 - `services/sandbox-deploy.service.ts` — task-branch build → sandbox via the

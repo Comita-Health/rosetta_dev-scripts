@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** the envelope gate resolves `.sdlc/surfaces.json` from
+  the git tree under judgment (the task PR tip) via
+  `SurfaceMapRepository.loadAtRef`, never the operator's local checkout — a
+  locally edited (uncommitted) contract can no longer sway a verdict. A
+  contract missing from the judged tree while the envelope declares
+  `forbiddenSurfaces` is now a named breach reason (contract path + judged
+  ref), not a local-file fallback. README documents the tree-resolution
+  rule and audits the other evaluation-time `.sdlc/` readers (sandbox /
+  verification contracts load from the task worktree, which is the judged
+  tree's checkout) (SPEC-BUG-envelope-spec-integrity-P1 T-03).
+
 - **sdlc-workflow:** enforce-merge reconciles a thrown `gh pr merge` against
   GitHub (`mergeCommit.oid`) before filing `merge-blocked`. A
   `--delete-branch` false negative with the task branch still checked out
