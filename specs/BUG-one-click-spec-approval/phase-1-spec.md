@@ -2,7 +2,7 @@
 id: SPEC-BUG-one-click-spec-approval-P1
 prd: BUG-one-click-spec-approval # synthetic id — lightweight bug path, no PRD file
 phase: 1
-status: Approved # Draft | Approved | Done | Superseded
+status: Done # Draft | Approved | Done | Superseded
 date: 2026-08-04
 owner: Russ Watson
 envelope:
@@ -67,12 +67,12 @@ byte-identically.
 
 ### Acceptance criteria
 
-- [ ] test: given a spec file with `status: Draft # Draft | Approved | …`,
+- [x] test: given a spec file with `status: Draft # Draft | Approved | …`,
       the flip script rewrites only the status value (comment and all other
       lines byte-identical) and is idempotent on an already-`Approved` file.
-- [ ] test: PR file lists without `specs/**/phase-*-spec.md` entries produce
+- [x] test: PR file lists without `specs/**/phase-*-spec.md` entries produce
       no flip commit and no workflow behavior change.
-- [ ] agent: the workflow wires the flip ahead of the checks rollup —
+- [x] agent: the workflow wires the flip ahead of the checks rollup —
       spec detection → flip commit push (Addi, DCO-signed) → head re-pin →
       existing checks → merge — with no step requiring human input between
       Approve and merge, and the flip script executed from the trusted
@@ -97,13 +97,13 @@ merged spec PR (dedup by merge SHA).
 
 ### Acceptance criteria
 
-- [ ] test: dispatch payload construction includes every spec path in the
+- [x] test: dispatch payload construction includes every spec path in the
       merged diff and the merge SHA; non-spec merges emit nothing.
-- [ ] agent: `team-setup/docs/addi-pr-automation-standard.md` decision table
+- [x] agent: `team-setup/docs/addi-pr-automation-standard.md` decision table
       and trigger list document the spec-flip step and the `sdlc-run-launch`
       dispatch contract (payload schema, exactly-once semantics, intended
       consumer).
-- [ ] agent: diff is confined to the flip/signal feature and its tests — no
+- [x] agent: diff is confined to the flip/signal feature and its tests — no
       unrelated workflow refactoring.
 
 ## Post-merge validation
