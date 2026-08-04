@@ -220,6 +220,15 @@ export interface RunState {
   specId: string;
   specPath: string;
   baseSha: string;
+  /**
+   * ISO timestamp when the run was first launched — written before intake
+   * completes so a crash never leaves `status` answering RUN_NOT_FOUND (#37).
+   */
+  startedAt?: string;
+  /** Digest of the spec document captured at launch / after intake. */
+  specDigest?: string;
+  /** Process argv captured at launch for forensics. */
+  launchArgv?: string[];
   taskResults: Record<string, TaskRunResult>;
   verdicts: GateVerdict[];
   exceptions: ExceptionEntry[];

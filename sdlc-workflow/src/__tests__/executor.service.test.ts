@@ -1,9 +1,12 @@
 import 'reflect-metadata';
 import { Container } from 'inversify';
+import { existsSync, mkdtempSync, rmSync } from 'fs';
+import os from 'os';
 import path from 'path';
 import type { IAgentRunnerRepository } from '../repositories/agent-runner.repository';
 import type { IGitRepository } from '../repositories/git.repository';
 import type { IRunStateRepository } from '../repositories/run-state.repository';
+import { RunStateRepository } from '../repositories/run-state.repository';
 import type { ISpecDocRepository } from '../repositories/spec-doc.repository';
 import {
   ExecutorService,
@@ -831,5 +834,146 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
         5
       );
     });
+  });
+});
+
+describe('fail-loud T-01 launch record (#37)', () => {
+  let executor: IExecutorService;
+  let specRead: jest.Mock;
+  let specReadAtRef: jest.Mock;
+  let gitMock: jest.Mocked<IGitRepository>;
+  let agentRun: jest.Mock;
+  let runsDir: string;
+  let stateRepo: RunStateRepository;
+
+  beforeEach(() => {
+    runsDir = mkdtempSync(path.join(os.tmpdir(), 'sdlc-launch-'));
+    stateRepo = new RunStateRepository();
+    specRead = jest.fn().mockReturnValue(makeSpec());
+    specReadAtRef = jest.fn().mockReturnValue(makeSpec());
+    gitMock = {
+      headSha: jest
+        .fn()
+        .mockImplementation((repoPath: string) =>
+          repoPath.includes('worktrees') ? 'agent-sha' : 'base-sha'
+        ),
+      status: jest.fn().mockReturnValue(''),
+      addWorktree: jest.fn(),
+      diffStat: jest.fn(),
+      diffText: jest.fn(),
+      push: jest.fn(),
+      fetch: jest.fn(),
+      resolveSha: jest.fn(),
+      defaultBranch: jest.fn().mockReturnValue('build-env/dev'),
+      fileAtRef: jest.fn(),
+      pathDiffersFromRef: jest.fn().mockReturnValue(false),
+      revertMerge: jest.fn(),
+      stageAll: jest.fn(),
+      commit: jest.fn(),
+      removeWorktreeAsync: jest.fn()
+    };
+    agentRun = jest.fn().mockResolvedValue({ ok: true, output: 'done' });
+
+    const container = new Container();
+    container
+      .bind<ISpecDocRepository>(WORKFLOW_TOKENS.SpecDocRepository)
+      .toConstantValue({ read: specRead, readAtRef: specReadAtRef });
+    container
+      .bind<IGitRepository>(WORKFLOW_TOKENS.GitRepository)
+      .toConstantValue(gitMock);
+    container
+      .bind<IAgentRunnerRepository>(WORKFLOW_TOKENS.AgentRunnerRepository)
+      .toConstantValue({ run: agentRun });
+    container
+      .bind<IRunStateRepository>(WORKFLOW_TOKENS.RunStateRepository)
+      .toConstantValue(stateRepo);
+    container
+      .bind<IExecutorService>(WORKFLOW_TOKENS.ExecutorService)
+      .to(ExecutorService);
+    executor = container.get<IExecutorService>(WORKFLOW_TOKENS.ExecutorService);
+  });
+
+  afterEach(() => rmSync(runsDir, { recursive: true, force: true }));
+
+  const launchInput = () => ({
+    ...INPUT,
+    runsDir,
+    launchArgv: ['node', 'sdlc-workflow', 'run', '--spec', INPUT.specPath]
+  });
+
+  it('leaves a readable launch state when killed between intake and the first recorded step', async () => {
+    agentRun.mockImplementation(async () => {
+      const mid = stateRepo.load(runsDir, 'run-1');
+      expect(mid).not.toBeNull();
+      expect(mid!.runId).toBe('run-1');
+      expect(mid!.startedAt).toEqual(expect.any(String));
+      expect(mid!.specDigest).toEqual(expect.any(String));
+      expect(mid!.specDigest!.length).toBeGreaterThan(0);
+      expect(mid!.baseSha).toBe('base-sha');
+      expect(mid!.launchArgv).toEqual(launchInput().launchArgv);
+      expect(mid!.steps).toEqual({});
+      throw new Error('killed between intake and first step');
+    });
+
+    await executor.executeReady(launchInput());
+
+    const state = stateRepo.load(runsDir, 'run-1');
+    expect(state).not.toBeNull();
+    expect(state!.startedAt).toEqual(expect.any(String));
+    expect(state!.specDigest!.length).toBeGreaterThan(0);
+    // status --run-id loads this same file — never RUN_NOT_FOUND.
+    expect(stateRepo.load(runsDir, 'run-1')?.runId).toBe('run-1');
+  });
+
+  it('records a refused intake in run state without creating a daemon-relaunchable half-run', async () => {
+    specReadAtRef.mockReturnValue(makeSpec({ status: 'Draft' }));
+
+    const pool = await executor.executeReady(launchInput());
+
+    expect(pool.kind).toBe('blocked');
+    expect(pool.detail).toBe('unapproved-spec');
+
+    const state = stateRepo.load(runsDir, 'run-1');
+    expect(state).not.toBeNull();
+    expect(state!.verdicts).toContainEqual(
+      expect.objectContaining({
+        gate: 'intake',
+        outcome: 'blocked',
+        reasons: expect.arrayContaining(['unapproved-spec'])
+      })
+    );
+    // Empty task/step maps: continuity daemon's run_is_finished stays
+    // false, but with no supervise.pid (executor never writes one) and a
+    // recorded intake refusal it is not a half-run the daemon would resume.
+    expect(state!.taskResults).toEqual({});
+    expect(state!.steps).toEqual({});
+    expect(existsSync(path.join(runsDir, 'run-1', 'supervise.pid'))).toBe(
+      false
+    );
+  });
+
+  it('preserves step-cache resume for a normally-progressing run', async () => {
+    const first = await executor.executeReady(launchInput());
+    expect(first.kind).toBe('executed');
+    expect(first.outcomes[0].cached).toBe(false);
+
+    const afterFirst = stateRepo.load(runsDir, 'run-1');
+    expect(afterFirst).not.toBeNull();
+    const implKey = Object.keys(afterFirst!.steps).find(k =>
+      k.startsWith('implementation:T-01:')
+    );
+    expect(implKey).toBeDefined();
+
+    agentRun.mockClear();
+    gitMock.addWorktree.mockClear();
+
+    const resumed = await executor.executeReady(launchInput());
+    expect(resumed.kind).toBe('executed');
+    expect(resumed.outcomes[0].cached).toBe(true);
+    expect(agentRun).not.toHaveBeenCalled();
+    expect(gitMock.addWorktree).not.toHaveBeenCalled();
+    expect(stateRepo.load(runsDir, 'run-1')!.steps[implKey!]).toEqual(
+      afterFirst!.steps[implKey!]
+    );
   });
 });

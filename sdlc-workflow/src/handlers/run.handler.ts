@@ -976,6 +976,12 @@ export class RunHandler implements IRunHandler {
     console.log(
       `  spec: ${state.specPath}\n  base: ${state.baseSha}\n  updated: ${state.updatedAt}`
     );
+    if (state.startedAt !== undefined) {
+      console.log(`  started: ${state.startedAt}`);
+    }
+    if (state.specDigest !== undefined && state.specDigest.length > 0) {
+      console.log(`  digest: ${state.specDigest.slice(0, 12)}`);
+    }
     if (state.mergedSha !== undefined) {
       console.log(chalk.green(`  merged: ${state.mergedSha}`));
     }
@@ -1078,7 +1084,11 @@ export class RunHandler implements IRunHandler {
     );
     if (input.taskId !== undefined && input.repoPath !== undefined) {
       this.scheduleWorktreeCleanup(
-        { runsDir: input.runsDir, runId: input.runId, repoPath: input.repoPath },
+        {
+          runsDir: input.runsDir,
+          runId: input.runId,
+          repoPath: input.repoPath
+        },
         input.taskId
       );
     }

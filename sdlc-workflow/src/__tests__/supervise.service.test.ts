@@ -11,7 +11,7 @@ import type { IProcessDetachRepository } from '../repositories/process-detach.re
 import type { IHeartbeatWatchService } from '../services/heartbeat-watch.service';
 import { WORKFLOW_TOKENS } from '../tokens';
 import type { RunState, SpecDocument } from '../types';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, writeFileSync, existsSync } from 'fs';
 import os from 'os';
 import path from 'path';
 
@@ -327,6 +327,24 @@ describe('SuperviseService', () => {
     const failed = await supervise.run(input());
     expect(failed.kind).toBe('failed');
     expect(failed.detail).toBe('task-failed');
+  });
+
+  it('clears supervise.pid on clean exit so intake refusal is not relaunched (#37)', async () => {
+    runTask.mockResolvedValueOnce(wave('blocked'));
+
+    await supervise.run(input());
+
+    const pidPath = path.join(runsDir, 'run-1', 'supervise.pid');
+    expect(existsSync(pidPath)).toBe(false);
+  });
+
+  it('leaves supervise.pid in place on a crash so the daemon can relaunch (#37)', async () => {
+    runTask.mockRejectedValueOnce(new Error('boom mid-wave'));
+
+    await expect(supervise.run(input())).rejects.toThrow('boom mid-wave');
+
+    const pidPath = path.join(runsDir, 'run-1', 'supervise.pid');
+    expect(existsSync(pidPath)).toBe(true);
   });
 
   it('stops when no ready task remains and work is incomplete', async () => {

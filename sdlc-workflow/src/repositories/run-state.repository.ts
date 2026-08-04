@@ -86,6 +86,10 @@ export class RunStateRepository implements IRunStateRepository {
     state.steps = state.steps ?? {};
     state.tokenSpendK = state.tokenSpendK ?? 0;
     state.ciFixAttempts = state.ciFixAttempts ?? {};
+    // #37 launch record — older states only had updatedAt.
+    state.startedAt = state.startedAt ?? state.updatedAt;
+    state.specDigest = state.specDigest ?? '';
+    state.launchArgv = state.launchArgv ?? [];
     return state;
   }
 

@@ -89,7 +89,10 @@ bun run dev -- status --run-id <run-id>
 `decompose` hard-stops after writing the Draft spec. Approval is a
 `status: Draft → Approved` flip in a dedicated commit (ADR-0008) —
 `run` refuses anything but an Approved spec, records the refusal as a
-blocked verdict, and executes at most one task per invocation. The envelope
+blocked verdict in `state.json`, and exits non-zero. A launch record
+(`state.json` with run id, spec digest, base SHA, argv, `startedAt`, empty
+steps) is written at invocation start — before intake — so a crash never
+leaves `status` answering `RUN_NOT_FOUND` (#37). The envelope
 gate evaluates the task branch diff against the spec's blast-radius envelope
 (forbidden-surface labels resolve via `<repo>/.sdlc/surfaces.json`). Since
 P3 T-04 the gates enforce by default: green across the board merges the
@@ -219,7 +222,8 @@ Handler / Service / Repository with InversifyJS (workspace rule):
   ADR-0008 Markdown.
 - `services/executor.service.ts` — approved-spec intake and the P3 T-01
   task pool: merged-dependency eligibility, bounded parallel agent
-  fan-out, one worktree per task.
+  fan-out, one worktree per task. Persists the #37 launch record
+  (`state.json`) before intake so forensics survive a mid-start crash.
 - `services/envelope-gate.service.ts` — diff vs blast-radius envelope,
   shadow-mode verdict (T-02).
 - `services/pr-lifecycle.service.ts` — P3 T-02: push the task branch,
