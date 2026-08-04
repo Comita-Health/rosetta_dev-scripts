@@ -331,6 +331,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
         revertMerge,
         stageAll: jest.fn(),
         commit: jest.fn(),
+        listFiles: jest.fn().mockReturnValue([]),
         removeWorktreeAsync
       });
     container

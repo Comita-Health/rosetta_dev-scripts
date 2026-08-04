@@ -62,6 +62,12 @@ export interface SynthesizedSpec {
   tasks: SpecTask[];
   envelope: Envelope;
   markdown: string;
+  /**
+   * Non-fatal synthesis findings for the human reviewing the Draft — e.g.
+   * the diff-forecast heuristic flagging task-note paths outside the
+   * envelope (#35). Never blocks the write; surfaced by the handler.
+   */
+  warnings: string[];
 }
 
 // SPEC-PRD-0011-P2 contracts
@@ -287,6 +293,7 @@ export type WorkflowErrorCode =
   | 'INFERENCE_FAILED'
   | 'INFERENCE_INVALID'
   | 'SPEC_INVALID'
+  | 'ENVELOPE_UNGROUNDED'
   | 'SPEC_EXISTS'
   | 'SURFACE_UNRESOLVABLE'
   | 'MISSING_API_KEY'

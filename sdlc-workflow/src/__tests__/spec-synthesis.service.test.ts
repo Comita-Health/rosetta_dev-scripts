@@ -1,5 +1,6 @@
 import 'reflect-metadata';
 import { Container } from 'inversify';
+import { IGitRepository } from '../repositories/git.repository';
 import { IInferenceRepository } from '../repositories/inference.repository';
 import { ISurfaceMapRepository } from '../repositories/surface-map.repository';
 import {
@@ -23,6 +24,9 @@ const OPTIONS: SpecSynthesisOptions = {
   budgetK: 300,
   date: '2026-07-31'
 };
+
+/** The target repo tree envelope grounding runs against (#35). */
+const REPO_FILES = ['src/index.ts', 'src/services/api.service.ts', 'README.md'];
 
 const validPayload = () => ({
   summary: 'Walk phase',
@@ -59,12 +63,14 @@ describe('SpecSynthesisService', () => {
   let service: ISpecSynthesisService;
   let generateJson: jest.Mock;
   let loadSurfaceMap: jest.Mock;
+  let listFiles: jest.Mock;
 
   beforeEach(() => {
     generateJson = jest.fn();
     loadSurfaceMap = jest
       .fn()
       .mockReturnValue({ 'ci-config': ['.github/workflows/**'] });
+    listFiles = jest.fn().mockReturnValue(REPO_FILES);
     container = new Container();
     container
       .bind<IInferenceRepository>(WORKFLOW_TOKENS.InferenceRepository)
@@ -72,6 +78,9 @@ describe('SpecSynthesisService', () => {
     container
       .bind<ISurfaceMapRepository>(WORKFLOW_TOKENS.SurfaceMapRepository)
       .toConstantValue({ load: loadSurfaceMap });
+    container
+      .bind<IGitRepository>(WORKFLOW_TOKENS.GitRepository)
+      .toConstantValue({ listFiles } as unknown as IGitRepository);
     container
       .bind<ISpecSynthesisService>(WORKFLOW_TOKENS.SpecSynthesisService)
       .to(SpecSynthesisService);
@@ -243,5 +252,58 @@ describe('SpecSynthesisService', () => {
         'ci-config'
       ]);
     });
+  });
+
+  // --- #35: envelope grounding in the target repo tree ---
+
+  it('fails synthesis naming a glob that matches nothing and has no new-path justification', async () => {
+    const payload = validPayload();
+    payload.envelope.allowedPaths = ['src/**', 'imaginary/**'];
+    generateJson.mockResolvedValueOnce(payload);
+
+    const error = await service
+      .synthesize([makeStory()], OPTIONS)
+      .catch((e: WorkflowError) => e);
+
+    expect(error).toBeInstanceOf(WorkflowError);
+    expect((error as WorkflowError).code).toBe('ENVELOPE_UNGROUNDED');
+    expect((error as WorkflowError).details.join('\n')).toContain(
+      '"imaginary/**"'
+    );
+    expect(listFiles).toHaveBeenCalledWith('/tmp/target-repo');
+  });
+
+  it('passes grounding for justified new-file intents and unchanged existing-path globs', async () => {
+    const payload = validPayload();
+    // `lib/**` matches nothing in the tree, but T-01 explicitly names the
+    // new file it creates under it — a justified new-path intent.
+    payload.envelope.allowedPaths = ['src/**', 'lib/**'];
+    payload.tasks[0].engineeringNotes =
+      'Creates `lib/foo.service.ts` mirroring the sibling package.';
+    generateJson.mockResolvedValueOnce(payload);
+
+    const spec = await service.synthesize([makeStory()], OPTIONS);
+
+    expect(spec.envelope.allowedPaths).toEqual(['src/**', 'lib/**']);
+    expect(spec.warnings).toEqual([]);
+  });
+
+  it('warns when a task note references a path outside the envelope', async () => {
+    const payload = validPayload();
+    payload.tasks[1].engineeringNotes =
+      'Also updates `README.md` and touches docs/setup.md for the new flag.';
+    generateJson.mockResolvedValueOnce(payload);
+
+    const spec = await service.synthesize([makeStory()], OPTIONS);
+
+    expect(spec.warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('Task T-02'),
+        expect.stringContaining('"docs/setup.md"')
+      ])
+    );
+    expect(spec.warnings.every(w => w.includes('outside the envelope'))).toBe(
+      true
+    );
   });
 });
