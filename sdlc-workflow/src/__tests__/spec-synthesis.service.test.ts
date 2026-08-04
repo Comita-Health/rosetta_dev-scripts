@@ -1,6 +1,7 @@
 import 'reflect-metadata';
 import { Container } from 'inversify';
 import { IInferenceRepository } from '../repositories/inference.repository';
+import { ISurfaceMapRepository } from '../repositories/surface-map.repository';
 import {
   ISpecSynthesisService,
   SpecSynthesisOptions,
@@ -8,11 +9,14 @@ import {
   SPEC_SCHEMA
 } from '../services/spec-synthesis.service';
 import { WORKFLOW_TOKENS } from '../tokens';
-import { WorkflowError } from '../types';
+import { SpecTask, WorkflowError } from '../types';
+import { parseSpec } from '../utils/spec-parser';
+import { renderSpec } from '../utils/spec-render';
 import { makeStory } from './fixtures';
 
 const OPTIONS: SpecSynthesisOptions = {
   prdId: 'PRD-0099',
+  repoPath: '/tmp/target-repo',
   phase: 1,
   phaseTitle: 'Walk',
   owner: 'Russ Watson',
@@ -54,13 +58,20 @@ describe('SpecSynthesisService', () => {
   let container: Container;
   let service: ISpecSynthesisService;
   let generateJson: jest.Mock;
+  let loadSurfaceMap: jest.Mock;
 
   beforeEach(() => {
     generateJson = jest.fn();
+    loadSurfaceMap = jest
+      .fn()
+      .mockReturnValue({ 'ci-config': ['.github/workflows/**'] });
     container = new Container();
     container
       .bind<IInferenceRepository>(WORKFLOW_TOKENS.InferenceRepository)
       .toConstantValue({ generateJson });
+    container
+      .bind<ISurfaceMapRepository>(WORKFLOW_TOKENS.SurfaceMapRepository)
+      .toConstantValue({ load: loadSurfaceMap });
     container
       .bind<ISpecSynthesisService>(WORKFLOW_TOKENS.SpecSynthesisService)
       .to(SpecSynthesisService);
@@ -131,6 +142,106 @@ describe('SpecSynthesisService', () => {
       details: expect.arrayContaining([
         expect.stringContaining('unknown task "T-99"')
       ])
+    });
+  });
+
+  // #36 / SPEC-BUG-envelope-spec-integrity-P1 T-02: surface labels fail
+  // closed at synthesis — never silently dropped.
+  describe('forbiddenSurfaces fail closed (#36)', () => {
+    it('aborts synthesis naming every unresolvable label and the known labels', async () => {
+      loadSurfaceMap.mockReturnValue({
+        'ci-config': ['.github/workflows/**'],
+        migrations: ['**/migrations/**']
+      });
+      const payload = validPayload();
+      payload.envelope.forbiddenSurfaces = [
+        'ci-config',
+        'payments-phi-boundary',
+        'made-up-surface'
+      ];
+      generateJson.mockResolvedValueOnce(payload);
+
+      const error = await service
+        .synthesize([makeStory()], OPTIONS)
+        .catch((e: WorkflowError) => e);
+
+      expect(error).toBeInstanceOf(WorkflowError);
+      expect((error as WorkflowError).code).toBe('SURFACE_UNRESOLVABLE');
+      expect(loadSurfaceMap).toHaveBeenCalledWith('/tmp/target-repo');
+      const details = (error as WorkflowError).details;
+      expect(details).toContain(
+        'unresolvable surface label: "payments-phi-boundary"'
+      );
+      expect(details).toContain(
+        'unresolvable surface label: "made-up-surface"'
+      );
+      expect(details).toContain('known labels: ci-config, migrations');
+      // Nothing dropped: the resolvable label is not reported, and no spec
+      // with a thinned label list is ever produced (synthesis threw).
+      expect(details).not.toContain('unresolvable surface label: "ci-config"');
+    });
+
+    it('fails closed when the repo has no surfaces.json at all', async () => {
+      loadSurfaceMap.mockReturnValue({});
+      generateJson.mockResolvedValueOnce(validPayload());
+
+      await expect(
+        service.synthesize([makeStory()], OPTIONS)
+      ).rejects.toMatchObject({
+        code: 'SURFACE_UNRESOLVABLE',
+        details: expect.arrayContaining([
+          'unresolvable surface label: "ci-config"',
+          'known labels: (none — .sdlc/surfaces.json is missing or empty)'
+        ])
+      });
+    });
+
+    it('synthesizes byte-identically to current behavior when all labels resolve', async () => {
+      generateJson.mockResolvedValueOnce(validPayload());
+
+      const spec = await service.synthesize([makeStory()], OPTIONS);
+
+      const payload = validPayload();
+      expect(spec.markdown).toBe(
+        renderSpec({
+          specId: 'SPEC-PRD-0099-P1',
+          prdId: OPTIONS.prdId,
+          phase: OPTIONS.phase,
+          owner: OPTIONS.owner,
+          date: OPTIONS.date,
+          summary: payload.summary,
+          context: payload.context,
+          tasks: payload.tasks.map(task => ({
+            ...task,
+            phase: OPTIONS.phase
+          })) as SpecTask[],
+          envelope: { ...payload.envelope, budgetK: OPTIONS.budgetK }
+        })
+      );
+      expect(spec.envelope.forbiddenSurfaces).toEqual(['ci-config']);
+    });
+
+    it('round-trips an arbitrary consumer label PRD → spec → intake without loss', async () => {
+      // A healthcare-shaped label the engine has never heard of — known only
+      // to the consumer repo's surfaces.json.
+      loadSurfaceMap.mockReturnValue({
+        'payments-phi-boundary': ['src/payments/**', 'src/phi/**'],
+        'ci-config': ['.github/workflows/**']
+      });
+      const payload = validPayload();
+      payload.envelope.forbiddenSurfaces = [
+        'payments-phi-boundary',
+        'ci-config'
+      ];
+      generateJson.mockResolvedValueOnce(payload);
+
+      const spec = await service.synthesize([makeStory()], OPTIONS);
+      const intake = parseSpec(spec.markdown);
+
+      expect(intake.envelope.forbiddenSurfaces).toEqual([
+        'payments-phi-boundary',
+        'ci-config'
+      ]);
     });
   });
 });

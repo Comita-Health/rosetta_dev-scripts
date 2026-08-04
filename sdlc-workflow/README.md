@@ -94,7 +94,13 @@ bun run dev -- status --run-id <run-id>
 blocked verdict in `state.json`, and exits non-zero. A launch record
 (`state.json` with run id, spec digest, base SHA, argv, `startedAt`, empty
 steps) is written at invocation start — before intake — so a crash never
-leaves `status` answering `RUN_NOT_FOUND` (#37). The envelope
+leaves `status` answering `RUN_NOT_FOUND` (#37). Surface labels fail closed
+at synthesis (#36): every synthesized `forbiddenSurfaces` label must resolve
+against the target repo's `.sdlc/surfaces.json`, and an unresolvable label
+aborts `decompose` with `SURFACE_UNRESOLVABLE` — the label named and the
+repo's known labels listed — rather than being silently dropped before a
+human reviews the spec. The known labels are also fed into the synthesis
+prompt so the model picks from real surfaces. The envelope
 gate evaluates the task branch diff against the spec's blast-radius envelope
 (forbidden-surface labels resolve via `<repo>/.sdlc/surfaces.json`). Since
 P3 T-04 the gates enforce by default: green across the board merges the
@@ -167,13 +173,19 @@ declares them:
 // .sdlc/verification.json — scripted check for test-tier criteria.
 { "testCommand": "bun test" }
 
-// .sdlc/surfaces.json — forbidden-surface label → path globs.
+// .sdlc/surfaces.json — forbidden-surface label → path globs. Also grounds
+// synthesis (#36): decompose aborts on any forbiddenSurfaces label missing
+// from this map (SURFACE_UNRESOLVABLE) instead of dropping it.
 { "migrations": ["**/migrations/**"] }
 ```
 
 A missing contract never fails the run: the corresponding gate records
 itself `blocked` (sandbox) or degrades the criteria to `human-required`
-(verification), keeping the shadow-mode phase verdict honest.
+(verification), keeping the shadow-mode phase verdict honest. The one
+fail-closed exception is synthesis time: `decompose` refuses to write a
+spec whose `forbiddenSurfaces` cannot all resolve against `surfaces.json`
+(a missing map resolves no labels), because a label no gate can enforce is
+a silent compliance hole, not a degradable check.
 
 ## Resumable step graph (T-09)
 
@@ -245,7 +257,8 @@ Handler / Service / Repository with InversifyJS (workspace rule):
   the T-09 step cache.
 - `services/decompose.service.ts` — PRD → `ProductStory[]` (right-sizing prompt).
 - `services/spec-synthesis.service.ts` — stories → tasks + envelope → validated
-  ADR-0008 Markdown.
+  ADR-0008 Markdown. Fails closed on `forbiddenSurfaces` labels that do not
+  resolve against the target repo's `.sdlc/surfaces.json` (#36).
 - `services/executor.service.ts` — approved-spec intake and the P3 T-01
   task pool: merged-dependency eligibility, bounded parallel agent
   fan-out, one worktree per task. Persists the #37 launch record

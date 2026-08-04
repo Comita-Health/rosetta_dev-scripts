@@ -85,6 +85,7 @@ describe('WorkflowHandler', () => {
     expect(decompose).toHaveBeenCalledTimes(1);
     expect(synthesize).toHaveBeenCalledWith([makeStory()], {
       prdId: 'PRD-0099',
+      repoPath: '/tmp/target-repo',
       phase: 1,
       phaseTitle: 'Walk',
       owner: 'Russ Watson',
