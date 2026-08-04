@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** supervise / detached children install exit traps so any
+  trappable termination (clean exit, thrown error, SIGTERM/SIGINT) writes
+  `supervise.exit` (`code` + `reason` + `abnormal`), a terminal
+  `monitor.log` line, and a durable `sdlc_supervisor` wake (#38 /
+  SPEC-BUG-fail-loud-run-lifecycle-P1 T-02). Abnormal zero-exits
+  (incomplete tasks) are distinguishable from all-merged completion in
+  artifacts alone. SIGKILL / power-loss stay with the continuity daemon's
+  liveness check — documented in the README detection boundary. Detach
+  parents still exit non-zero when the child dies during startup (missing
+  spec / refused intake).
+
 - **sdlc-workflow:** persist `state.json` at run invocation start — before
   intake completes and before the first step-cache boundary — so a crash
   never leaves `status --run-id` answering `RUN_NOT_FOUND` (#37 /

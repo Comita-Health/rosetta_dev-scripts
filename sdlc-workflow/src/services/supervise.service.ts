@@ -13,6 +13,11 @@ import type { IGitRepository } from '../repositories/git.repository';
 import type { IProcessDetachRepository } from '../repositories/process-detach.repository';
 import type { IRunStateRepository } from '../repositories/run-state.repository';
 import type { ISpecDocRepository } from '../repositories/spec-doc.repository';
+import type {
+  ISuperviseExitRepository,
+  SuperviseExitRecord
+} from '../repositories/supervise-exit.repository';
+import type { IWakeInboxRepository } from '../repositories/wake-inbox.repository';
 import type { SpecDocument } from '../types';
 import type {
   IRunHandler,
@@ -26,6 +31,12 @@ import {
   hasUnmergedCompletedTasks
 } from '../utils/run-completion';
 import { buildSuperviseChildArgv } from '../utils/supervise-argv';
+import {
+  exitRecordFromError,
+  exitRecordFromResult,
+  formatExitMonitorLine,
+  installSuperviseTerminalHandlers
+} from '../utils/supervise-terminal';
 import type { IHeartbeatWatchService } from './heartbeat-watch.service';
 
 /**
@@ -72,6 +83,11 @@ export interface SuperviseInput extends RunTaskInput {
    * synthetic `run …` argv; production leaves this unset.
    */
   detachArgv?: string[];
+  /**
+   * Override wake-inbox root for tests (`…/wake`). Production leaves unset
+   * so wakes land in `$ROSETTA_WAKE_DIR` / `~/.rosetta/wake`.
+   */
+  wakeDir?: string;
 }
 
 export interface SuperviseResult {
@@ -107,7 +123,11 @@ export class SuperviseService implements ISuperviseService {
     @inject(WORKFLOW_TOKENS.HeartbeatWatchService)
     private readonly _hbWatch: IHeartbeatWatchService,
     @inject(WORKFLOW_TOKENS.GitRepository)
-    private readonly _gitRepo: IGitRepository
+    private readonly _gitRepo: IGitRepository,
+    @inject(WORKFLOW_TOKENS.SuperviseExitRepository)
+    private readonly _exitRepo: ISuperviseExitRepository,
+    @inject(WORKFLOW_TOKENS.WakeInboxRepository)
+    private readonly _wakeRepo: IWakeInboxRepository
   ) {}
 
   async run(input: SuperviseInput): Promise<SuperviseResult> {
@@ -207,6 +227,33 @@ export class SuperviseService implements ISuperviseService {
       pollMs: 1000
     });
 
+    // #38 / fail-loud T-02: any trappable termination writes supervise.exit,
+    // a terminal monitor.log line, and a durable wake. Idempotent so signal
+    // handlers and the intentional finish path cannot double-emit.
+    let recorded = false;
+    const recordTerminal = (record: SuperviseExitRecord): void => {
+      if (recorded) {
+        return;
+      }
+      recorded = true;
+      this._exitRepo.write(runDir, record);
+      this._hbWatch.note(monitorPath, formatExitMonitorLine(record));
+      this._wakeRepo.emit({
+        kind: 'sdlc_supervisor',
+        dedupeKey: `${input.runId}-exit`,
+        prompt: `SDLC supervise run ${input.runId} exited (code ${record.code}, reason ${record.reason}, abnormal=${record.abnormal}). Inspect ${runDir}/supervise.exit and ${monitorPath}.`,
+        data: {
+          runId: input.runId,
+          code: record.code,
+          reason: record.reason,
+          abnormal: record.abnormal
+        },
+        wakeDir: input.wakeDir
+      });
+    };
+
+    const handlers = installSuperviseTerminalHandlers(recordTerminal);
+
     let waves = 0;
     let lastWave: RunTaskResult | undefined;
 
@@ -215,6 +262,7 @@ export class SuperviseService implements ISuperviseService {
     // pid behind a live file is exactly the continuity daemon's relaunch cue
     // (#37). Clearing in `finally` would erase that cue on every throw.
     const finish = (result: SuperviseResult): SuperviseResult => {
+      recordTerminal(exitRecordFromResult(result));
       this.clearOwnSupervisePid(runDir);
       return result;
     };
@@ -338,12 +386,18 @@ export class SuperviseService implements ISuperviseService {
         monitorPath,
         detail: `max-waves-${maxWaves}`
       });
+    } catch (err) {
+      // Thrown mid-loop: leave supervise.pid for the continuity daemon, but
+      // never exit silently — write the terminal record + wake before rethrow.
+      recordTerminal(exitRecordFromError(err));
+      throw err;
     } finally {
       this._hbWatch.note(
         monitorPath,
         `[hb-watch] stopped ${new Date().toISOString()}`
       );
       this._hbWatch.stop();
+      handlers.disarm();
     }
   }
 

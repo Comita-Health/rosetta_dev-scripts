@@ -52,4 +52,18 @@ describe('runExitCode', () => {
   it('exits zero for a stopped run with no wave (nothing to react to)', () => {
     expect(runExitCode(result({ kind: 'stopped' }))).toBe(0);
   });
+
+  it('exits non-zero when detach parent reports a startup-dead child (#38)', () => {
+    // Parent maps a child that died during the startup grace (missing spec,
+    // refused intake, unparseable) to kind: 'failed' — never exit 0.
+    expect(
+      runExitCode(
+        result({
+          kind: 'failed',
+          waves: 0,
+          detail: 'SPEC_MALFORMED: Spec file not found'
+        })
+      )
+    ).toBe(1);
+  });
 });

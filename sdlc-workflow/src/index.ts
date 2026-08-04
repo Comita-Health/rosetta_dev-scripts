@@ -130,6 +130,14 @@ import {
   IProcessDetachRepository
 } from './repositories/process-detach.repository';
 import {
+  SuperviseExitRepository,
+  ISuperviseExitRepository
+} from './repositories/supervise-exit.repository';
+import {
+  WakeInboxRepository,
+  IWakeInboxRepository
+} from './repositories/wake-inbox.repository';
+import {
   SuperviseService,
   ISuperviseService
 } from './services/supervise.service';
@@ -246,6 +254,12 @@ container
 container
   .bind<IProcessDetachRepository>(WORKFLOW_TOKENS.ProcessDetachRepository)
   .to(ProcessDetachRepository);
+container
+  .bind<ISuperviseExitRepository>(WORKFLOW_TOKENS.SuperviseExitRepository)
+  .to(SuperviseExitRepository);
+container
+  .bind<IWakeInboxRepository>(WORKFLOW_TOKENS.WakeInboxRepository)
+  .to(WakeInboxRepository);
 container.bind<IRunHandler>(WORKFLOW_TOKENS.RunHandler).to(RunHandler);
 container
   .bind<ISuperviseService>(WORKFLOW_TOKENS.SuperviseService)
