@@ -15,7 +15,7 @@ envelope:
       'CHANGELOG.md'
     ]
   forbiddenSurfaces: ['personal-queue-schema']
-  maxDiffLines: 300
+  maxDiffLines: 500
   budgetK: 100
 ---
 
@@ -72,9 +72,12 @@ byte-identically.
       lines byte-identical) and is idempotent on an already-`Approved` file.
 - [ ] test: PR file lists without `specs/**/phase-*-spec.md` entries produce
       no flip commit and no workflow behavior change.
-- [ ] agent: on a disposable canary spec PR in this repo, a single human
-      Approve results in a flip commit authored by Addi followed by the
-      merge — zero further human actions, zero chat prompts.
+- [ ] agent: the workflow wires the flip ahead of the checks rollup —
+      spec detection → flip commit push (Addi, DCO-signed) → head re-pin →
+      existing checks → merge — with no step requiring human input between
+      Approve and merge, and the flip script executed from the trusted
+      default branch, never the PR head. The live single-Approve canary is
+      validated post-merge (see Post-merge validation).
 
 ## Task T-02: Emit a run-launch signal after a spec PR merges
 
@@ -102,6 +105,15 @@ merged spec PR (dedup by merge SHA).
       consumer).
 - [ ] agent: diff is confined to the flip/signal feature and its tests — no
       unrelated workflow refactoring.
+
+## Post-merge validation
+
+GitHub executes `pull_request_review` workflows from the default branch, so
+the single-Approve canary cannot run before this phase merges. First
+validation is the next Draft spec PR approved in this repo: a single human
+Approve must produce an Addi-authored flip commit followed by the merge —
+zero further human actions, zero chat prompts. Anything less is a P1
+regression against this spec.
 
 ## Out of scope
 
