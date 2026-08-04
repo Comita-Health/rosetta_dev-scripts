@@ -30,7 +30,18 @@ const runCli = (extraArgs: string[]): ReturnType<typeof spawnSync> => {
       'cli-exit-e2e',
       ...extraArgs
     ],
-    { cwd: PKG, encoding: 'utf-8', timeout: 60_000 }
+    {
+      cwd: PKG,
+      encoding: 'utf-8',
+      timeout: 60_000,
+      env: {
+        ...process.env,
+        // Redirect durable wakes into the throwaway dir — otherwise every
+        // test run pings the operator's real wake inbox with a phantom
+        // abnormal-exit signal for the intentionally-dying child.
+        ROSETTA_WAKE_DIR: path.join(tmp, 'wake')
+      }
+    }
   );
 };
 

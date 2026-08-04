@@ -1,0 +1,4 @@
+# CHANGELOG is an append-only ledger: formatter passes rewrite historical
+# entries (emphasis markers, list markers, indentation) and corrupt them.
+# Append new entries matching the existing style by hand.
+CHANGELOG.md
