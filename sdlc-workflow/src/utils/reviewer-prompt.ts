@@ -1,18 +1,39 @@
-import { Envelope, SpecTask } from '../types';
+import { Envelope, ReviewChecklist, SpecTask } from '../types';
+
+/** Checklist section appended when the repo declares one (T-01). */
+const buildChecklistSection = (checklist: ReviewChecklist): string[] => [
+  '',
+  '## Repo review checklist',
+  '',
+  'The target repo declares the checklist below (`.sdlc/review-checklist.md`).',
+  'Evaluate the diff against every item and return one finding per item, in',
+  'order, in `checklistFindings` — each finding names its `itemIndex`',
+  '(matching the numbering below), echoes the `item` text, and gives an',
+  '`outcome` of "pass" or "fail" (with a `rationale` on fail). Items marked',
+  '(mandatory) are a hard bar: a failed mandatory item means the diff does',
+  'not pass review even if nothing else is wrong — set `decision` to',
+  '"disagree" in that case.',
+  '',
+  ...checklist.items.map(
+    (item, i) => `${i + 1}. ${item.text}${item.mandatory ? ' (mandatory)' : ''}`
+  )
+];
 
 /**
  * Build the reviewer-agent prompt (SPEC-PRD-0011-P2 T-05). Independence is
- * structural: the prompt is built from exactly three inputs — the diff, the
- * spec task, and the envelope — never from implementation-agent
- * conversation state.
+ * structural: built from exactly the diff, the spec task, the envelope,
+ * and (when declared) the repo's review checklist — never from
+ * implementation-agent conversation state.
  *
- * Includes the workspace documentation bar (TSDoc/JSDoc) so reviews catch
- * missing or hollow docs on new HSR classes and non-obvious helpers.
+ * Includes the workspace documentation bar (TSDoc/JSDoc). `checklist`
+ * omitted (undefined) reproduces the pre-checklist prompt byte-for-byte
+ * (SPEC-BUG-reviewer-house-bar-P1 T-01 no-regression requirement).
  */
 export const buildReviewerPrompt = (
   task: SpecTask,
   envelope: Envelope,
-  diff: string
+  diff: string,
+  checklist?: ReviewChecklist
 ): string =>
   [
     'You are an independent code reviewer. You have no context beyond what',
@@ -62,5 +83,6 @@ export const buildReviewerPrompt = (
     '',
     'Return your verdict: "concur" only if the diff implements the task',
     'within the envelope with no correctness, safety, or documentation-bar',
-    'concerns; otherwise "disagree" with every concern cited as a reason.'
+    'concerns; otherwise "disagree" with every concern cited as a reason.',
+    ...(checklist ? buildChecklistSection(checklist) : [])
   ].join('\n');

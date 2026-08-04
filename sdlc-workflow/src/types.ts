@@ -128,13 +128,44 @@ export interface GateVerdict {
   inputsDigest?: string;
   /** Evidence artifact IDs backing this verdict (T-04/T-08). */
   evidenceIds?: string[];
+  /** Per-item findings against `.sdlc/review-checklist.md` (T-01), when present. */
+  checklistFindings?: ChecklistFinding[];
   recordedAt: string; // ISO timestamp
+}
+
+/**
+ * One item of the repo-owned `.sdlc/review-checklist.md` contract
+ * (SPEC-BUG-reviewer-house-bar-P1 T-01). `mandatory` items are a hard bar:
+ * a failed mandatory item overrides an otherwise-concurring verdict.
+ */
+export interface ReviewChecklistItem {
+  text: string;
+  mandatory: boolean;
+}
+
+/** The parsed `.sdlc/review-checklist.md` contract. Never empty when present. */
+export interface ReviewChecklist {
+  items: ReviewChecklistItem[];
+}
+
+/**
+ * The reviewer's per-item verdict against one `ReviewChecklistItem`.
+ * `itemIndex` (1-based, matching prompt order) is the join key back to
+ * `ReviewChecklist.items` — more stable than matching echoed text.
+ */
+export interface ChecklistFinding {
+  itemIndex: number;
+  item: string;
+  outcome: 'pass' | 'fail';
+  rationale?: string;
 }
 
 /** Reviewer-agent output contract (SPEC-PRD-0011-P2 T-05). */
 export interface ReviewerAssessment {
   decision: 'concur' | 'disagree';
   reasons: string[];
+  /** Present only when the prompt included a repo checklist (T-01). */
+  checklistFindings?: ChecklistFinding[];
 }
 
 export type ExceptionTrigger =
