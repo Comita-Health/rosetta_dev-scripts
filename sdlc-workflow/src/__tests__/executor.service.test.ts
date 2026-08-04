@@ -85,6 +85,7 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
       revertMerge: jest.fn(),
       stageAll: jest.fn(),
       commit: jest.fn(),
+      listFiles: jest.fn().mockReturnValue([]),
       removeWorktreeAsync: jest.fn()
     };
     agentRun = jest.fn().mockResolvedValue({ ok: true, output: 'done' });
@@ -870,6 +871,7 @@ describe('fail-loud T-01 launch record (#37)', () => {
       revertMerge: jest.fn(),
       stageAll: jest.fn(),
       commit: jest.fn(),
+      listFiles: jest.fn().mockReturnValue([]),
       removeWorktreeAsync: jest.fn()
     };
     agentRun = jest.fn().mockResolvedValue({ ok: true, output: 'done' });

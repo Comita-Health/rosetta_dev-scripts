@@ -39,6 +39,11 @@ export interface IGitRepository {
   fetch(repoPath: string): void;
   /** Resolve any ref (e.g. `origin/main`) to a SHA. */
   resolveSha(repoPath: string, ref: string): string;
+  /**
+   * Repo-relative paths of every tracked and untracked-but-not-ignored file
+   * in the checkout — the tree envelope grounding runs against (#35).
+   */
+  listFiles(repoPath: string): string[];
   /** The repo's default branch name, from origin/HEAD (fallback: main). */
   defaultBranch(repoPath: string): string;
   /**
@@ -126,6 +131,14 @@ export class GitRepository implements IGitRepository {
 
   resolveSha(repoPath: string, ref: string): string {
     return git(repoPath, `rev-parse "${ref}"`).trim();
+  }
+
+  listFiles(repoPath: string): string[] {
+    const raw = git(repoPath, 'ls-files --cached --others --exclude-standard');
+    return raw
+      .split('\n')
+      .map(line => line.trim())
+      .filter(line => line.length > 0);
   }
 
   defaultBranch(repoPath: string): string {

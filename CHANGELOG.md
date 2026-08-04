@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** synthesized `allowedPaths` are grounded in the target
+  repo tree instead of trusted as LLM guesses (#35 /
+  SPEC-BUG-envelope-spec-integrity-P1 T-01). At `decompose`, every envelope
+  glob must match at least one existing path in the `--repo` checkout or be
+  justified as a new-path intent (a task naming the file it creates in its
+  engineering notes); anything else fails synthesis with
+  `ENVELOPE_UNGROUNDED` listing the offending globs. A diff-forecast
+  heuristic additionally warns — without blocking — when task engineering
+  notes reference a path outside the envelope, so the human reviews a
+  coherent envelope instead of discovering the gap as a mid-run breach.
+- **sdlc-workflow:** `forbiddenSurfaces` fail closed at synthesis (#36 /
+  SPEC-BUG-envelope-spec-integrity-P1 T-02). `decompose` resolves every
+  synthesized surface label against the target repo's `.sdlc/surfaces.json`
+  and aborts with `SURFACE_UNRESOLVABLE` — each unresolvable label named and
+  the repo's known labels listed — instead of letting a label no gate can
+  enforce ship (or vanish) before a human reviews the spec. The known labels
+  are also fed into the synthesis prompt so the model picks from real
+  surfaces. Specs whose labels all resolve render byte-identically to prior
+  behavior, and arbitrary consumer labels (e.g. a healthcare
+  `payments-phi-boundary`) round-trip PRD → spec → intake without loss.
 - **sdlc-workflow:** the envelope gate resolves `.sdlc/surfaces.json` from
   the git tree under judgment (the task PR tip) via
   `SurfaceMapRepository.loadAtRef`, never the operator's local checkout — a

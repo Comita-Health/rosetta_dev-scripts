@@ -53,6 +53,7 @@ describe('EnvelopeGateService (T-02)', () => {
         revertMerge: jest.fn(),
         stageAll: jest.fn(),
         commit: jest.fn(),
+        listFiles: jest.fn().mockReturnValue([]),
         removeWorktreeAsync: jest.fn()
       });
     container
