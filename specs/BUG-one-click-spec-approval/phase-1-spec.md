@@ -99,7 +99,7 @@ merged spec PR (dedup by merge SHA).
 
 - [ ] test: dispatch payload construction includes every spec path in the
       merged diff and the merge SHA; non-spec merges emit nothing.
-- [ ] docs: `team-setup/docs/addi-pr-automation-standard.md` decision table
+- [ ] agent: `team-setup/docs/addi-pr-automation-standard.md` decision table
       and trigger list document the spec-flip step and the `sdlc-run-launch`
       dispatch contract (payload schema, exactly-once semantics, intended
       consumer).
