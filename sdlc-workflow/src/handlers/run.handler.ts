@@ -607,41 +607,42 @@ export class RunHandler implements IRunHandler {
 
     try {
       const mergedSha = this._prRepo.merge(input.repoPath, Number(prNumber));
-      // Bring the merge commit into the local object store before the next
-      // wave's worktree add (Comita Phase 0b: gh merge SHA is remote-only).
-      this._gitRepo.fetch(input.repoPath);
-      this._runStateRepo.recordTaskMerged(
-        input.runsDir,
+      await this.recordEnforcedMerge(
+        input,
         state,
-        task.id,
+        task,
+        key,
+        digest,
+        prUrl,
         mergedSha
       );
-      this._runStateRepo.recordMergedSha(input.runsDir, state, mergedSha);
-      this._runStateRepo.recordStep(input.runsDir, state, key, {
-        name: 'merge',
-        taskId: task.id,
-        inputsDigest: digest,
-        detail: mergedSha,
-        completedAt: new Date().toISOString()
-      });
-      if (input.chronicleRepo !== undefined) {
-        // The sdlc.merge.v1 artifact, attributed to the machine gates.
-        await this._chronicle.recordMerge({
-          chronicleRepo: input.chronicleRepo,
-          runsDir: input.runsDir,
-          runId: input.runId,
-          mergedSha,
-          taskId: task.id,
-          approvedBy: 'machine-gates'
-        });
-      }
-      console.log(
-        chalk.green(
-          `  [enforce] all gates green — merged ${prUrl} at ${mergedSha.slice(0, 12)}`
-        )
-      );
-      this.scheduleWorktreeCleanup(input, task.id);
     } catch (err) {
+      // Merge-reconciliation fix (SPEC-BUG-fail-loud-run-lifecycle-P1 T-03):
+      // a thrown `gh pr merge` is not authoritative. `--delete-branch` exits
+      // non-zero when the run worktree still has the branch checked out even
+      // though GitHub already created the merge commit. Query actual state
+      // before filing merge-blocked; only a confirmed-unmerged PR escalates.
+      const reconciled = this.reconcileThrownMerge(
+        input.repoPath,
+        Number(prNumber)
+      );
+      if (reconciled !== null) {
+        await this.recordEnforcedMerge(
+          input,
+          state,
+          task,
+          key,
+          digest,
+          prUrl,
+          reconciled
+        );
+        console.log(
+          chalk.yellow(
+            `  [enforce] merge call threw but PR #${prNumber} is merged at ${reconciled.slice(0, 12)} — reconciled`
+          )
+        );
+        return;
+      }
       const detail =
         err instanceof WorkflowError
           ? [err.message, ...err.details].join(': ')
@@ -662,6 +663,71 @@ export class RunHandler implements IRunHandler {
         )
       );
     }
+  }
+
+  /**
+   * After a thrown merge call, ask GitHub whether the PR actually landed.
+   * Returns the merge commit OID when confirmed merged; null when the PR
+   * is unmerged or the view itself fails (treat as unconfirmed → escalate).
+   */
+  private reconcileThrownMerge(
+    repoPath: string,
+    prNumber: number
+  ): string | null {
+    try {
+      return this._prRepo.mergeCommitOid(repoPath, prNumber);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Persist a confirmed merge: fetch the remote SHA, record task + run tip,
+   * cache the merge step, optionally Chronicle, then schedule worktree cleanup.
+   */
+  private async recordEnforcedMerge(
+    input: RunTaskInput,
+    state: RunState,
+    task: SpecTask,
+    key: string,
+    digest: string,
+    prUrl: string,
+    mergedSha: string
+  ): Promise<void> {
+    // Bring the merge commit into the local object store before the next
+    // wave's worktree add (Comita Phase 0b: gh merge SHA is remote-only).
+    this._gitRepo.fetch(input.repoPath);
+    this._runStateRepo.recordTaskMerged(
+      input.runsDir,
+      state,
+      task.id,
+      mergedSha
+    );
+    this._runStateRepo.recordMergedSha(input.runsDir, state, mergedSha);
+    this._runStateRepo.recordStep(input.runsDir, state, key, {
+      name: 'merge',
+      taskId: task.id,
+      inputsDigest: digest,
+      detail: mergedSha,
+      completedAt: new Date().toISOString()
+    });
+    if (input.chronicleRepo !== undefined) {
+      // The sdlc.merge.v1 artifact, attributed to the machine gates.
+      await this._chronicle.recordMerge({
+        chronicleRepo: input.chronicleRepo,
+        runsDir: input.runsDir,
+        runId: input.runId,
+        mergedSha,
+        taskId: task.id,
+        approvedBy: 'machine-gates'
+      });
+    }
+    console.log(
+      chalk.green(
+        `  [enforce] all gates green — merged ${prUrl} at ${mergedSha.slice(0, 12)}`
+      )
+    );
+    this.scheduleWorktreeCleanup(input, task.id);
   }
 
   /**
@@ -1078,7 +1144,11 @@ export class RunHandler implements IRunHandler {
     );
     if (input.taskId !== undefined && input.repoPath !== undefined) {
       this.scheduleWorktreeCleanup(
-        { runsDir: input.runsDir, runId: input.runId, repoPath: input.repoPath },
+        {
+          runsDir: input.runsDir,
+          runId: input.runId,
+          repoPath: input.repoPath
+        },
         input.taskId
       );
     }

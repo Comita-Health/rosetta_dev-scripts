@@ -106,6 +106,7 @@ describe('ReviewerPublishService', () => {
         findByBranch: jest.fn(),
         create: jest.fn(),
         merge: jest.fn(),
+        mergeCommitOid: jest.fn().mockReturnValue(null),
         comment
       });
     container

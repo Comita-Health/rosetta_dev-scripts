@@ -24,6 +24,13 @@ export interface IPullRequestRepository {
    * Only ever called by the enforcement path when every gate is green.
    */
   merge(repoPath: string, number: number): string;
+  /**
+   * The PR's merge commit OID when GitHub reports it merged, else null.
+   * Used by enforce-merge reconciliation: a thrown `gh pr merge` (e.g.
+   * `--delete-branch` failing because the run worktree still has the
+   * branch checked out) must not be trusted until this is queried.
+   */
+  mergeCommitOid(repoPath: string, number: number): string | null;
   /** Post an issue-style comment on the PR (reviewer overview surface). */
   comment(repoPath: string, number: number, body: string): void;
 }
@@ -87,16 +94,24 @@ export class PullRequestRepository implements IPullRequestRepository {
 
   merge(repoPath: string, number: number): string {
     gh(repoPath, `gh pr merge ${number} --merge`);
-    const sha = gh(
-      repoPath,
-      `gh pr view ${number} --json mergeCommit --jq ".mergeCommit.oid"`
-    ).trim();
-    if (!/^[0-9a-f]{7,40}$/.test(sha)) {
+    const sha = this.mergeCommitOid(repoPath, number);
+    if (sha === null) {
       throw new WorkflowError(
         `merged PR #${number} but could not resolve its merge commit`,
         'GH_FAILED',
-        [sha.slice(0, 200)]
+        []
       );
+    }
+    return sha;
+  }
+
+  mergeCommitOid(repoPath: string, number: number): string | null {
+    const sha = gh(
+      repoPath,
+      `gh pr view ${number} --json mergeCommit --jq ".mergeCommit.oid // empty"`
+    ).trim();
+    if (!/^[0-9a-f]{7,40}$/.test(sha)) {
+      return null;
     }
     return sha;
   }
