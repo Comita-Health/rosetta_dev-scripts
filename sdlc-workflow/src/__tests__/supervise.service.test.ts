@@ -499,6 +499,31 @@ describe('SuperviseService', () => {
     expect(result.detail).toContain('Spec file not found');
   });
 
+  it('reports detach startup failure even when the child left an empty log', async () => {
+    isAlive.mockReturnValue(false);
+    // No supervise.log — tailFile returns '' and the parent still fails loud.
+
+    const result = await supervise.run(
+      input({
+        detach: true,
+        supervise: true,
+        detachArgv: [
+          'node',
+          'src/index.ts',
+          'run',
+          '--spec',
+          '/s.md',
+          '--repo',
+          '/r',
+          '--detach'
+        ]
+      })
+    );
+
+    expect(result.kind).toBe('failed');
+    expect(result.detail).toBe('');
+  });
+
   it('stops when no ready task remains and work is incomplete', async () => {
     runTask.mockResolvedValue(wave('no-ready-task'));
     load.mockReturnValue({ taskResults: {} } as unknown as RunState);
