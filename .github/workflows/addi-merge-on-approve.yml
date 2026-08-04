@@ -170,6 +170,97 @@ jobs:
             esac
           }
 
+          # After a spec PR merges, emit repository_dispatch sdlc-run-launch
+          # exactly once per merge SHA (commit-status context is the marker).
+          # Non-spec PRs: one file-list call + grep, then return — no clone,
+          # no node, no POST.
+          maybe_emit_sdlc_run_launch() {
+            local PR="$1"
+            local files spec_paths merged_sha workdir emit_script result action
+            local status_count
+            files=$(gh api "repos/$REPO/pulls/$PR/files" --paginate \
+              --jq '.[] | select(.status != "removed") | .filename')
+            spec_paths=$(printf '%s\n' "$files" \
+              | grep -E '^specs/(.+/)?phase-[^/]+-spec\.md$' || true)
+            if [ -z "$spec_paths" ]; then
+              echo "No specs/**/phase-*-spec.md in PR #$PR; skip sdlc-run-launch."
+              return 0
+            fi
+
+            merged_sha=$(gh pr view "$PR" -R "$REPO" --json mergeCommit \
+              --jq '.mergeCommit.oid // empty')
+            if [ -z "$merged_sha" ]; then
+              echo "::warning::PR #$PR has no mergeCommit oid; skip sdlc-run-launch."
+              return 0
+            fi
+
+            # Dedup marker → planner input. Line-based grep is pagination-
+            # safe (a per-page `--jq … length` emits one count per page).
+            # Only state=success suppresses re-emission: a pending/failure
+            # claim from a died-mid-flight attempt must NOT permanently
+            # suppress a never-sent signal — re-entry retries it. The
+            # planner owns the noop decision (--emitted-sha).
+            emitted_flags=""
+            if gh api "repos/$REPO/commits/$merged_sha/statuses" --paginate \
+              --jq '.[] | select(.context == "sdlc-run-launch" and .state == "success") | .context' \
+              | grep -q .; then
+              emitted_flags="--emitted-sha $merged_sha"
+            fi
+
+            # SECURITY: extract the planner from trusted default-branch HEAD,
+            # never from the (now-deleted) PR head — same rule as the flip.
+            workdir=$(mktemp -d)
+            git clone --quiet --depth 1 --no-tags --filter=blob:none \
+              "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "$workdir"
+            emit_script="$(mktemp -d)/emit-sdlc-run-launch.mjs"
+            if ! git -C "$workdir" cat-file -e HEAD:team-setup/scripts/emit-sdlc-run-launch.mjs 2>/dev/null; then
+              echo "emit-sdlc-run-launch.mjs absent on default branch; skip."
+              rm -rf "$workdir"
+              return 0
+            fi
+            if ! git -C "$workdir" show HEAD:team-setup/scripts/emit-sdlc-run-launch.mjs > "$emit_script"; then
+              echo "::error::failed to extract emit-sdlc-run-launch.mjs from default-branch HEAD"
+              exit 1
+            fi
+            rm -rf "$workdir"
+
+            result=$(printf '%s\n' "$spec_paths" | node "$emit_script" \
+              --plan --merged-sha "$merged_sha" --pr-number "$PR" $emitted_flags)
+            echo "$result"
+            action=$(echo "$result" | jq -r '.action')
+            if [ "$action" != "dispatch" ]; then
+              echo "sdlc-run-launch plan is $action; skip POST."
+              return 0
+            fi
+
+            # Claim (pending) → dispatch → success. Pending/failure claims
+            # never suppress re-emission (success-only dedup above), so a
+            # dispatch that dies after the claim is retried by the normal
+            # MERGED/schedule re-entry — no operator status surgery needed.
+            # The narrow duplicate window (job dies between a successful
+            # dispatch and the success write) is tolerated: consumers must
+            # dedup launches by client_payload.mergedSha.
+            gh api --method POST "repos/$REPO/statuses/$merged_sha" \
+              -f state=pending \
+              -f context=sdlc-run-launch \
+              -f description="claiming sdlc-run-launch emission" >/dev/null
+            if ! echo "$result" | jq '{event_type, client_payload}' \
+              | gh api --method POST "repos/$REPO/dispatches" --input -; then
+              gh api --method POST "repos/$REPO/statuses/$merged_sha" \
+                -f state=failure \
+                -f context=sdlc-run-launch \
+                -f description="dispatch POST failed — re-entry will retry" >/dev/null
+              echo "::error::sdlc-run-launch dispatch failed on $merged_sha — re-entry retries automatically"
+              exit 1
+            fi
+            gh api --method POST "repos/$REPO/statuses/$merged_sha" \
+              -f state=success \
+              -f context=sdlc-run-launch \
+              -f description="repository_dispatch emitted" >/dev/null
+            echo "Emitted sdlc-run-launch for PR #$PR @ $merged_sha"
+            return 0
+          }
+
           # On Approve of a PR that adds/changes Draft phase specs, push a
           # Draft→Approved flip commit (as Addi, DCO-signed) before merge.
           # Detection is one read-only file-list call plus grep: non-spec PRs
@@ -269,6 +360,13 @@ jobs:
             mergeable=$(echo "$meta" | jq -r '.mergeable // empty')
             url=$(echo "$meta" | jq -r '.url')
 
+            # Already-merged: retry launch signal only (deduped by merge SHA).
+            if [ "$state" = "MERGED" ]; then
+              maybe_emit_sdlc_run_launch "$PR"
+              echo "PR already MERGED; launch signal checked."
+              echo "::endgroup::"
+              return 0
+            fi
             if [ "$state" != "OPEN" ]; then
               echo "PR not OPEN ($state); nothing to do."
               echo "::endgroup::"
@@ -376,6 +474,7 @@ jobs:
               uuid=$(echo "$resp" | jq -r '.details.uuid // empty')
               if [ "$status" = "merged" ]; then
                 echo "Stack already merged as Addi: $url"
+                maybe_emit_sdlc_run_launch "$PR"
                 echo "::endgroup::"
                 return 0
               fi
@@ -391,6 +490,7 @@ jobs:
                 pstatus=$(echo "$poll" | jq -r '.status // empty')
                 if [ "$pstatus" = "merged" ]; then
                   echo "Stack merged as Addi: $url"
+                  maybe_emit_sdlc_run_launch "$PR"
                   echo "::endgroup::"
                   return 0
                 fi
@@ -410,6 +510,7 @@ jobs:
 
             gh pr merge "$PR" -R "$REPO" --squash --delete-branch
             echo "Merged as Addi: $url"
+            maybe_emit_sdlc_run_launch "$PR"
             echo "::endgroup::"
             return 0
           }

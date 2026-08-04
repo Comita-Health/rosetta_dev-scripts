@@ -14,6 +14,7 @@ which path owns what.
 | ------------------------------------------------------------------------- | ------------------------------ | ------------------------------------------------------------------------------- |
 | Human **Approves** an **Addi-authored** topic PR; checks green; mergeable | **GHA (gold)**                 | `addi-merge-on-approve.yml` merges as Addi                                      |
 | Same, and the PR touches `specs/**/phase-*-spec.md` still `status: Draft` | **GHA (gold)**                 | Before merge, flip script pushes `Draft → Approved` as Addi (DCO, conventional) |
+| Same, after merge of a PR that touched `specs/**/phase-*-spec.md`         | **GHA (gold)**                 | Emit `repository_dispatch` type `sdlc-run-launch` (exactly once per merge SHA)  |
 | Same, but `mergeable=CONFLICTING`                                         | **GHA + Agent**                | GHA comments only (no force-merge). **Agent** merges/rebases onto base, pushes  |
 | Stacked PR (`pull.stack` set), Approved + mergeable                       | **GHA (gold)**                 | `PUT .../merge-async` with `merge_method=merge` (sync `gh pr merge` fails)      |
 | Stack blocked because a **lower** PR is CONFLICTING                       | **Agent / human**              | Fix bottom-up; GHA comments only — does not auto-resolve conflicts              |
@@ -37,6 +38,8 @@ Spike notes and historical troubleshooting remain in
 
 ## Triggers (reliability order)
 
+Inbound (start merge-on-approve):
+
 1. **`repository_dispatch` type `addi-merge-on-approve`** — preferred.
    Payload: `{ "pr_number": <n> }`. Emitted by the Addi App **webhook bridge**
    (`team-setup/addi-merge-webhook/`) when it receives `pull_request_review`
@@ -48,6 +51,12 @@ Spike notes and historical troubleshooting remain in
 4. **`schedule` every 10 minutes** — last-resort poll (GitHub may delay or skip
    schedules on quiet repos).
 5. **`workflow_dispatch`** with `pr_number` — manual / proof.
+
+Outbound (after a successful spec-PR merge):
+
+6. **`repository_dispatch` type `sdlc-run-launch`** — emitted by this workflow
+   (not an inbound trigger). See [Spec run-launch signal](#spec-run-launch-signal-after-merge)
+   for payload schema, exactly-once semantics, and intended consumer.
 
 ### Spec status flip (before merge)
 
@@ -66,6 +75,40 @@ Approve and merge:
    merge-async as before.
 
 Tests: `node --test team-setup/scripts/flip-spec-status.test.mjs`.
+
+### Spec run-launch signal (after merge)
+
+After merge-on-approve merges a PR whose diff includes
+`specs/**/phase-*-spec.md`, the job emits a `repository_dispatch` so a
+downstream consumer can start `sdlc-workflow run` without a chat "proceed":
+
+| Field                      | Value                                                                               |
+| -------------------------- | ----------------------------------------------------------------------------------- |
+| `event_type`               | `sdlc-run-launch`                                                                   |
+| `client_payload.specPaths` | `string[]` — every `specs/**/phase-*-spec.md` path in the merged diff (non-removed) |
+| `client_payload.mergedSha` | `string` — merge commit OID                                                         |
+| `client_payload.prNumber`  | `number` — merged PR number                                                         |
+
+**Exactly-once (success-marker dedup):** dedup by `mergedSha`. The workflow
+reads `sdlc-run-launch` commit statuses on the merge SHA (pagination-safe
+line count) and passes the SHA to the planner via `--emitted-sha` **only
+when a `state=success` marker exists**; the planner owns the noop decision.
+Emission is claim (`pending`) → dispatch → `success`. Pending/failure
+claims never suppress re-emission, so an attempt that dies mid-flight is
+retried automatically by the normal `MERGED`/schedule re-entry — no
+operator status surgery required. The one unavoidable duplicate window
+(job dies between a successful dispatch POST and the `success` write) is
+tolerated by contract: **consumers must dedup launches by
+`client_payload.mergedSha`** (idempotent launch intake). Non-spec merges
+never POST.
+
+**Intended consumer:** PRD-0020 event daemon (watch kinds `workflow-run` /
+`issue-state`) launches `sdlc-workflow run` for the approved spec. Until that
+daemon ships, operators can observe the launch record via
+`gh api /repos/{owner}/{repo}/dispatches` consumers; the continuity daemon's
+poll loop is documented to treat this signal as the run-start cue.
+
+Planner tests: `node --test team-setup/scripts/emit-sdlc-run-launch.test.mjs`.
 
 ## Credentials
 
