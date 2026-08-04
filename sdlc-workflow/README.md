@@ -121,6 +121,30 @@ the same records to `<runsDir>/<runId>/heartbeat.jsonl`. Pass `--heartbeat 0`
 to disable. Prefer OS `nohup` for long detached runs (see #38 / #43 F2) —
 do not rely on IDE harness backgrounding.
 
+### Detached / supervise exit detection (#38)
+
+A `--supervise` (or detached supervise child) process installs exit traps so
+**trappable** terminations — clean return, thrown error, `SIGTERM` /
+`SIGINT` — always write:
+
+| Artifact                           | Role                                                    |
+| ---------------------------------- | ------------------------------------------------------- |
+| `<runsDir>/<runId>/supervise.exit` | JSON `{ code, reason, abnormal, at }`                   |
+| `monitor.log` terminal line        | `[supervise] exit code=… reason=… abnormal=…`           |
+| Durable wake                       | `sdlc_supervisor` event under `~/.rosetta/wake/pending` |
+
+`abnormal: false` is reserved for legitimate all-tasks-merged completion
+(`code: 0`). A zero exit that left work incomplete (`stopped`, e.g.
+`no-ready-task` / shadow human gate) is still `abnormal: true` so the
+artifacts alone distinguish quiet incompleteness from success.
+
+**Detection boundary:** exit traps own every termination Node can handle.
+`SIGKILL`, OOM-kill, and power-loss cannot run a handler by definition —
+those remain the continuity layer's job (`supervise.pid` liveness +
+heartbeat staleness in `sdlc-continuity-daemon.sh`). Startup-window death
+(child dies before the first wave) is still caught by the detach parent's
+post-spawn grace probe (PR #83/#84).
+
 ## Repo-owned `.sdlc/` contracts
 
 The engine never owns deployment or test mechanics — the target repo

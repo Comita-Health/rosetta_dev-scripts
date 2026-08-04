@@ -9,9 +9,24 @@ import type { ISpecDocRepository } from '../repositories/spec-doc.repository';
 import type { IRunStateRepository } from '../repositories/run-state.repository';
 import type { IProcessDetachRepository } from '../repositories/process-detach.repository';
 import type { IHeartbeatWatchService } from '../services/heartbeat-watch.service';
+import {
+  SuperviseExitRepository,
+  type ISuperviseExitRepository
+} from '../repositories/supervise-exit.repository';
+import {
+  WakeInboxRepository,
+  type IWakeInboxRepository
+} from '../repositories/wake-inbox.repository';
 import { WORKFLOW_TOKENS } from '../tokens';
 import type { RunState, SpecDocument } from '../types';
-import { mkdirSync, mkdtempSync, writeFileSync, existsSync } from 'fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  writeFileSync,
+  existsSync,
+  readFileSync,
+  readdirSync
+} from 'fs';
 import os from 'os';
 import path from 'path';
 
@@ -29,8 +44,11 @@ describe('SuperviseService', () => {
   let read: jest.Mock;
   let spawnDetached: jest.Mock;
   let isAlive: jest.Mock;
+  let note: jest.Mock;
   let supervise: ISuperviseService;
   let runsDir: string;
+  let wakeDir: string;
+  let exitRepo: ISuperviseExitRepository;
 
   const baseSpec: SpecDocument = {
     id: 'SPEC-X',
@@ -69,11 +87,14 @@ describe('SuperviseService', () => {
 
   beforeEach(() => {
     runsDir = mkdtempSync(path.join(os.tmpdir(), 'sdlc-sup-'));
+    wakeDir = mkdtempSync(path.join(os.tmpdir(), 'sdlc-wake-'));
     runTask = jest.fn();
     load = jest.fn().mockReturnValue(null);
     read = jest.fn().mockReturnValue(baseSpec);
     spawnDetached = jest.fn().mockReturnValue({ pid: 4242 });
     isAlive = jest.fn().mockReturnValue(true);
+    note = jest.fn();
+    exitRepo = new SuperviseExitRepository();
 
     const container = new Container();
     container
@@ -113,8 +134,14 @@ describe('SuperviseService', () => {
       .toConstantValue({
         start: jest.fn(),
         stop: jest.fn(),
-        note: jest.fn()
+        note
       });
+    container
+      .bind<ISuperviseExitRepository>(WORKFLOW_TOKENS.SuperviseExitRepository)
+      .toConstantValue(exitRepo);
+    container
+      .bind<IWakeInboxRepository>(WORKFLOW_TOKENS.WakeInboxRepository)
+      .to(WakeInboxRepository);
     container
       .bind<ISuperviseService>(WORKFLOW_TOKENS.SuperviseService)
       .to(SuperviseService);
@@ -131,8 +158,17 @@ describe('SuperviseService', () => {
     maxParallel: 1,
     supervise: true,
     detach: false,
+    wakeDir,
     ...over
   });
+
+  const pendingWakes = (): string[] => {
+    const pending = path.join(wakeDir, 'pending');
+    if (!existsSync(pending)) {
+      return [];
+    }
+    return readdirSync(pending).filter(name => name.endsWith('.json'));
+  };
 
   it('detach spawns a child and returns without running waves', async () => {
     const result = await supervise.run(
@@ -345,6 +381,122 @@ describe('SuperviseService', () => {
 
     const pidPath = path.join(runsDir, 'run-1', 'supervise.pid');
     expect(existsSync(pidPath)).toBe(true);
+  });
+
+  it('writes supervise.exit + monitor line + wake when the loop throws after wave 1 (#38)', async () => {
+    runTask
+      .mockResolvedValueOnce(wave('executed'))
+      .mockRejectedValueOnce(new Error('boom after wave 1'));
+
+    load.mockReturnValueOnce({
+      taskResults: {
+        'T-01': {
+          taskId: 'T-01',
+          status: 'completed',
+          mergedSha: 'a',
+          recordedAt: 't'
+        }
+      }
+    } as unknown as RunState);
+
+    await expect(supervise.run(input())).rejects.toThrow('boom after wave 1');
+
+    const runDir = path.join(runsDir, 'run-1');
+    const exit = exitRepo.read(runDir);
+    expect(exit).not.toBeNull();
+    expect(exit?.code).not.toBe(0);
+    expect(exit?.reason).toContain('boom after wave 1');
+    expect(exit?.abnormal).toBe(true);
+
+    const exitNotes = note.mock.calls
+      .map(call => String(call[1]))
+      .filter(line => line.includes('[supervise] exit'));
+    expect(exitNotes.length).toBeGreaterThanOrEqual(1);
+    expect(exitNotes[exitNotes.length - 1]).toContain('abnormal=true');
+
+    const wakes = pendingWakes();
+    expect(wakes.length).toBe(1);
+    const wake = JSON.parse(
+      readFileSync(path.join(wakeDir, 'pending', wakes[0]), 'utf-8')
+    ) as { kind: string; data: { code: number; reason: string } };
+    expect(wake.kind).toBe('sdlc_supervisor');
+    expect(wake.data.code).not.toBe(0);
+    expect(wake.data.reason).toContain('boom after wave 1');
+  });
+
+  it('distinguishes clean all-merged exit 0 from abnormal incomplete zero-exit (#38)', async () => {
+    runTask.mockResolvedValue(wave('executed'));
+    load.mockReturnValue({
+      taskResults: {
+        'T-01': {
+          taskId: 'T-01',
+          status: 'completed',
+          mergedSha: 'a',
+          recordedAt: 't'
+        },
+        'T-02': {
+          taskId: 'T-02',
+          status: 'completed',
+          mergedSha: 'b',
+          recordedAt: 't'
+        }
+      }
+    } as unknown as RunState);
+
+    const clean = await supervise.run(input({ runId: 'clean-run' }));
+    expect(clean.kind).toBe('completed');
+    const cleanExit = exitRepo.read(path.join(runsDir, 'clean-run'));
+    expect(cleanExit).toEqual(
+      expect.objectContaining({
+        code: 0,
+        reason: 'all-tasks-merged',
+        abnormal: false
+      })
+    );
+
+    runTask.mockResolvedValue(wave('no-ready-task'));
+    load.mockReturnValue({ taskResults: {} } as unknown as RunState);
+
+    const incomplete = await supervise.run(input({ runId: 'incomplete-run' }));
+    expect(incomplete.kind).toBe('stopped');
+    const abnormalExit = exitRepo.read(path.join(runsDir, 'incomplete-run'));
+    expect(abnormalExit).toEqual(
+      expect.objectContaining({
+        code: 0,
+        reason: 'no-ready-task',
+        abnormal: true
+      })
+    );
+
+    expect(cleanExit?.abnormal).not.toBe(abnormalExit?.abnormal);
+    expect(cleanExit?.reason).not.toBe(abnormalExit?.reason);
+  });
+
+  it('propagates failed (non-zero) when detach child dies for a missing spec (#38)', async () => {
+    isAlive.mockReturnValue(false);
+    const logPath = path.join(runsDir, 'run-1', 'supervise.log');
+    mkdirSync(path.dirname(logPath), { recursive: true });
+    writeFileSync(logPath, '✗ SPEC_MALFORMED: Spec file not found: /nope.md\n');
+
+    const result = await supervise.run(
+      input({
+        detach: true,
+        supervise: true,
+        detachArgv: [
+          'node',
+          'src/index.ts',
+          'run',
+          '--spec',
+          '/nope.md',
+          '--repo',
+          '/r',
+          '--detach'
+        ]
+      })
+    );
+
+    expect(result.kind).toBe('failed');
+    expect(result.detail).toContain('Spec file not found');
   });
 
   it('stops when no ready task remains and work is incomplete', async () => {
