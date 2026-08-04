@@ -26,8 +26,12 @@ on:
   schedule:
     - cron: '*/10 * * * *'
 
+# Single repo-wide group: different event shapes (review, dispatch,
+# workflow_run, schedule) used to land in different per-key groups and race
+# each other on the same PR — observed as a double sdlc-run-launch emission.
+# Serializing all runs makes the claim/success status dedup sound.
 concurrency:
-  group: addi-merge-${{ github.repository }}-${{ github.event.client_payload.pr_number || github.event.inputs.pr_number || github.event.pull_request.number || github.event.workflow_run.head_branch || 'poll' }}
+  group: addi-merge-${{ github.repository }}
   cancel-in-progress: false
 
 permissions:
@@ -145,6 +149,7 @@ jobs:
         if: ${{ steps.prs.outputs.numbers != '' }}
         env:
           GH_TOKEN: ${{ steps.addi.outputs.token }}
+          APP_SLUG: ${{ steps.addi.outputs.app-slug }}
           PRS: ${{ steps.prs.outputs.numbers }}
           REPO: ${{ github.repository }}
           ALLOW_ANY_AUTHOR: ${{ vars.ADDI_MERGE_ANY_AUTHOR }}
@@ -317,8 +322,10 @@ jobs:
             fi
 
             message=$(echo "$result" | jq -r '.message')
-            bot_login=$(gh api user --jq '.login')
-            bot_id=$(gh api user --jq '.id')
+            # `gh api user` 403s under installation tokens; derive identity
+            # from the app slug the mint step already knows.
+            bot_login="${APP_SLUG}[bot]"
+            bot_id=$(gh api "users/${APP_SLUG}%5Bbot%5D" --jq '.id')
             (cd "$workdir" && git add -- $(echo "$result" | jq -r '.flipped[]'))
             git -C "$workdir" -c "user.name=$bot_login" \
               -c "user.email=${bot_id}+${bot_login}@users.noreply.github.com" \
