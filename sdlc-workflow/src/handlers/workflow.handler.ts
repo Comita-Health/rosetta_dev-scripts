@@ -48,11 +48,15 @@ export class WorkflowHandler implements IWorkflowHandler {
       phaseTitle,
       owner: prd.owner,
       budgetK: input.budgetK,
-      date: new Date().toISOString().slice(0, 10)
+      date: new Date().toISOString().slice(0, 10),
+      repoPath: input.repoPath
     });
     console.log(
       chalk.green(`  ✓ ${spec.specId}: ${spec.tasks.length} tasks synthesized`)
     );
+    for (const warning of spec.warnings) {
+      console.log(chalk.yellow(`  ⚠ ${warning}`));
+    }
 
     const specPath = this._specRepo.writeSpec(
       input.repoPath,

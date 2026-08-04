@@ -88,6 +88,15 @@ bun run dev -- check-veto --run-id <run-id> --repo .. \
 bun run dev -- status --run-id <run-id>
 ```
 
+`decompose` grounds the synthesized envelope in the target repo tree (#35):
+every `allowedPaths` glob must match at least one existing path in the
+`--repo` checkout, or be justified as a new-path intent by a task naming
+the file it creates in its engineering notes. Anything else fails synthesis
+with `ENVELOPE_UNGROUNDED`, listing the offending globs. A diff-forecast
+heuristic also warns (without blocking) when a task's engineering notes
+reference a path no `allowedPaths` glob covers, so the human reviews a
+coherent envelope instead of discovering the gap as a mid-run breach.
+
 `decompose` hard-stops after writing the Draft spec. Approval is a
 `status: Draft → Approved` flip in a dedicated commit (ADR-0008) —
 `run` refuses anything but an Approved spec, records the refusal as a
@@ -245,7 +254,10 @@ Handler / Service / Repository with InversifyJS (workspace rule):
   the T-09 step cache.
 - `services/decompose.service.ts` — PRD → `ProductStory[]` (right-sizing prompt).
 - `services/spec-synthesis.service.ts` — stories → tasks + envelope → validated
-  ADR-0008 Markdown.
+  ADR-0008 Markdown. Grounds `allowedPaths` in the target repo tree
+  (`utils/envelope-grounding.ts`, #35): ungrounded globs fail with
+  `ENVELOPE_UNGROUNDED`; task-note paths outside the envelope surface as
+  diff-forecast warnings.
 - `services/executor.service.ts` — approved-spec intake and the P3 T-01
   task pool: merged-dependency eligibility, bounded parallel agent
   fan-out, one worktree per task. Persists the #37 launch record

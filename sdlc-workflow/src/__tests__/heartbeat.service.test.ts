@@ -39,6 +39,7 @@ describe('HeartbeatService (#39)', () => {
         revertMerge: jest.fn(),
         stageAll: jest.fn(),
         commit: jest.fn(),
+        listFiles: jest.fn().mockReturnValue([]),
         removeWorktreeAsync: jest.fn()
       });
     container
