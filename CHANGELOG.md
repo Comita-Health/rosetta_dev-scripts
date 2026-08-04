@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **team-setup / Addi merge-on-approve:** after merging a PR that touches
+  `specs/**/phase-*-spec.md`, emit `repository_dispatch` type
+  `sdlc-run-launch` with `client_payload: { specPaths, mergedSha, prNumber }`
+  exactly once per merge SHA (commit-status dedup). Non-spec merges emit
+  nothing. Script: `team-setup/scripts/emit-sdlc-run-launch.mjs`
+  (SPEC-BUG-one-click-spec-approval-P1 T-02).
+
 - **team-setup / Addi merge-on-approve:** on Approve of an Addi PR that
   touches Draft `specs/**/phase-*-spec.md`, push a DCO-signed
   `docs(spec): approve SPEC-… on human Approve` flip (Addi App) before
