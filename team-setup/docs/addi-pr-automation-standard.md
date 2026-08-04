@@ -89,11 +89,15 @@ downstream consumer can start `sdlc-workflow run` without a chat "proceed":
 | `client_payload.mergedSha` | `string` — merge commit OID                                                         |
 | `client_payload.prNumber`  | `number` — merged PR number                                                         |
 
-**Exactly-once:** dedup by `mergedSha`. The planner noops when that SHA was
-already emitted; the workflow also records commit-status context
-`sdlc-run-launch` on the merge SHA after a successful POST, so schedule /
-`workflow_run` retries and already-`MERGED` re-entries do not double-fire.
-Non-spec merges never POST.
+**Exactly-once (at-most-once claim):** dedup by `mergedSha`. The workflow
+reads existing `sdlc-run-launch` commit statuses on the merge SHA
+(pagination-safe line count) and passes them to the planner via
+`--emitted-sha`; the planner owns the noop decision. Before the dispatch
+POST the workflow **claims** the marker (`state=pending` on the same
+context), then dispatches, then records `state=success` — so schedule /
+`workflow_run` retries and already-`MERGED` re-entries never double-fire.
+A claim whose dispatch fails aborts the job loudly for deliberate
+retrigger. Non-spec merges never POST.
 
 **Intended consumer:** PRD-0020 event daemon (watch kinds `workflow-run` /
 `issue-state`) launches `sdlc-workflow run` for the approved spec. Until that

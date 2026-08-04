@@ -194,12 +194,15 @@ jobs:
               return 0
             fi
 
-            status_count=$(gh api "repos/$REPO/commits/$merged_sha/statuses" \
-              --paginate \
-              --jq '[.[] | select(.context == "sdlc-run-launch")] | length')
-            if [ "$status_count" != "0" ]; then
-              echo "sdlc-run-launch already recorded for $merged_sha; skip."
-              return 0
+            # Dedup marker → planner input. Line-based grep is pagination-
+            # safe (a per-page `--jq … length` emits one count per page);
+            # any status in the context — pending claim or success — counts
+            # as emitted. The planner owns the noop decision (--emitted-sha).
+            emitted_flags=""
+            if gh api "repos/$REPO/commits/$merged_sha/statuses" --paginate \
+              --jq '.[] | select(.context == "sdlc-run-launch") | .context' \
+              | grep -q .; then
+              emitted_flags="--emitted-sha $merged_sha"
             fi
 
             # SECURITY: extract the planner from trusted default-branch HEAD,
@@ -220,7 +223,7 @@ jobs:
             rm -rf "$workdir"
 
             result=$(printf '%s\n' "$spec_paths" | node "$emit_script" \
-              --plan --merged-sha "$merged_sha" --pr-number "$PR")
+              --plan --merged-sha "$merged_sha" --pr-number "$PR" $emitted_flags)
             echo "$result"
             action=$(echo "$result" | jq -r '.action')
             if [ "$action" != "dispatch" ]; then
@@ -228,8 +231,19 @@ jobs:
               return 0
             fi
 
-            echo "$result" | jq '{event_type, client_payload}' \
-              | gh api --method POST "repos/$REPO/dispatches" --input -
+            # Claim the marker BEFORE the dispatch POST: re-entry after a
+            # partial failure then noops (at-most-once) instead of emitting a
+            # duplicate launch. A claim whose dispatch fails aborts the job
+            # loudly so an operator (or the daemon) retriggers deliberately.
+            gh api --method POST "repos/$REPO/statuses/$merged_sha" \
+              -f state=pending \
+              -f context=sdlc-run-launch \
+              -f description="claiming sdlc-run-launch emission" >/dev/null
+            if ! echo "$result" | jq '{event_type, client_payload}' \
+              | gh api --method POST "repos/$REPO/dispatches" --input -; then
+              echo "::error::sdlc-run-launch dispatch failed after claim on $merged_sha — investigate and retrigger"
+              exit 1
+            fi
             gh api --method POST "repos/$REPO/statuses/$merged_sha" \
               -f state=success \
               -f context=sdlc-run-launch \
