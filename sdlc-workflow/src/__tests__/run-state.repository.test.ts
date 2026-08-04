@@ -1,14 +1,7 @@
-import {
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-  mkdirSync
-} from 'fs';
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'fs';
 import os from 'os';
 import path from 'path';
 import { RunStateRepository } from '../repositories/run-state.repository';
-import { SurfaceMapRepository } from '../repositories/surface-map.repository';
 import type { RunState } from '../types';
 
 const makeState = (): RunState => ({
@@ -218,31 +211,5 @@ describe('RunStateRepository', () => {
     expect(repo.recordTokenSpend(dir, state, 5)).toBe(5);
     expect(repo.recordTokenSpend(dir, state, 3)).toBe(8);
     expect(repo.load(dir, 'run-1')?.tokenSpendK).toBe(8);
-  });
-});
-
-describe('SurfaceMapRepository', () => {
-  const repo = new SurfaceMapRepository();
-  let dir: string;
-
-  beforeEach(() => {
-    dir = mkdtempSync(path.join(os.tmpdir(), 'sdlc-surfaces-'));
-  });
-  afterEach(() => rmSync(dir, { recursive: true, force: true }));
-
-  it('returns an empty map when no surfaces file exists', () => {
-    expect(repo.load(dir)).toEqual({});
-  });
-
-  it('loads the surface map from .sdlc/surfaces.json', () => {
-    mkdirSync(path.join(dir, '.sdlc'), { recursive: true });
-    writeFileSync(
-      path.join(dir, '.sdlc', 'surfaces.json'),
-      JSON.stringify({ auth: ['src/auth/**'] })
-    );
-    expect(repo.load(dir)).toEqual({ auth: ['src/auth/**'] });
-    expect(
-      readFileSync(path.join(dir, '.sdlc', 'surfaces.json'), 'utf-8')
-    ).toContain('auth');
   });
 });

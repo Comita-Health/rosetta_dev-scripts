@@ -91,8 +91,7 @@ describe('WorkflowHandler', () => {
       phaseTitle: 'Walk',
       owner: 'Russ Watson',
       budgetK: 200,
-      date: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
-      repoPath: '/tmp/target-repo'
+      date: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/)
     });
     expect(writeSpec).toHaveBeenCalledWith(
       '/tmp/target-repo',

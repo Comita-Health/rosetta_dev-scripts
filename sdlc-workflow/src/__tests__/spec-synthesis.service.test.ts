@@ -77,7 +77,7 @@ describe('SpecSynthesisService', () => {
       .toConstantValue({ generateJson });
     container
       .bind<ISurfaceMapRepository>(WORKFLOW_TOKENS.SurfaceMapRepository)
-      .toConstantValue({ load: loadSurfaceMap });
+      .toConstantValue({ load: loadSurfaceMap, loadAtRef: jest.fn() });
     container
       .bind<IGitRepository>(WORKFLOW_TOKENS.GitRepository)
       .toConstantValue({ listFiles } as unknown as IGitRepository);

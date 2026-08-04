@@ -49,8 +49,7 @@ export class WorkflowHandler implements IWorkflowHandler {
       phaseTitle,
       owner: prd.owner,
       budgetK: input.budgetK,
-      date: new Date().toISOString().slice(0, 10),
-      repoPath: input.repoPath
+      date: new Date().toISOString().slice(0, 10)
     });
     console.log(
       chalk.green(`  ✓ ${spec.specId}: ${spec.tasks.length} tasks synthesized`)
