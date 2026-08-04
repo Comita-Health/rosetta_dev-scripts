@@ -8,6 +8,7 @@ describe('CLI (T-01)', () => {
       encoding: 'utf-8'
     });
     expect(output).toContain('decompose');
+    expect(output).toContain('spec-lint');
     expect(output).toContain('human gate');
     expect(output).toContain('supervise');
     expect(output).toContain('detach');

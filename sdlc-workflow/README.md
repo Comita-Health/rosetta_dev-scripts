@@ -53,6 +53,9 @@ bun run dev -- decompose --prd PRD-0011 --repo ../../rosetta_chronicle
 #   --phase      rollout phase to specify (default: 1)
 #   --budget-k   token budget in thousands, recorded in the envelope (default: 200)
 
+# Lint a spec file's format before intake (no LLM call, no --repo; hook/CI safe)
+bun run dev -- spec-lint --spec ../specs/PRD-0011/phase-2-spec.md
+
 # Execute all ready tasks from an Approved spec (parallel worktrees)
 bun run dev -- run --spec ../specs/PRD-0011/phase-3-spec.md --repo .. \
   --chronicle-repo ../../rosetta_chronicle_roustalski
@@ -86,6 +89,10 @@ bun run dev -- check-veto --run-id <run-id> --repo .. \
 
 # Inspect a run: task results, cached step graph, verdicts, exceptions (T-09)
 bun run dev -- status --run-id <run-id>
+
+# Lint an ADR-0008 spec before intake (front-matter parse, envelope schema,
+# checkbox integrity) — no LLM call, no --repo; hook/CI safe (#40)
+bun run dev -- spec-lint --spec ../specs/BUG-envelope-spec-integrity/phase-1-spec.md
 ```
 
 `decompose` grounds the synthesized envelope in the target repo tree (#35):
@@ -117,6 +124,32 @@ P3 T-04 the gates enforce by default: green across the board merges the
 task PR automatically; any red gate blocks and escalates (`--shadow`
 disables enforcement for calibration).
 
+### Spec-format lint and the single-writer rule (#40)
+
+The spec file is the one artifact humans and the machine must agree on
+byte-for-byte, so two guards protect it:
+
+- **`spec-lint --spec <path>`** validates an ADR-0008 spec's format with no
+  LLM call and no `--repo` — safe from a pre-commit hook or CI. It reports
+  named error classes across three layers: front-matter / structure parse
+  (`SPEC_MALFORMED`), envelope schema and inline-array integrity
+  (`SPEC_INVALID` / `SPEC_MALFORMED`), and checkbox integrity — every
+  acceptance criterion present and carrying a recognized verification tier
+  (`test:` | `agent:` | `manual:` | `docs:`). Its reason for existing is the
+  Prettier incident: a formatter (or hand-edit) can reshape the inline
+  envelope array into a YAML block sequence that the tolerant parser
+  silently mis-joins into one garbage glob — the envelope then guards
+  nothing. spec-lint names that reshape _before_ intake trips over it. Exit
+  is non-zero with the offending field/criterion named on any finding.
+- **Single-writer rule.** Acceptance-checkbox and `status:` state under
+  `specs/**` has exactly one writer: the engine's phase closeout (a separate
+  docs PR after the product tasks merge — PRD-0023). A product-task diff
+  that edits its own spec file — flipping its own checkboxes — hard-breaches
+  the envelope gate **even when `allowedPaths` would cover the spec path**
+  (`services/envelope-gate.service.ts`, `isSpecTreePath`). Agents never tick
+  their own criteria; the machine records checkbox state from gate verdicts
+  at closeout.
+
 ### Engine branches and target-repo hooks (#41)
 
 Task branches are `sdlc/<run-id>/<task-id>`. If the target repo's husky
@@ -129,6 +162,40 @@ engine therefore:
 
 Target repos may alternatively allow `sdlc/*` in their branch check; either
 path unblocks multi-task runs. CI still validates the PR.
+
+### Spec integrity: `spec-lint` and the single-writer rule (#40)
+
+Two guards protect the spec file itself.
+
+**Single-writer rule.** A product-task diff must never edit anything under
+`specs/**` (nor a nested `**/specs/**`) — including flipping its own
+acceptance-criteria checkboxes or changing `status:`. The envelope gate
+hard-breaches on any spec-tree path even when `allowedPaths` explicitly
+covers it: the canonical self-ticking move (an agent closing its own
+checkboxes in the same diff that implements the task) is a breach, not a
+convenience. Checkbox state and phase `Done` closeout have exactly one
+writer — the engine closeout / docs PR after the product tasks merge
+(PRD-0023) — so run-time truth can never be forged mid-run.
+
+**`spec-lint`.** `spec-lint --spec <path>` validates an Approved spec's
+Markdown without an LLM call or a `--repo`, so it runs from a pre-commit
+hook or CI. It layers three named checks and exits non-zero on the first
+failing class:
+
+- front-matter / structure parse (`SPEC_MALFORMED` — e.g. a missing
+  envelope field),
+- envelope schema + inline-array integrity (`SPEC_MALFORMED` for a
+  formatter-reshaped array, `SPEC_INVALID` for an empty `allowedPaths` or a
+  non-positive `maxDiffLines` / `budgetK`),
+- checkbox integrity (`SPEC_INVALID` when a task carries no criteria,
+  `SPEC_MALFORMED` when a criterion is missing a recognized verification
+  tier — `test:` / `agent:` / `manual:` / `docs:`).
+
+Its reason for existing is the Prettier incident: `prettier --write` on a
+`*.md` spec can fold the envelope's inline flow array into a YAML block
+sequence that the tolerant parser silently mis-joins into one garbage glob,
+after which the envelope guards nothing. `spec-lint` names that reshape
+before intake silently accepts it.
 
 ### Progress heartbeat (#39)
 
@@ -358,7 +425,8 @@ Handler / Service / Repository with InversifyJS (workspace rule):
   appends (`queue`), Chronicle ledger artifacts + ADR-0007 commits
   (`chronicle-artifact`), GitHub check-run status (`ci-status`).
 - `utils/` — pure functions: PRD parser, JSON-schema validator, spec renderer,
-  ADR-0008 format validator, spec parser (round-trip of the renderer), glob
+  ADR-0008 format validator, spec parser (round-trip of the renderer), spec
+  format lint (`spec-lint`, the hook/CI-safe pre-intake guard), glob
   matcher, criterion-tier parser, inputs digest (`digest`), and the
   implementation / reviewer / verifier agent prompt builders.
 

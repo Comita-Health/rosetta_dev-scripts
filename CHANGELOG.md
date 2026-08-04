@@ -32,6 +32,19 @@
   rule and audits the other evaluation-time `.sdlc/` readers (sandbox /
   verification contracts load from the task worktree, which is the judged
   tree's checkout) (SPEC-BUG-envelope-spec-integrity-P1 T-03).
+- **sdlc-workflow:** two integrity guards on the spec file itself (#40 /
+  SPEC-BUG-envelope-spec-integrity-P1 T-04). The envelope gate now pins the
+  self-ticking regression end-to-end: a product-task diff that edits its own
+  `specs/**` file — including flipping its acceptance checkboxes — hard-breaches
+  even when `allowedPaths` explicitly covers the spec path; checkbox / `status:`
+  closeout has a single writer, the engine closeout / docs PR after the product
+  tasks merge (PRD-0023). Added `sdlc-workflow spec-lint --spec <path>`:
+  validates front-matter parse, envelope schema + inline-array integrity, and
+  checkbox integrity (criteria present, tiers recognized) with named
+  `SPEC_MALFORMED` / `SPEC_INVALID` errors — no LLM call, no `--repo`, hook/CI
+  safe. It is the guard that catches a formatter-reshaped envelope (the Prettier
+  incident: a folded YAML block sequence the tolerant parser mis-joins into one
+  garbage glob) before intake silently accepts it.
 
 - **sdlc-workflow:** enforce-merge reconciles a thrown `gh pr merge` against
   GitHub (`mergeCommit.oid`) before filing `merge-blocked`. A
