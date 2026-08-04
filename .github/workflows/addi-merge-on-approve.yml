@@ -170,6 +170,91 @@ jobs:
             esac
           }
 
+          # On Approve of a PR that adds/changes Draft phase specs, push a
+          # Draft→Approved flip commit (as Addi, DCO-signed) before merge.
+          # Detection is one read-only file-list call plus grep: non-spec PRs
+          # trigger no clone, no node, and take the prior merge path unchanged.
+          # `select(.status != "removed")` keeps deleted/renamed-away specs out
+          # of the flip entirely.
+          maybe_flip_draft_specs() {
+            local PR="$1"
+            local files spec_paths result action message head_ref bot_login bot_id workdir
+            files=$(gh api "repos/$REPO/pulls/$PR/files" --paginate \
+              --jq '.[] | select(.status != "removed") | .filename')
+            # `(.+/)?` spans nested segments too (`.` matches `/` in ERE), so
+            # specs/a/b/phase-1-spec.md is included — same shape as isSpecPath.
+            spec_paths=$(printf '%s\n' "$files" \
+              | grep -E '^specs/(.+/)?phase-[^/]+-spec\.md$' || true)
+            if [ -z "$spec_paths" ]; then
+              echo "No specs/**/phase-*-spec.md in PR #$PR; skip status flip."
+              return 0
+            fi
+
+            head_ref=$(gh pr view "$PR" -R "$REPO" --json headRefName --jq '.headRefName')
+            workdir=$(mktemp -d)
+            git clone --quiet --no-tags --filter=blob:none \
+              "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "$workdir"
+
+            # SECURITY: the flip script is taken from the trusted default
+            # branch (the clone's HEAD), never from the PR head — a PR that
+            # modifies the script must not get its version executed in this
+            # push-credentialed job. Genuinely-absent script (default branch
+            # predates the feature) skips the flip; any other extraction
+            # error fails the job loudly instead of silently omitting flips.
+            flip_script="$(mktemp -d)/flip-spec-status.mjs"
+            if ! git -C "$workdir" cat-file -e HEAD:team-setup/scripts/flip-spec-status.mjs 2>/dev/null; then
+              echo "flip-spec-status.mjs absent on default branch; skip status flip."
+              rm -rf "$workdir"
+              return 0
+            fi
+            if ! git -C "$workdir" show HEAD:team-setup/scripts/flip-spec-status.mjs > "$flip_script"; then
+              echo "::error::failed to extract flip-spec-status.mjs from default-branch HEAD"
+              exit 1
+            fi
+
+            git -C "$workdir" fetch --quiet --no-tags origin "$head_ref"
+            git -C "$workdir" checkout --quiet --force -B "flip-pr-$PR" FETCH_HEAD
+
+            result=$(cd "$workdir" && printf '%s\n' "$spec_paths" \
+              | node "$flip_script" --write-stdin)
+            echo "$result"
+            action=$(echo "$result" | jq -r '.action')
+            if [ "$action" != "commit" ]; then
+              echo "Spec files present but nothing to flip ($action); continue."
+              rm -rf "$workdir"
+              return 0
+            fi
+
+            message=$(echo "$result" | jq -r '.message')
+            bot_login=$(gh api user --jq '.login')
+            bot_id=$(gh api user --jq '.id')
+            (cd "$workdir" && git add -- $(echo "$result" | jq -r '.flipped[]'))
+            git -C "$workdir" -c "user.name=$bot_login" \
+              -c "user.email=${bot_id}+${bot_login}@users.noreply.github.com" \
+              commit -s -m "$message"
+            git -C "$workdir" push origin "HEAD:refs/heads/$head_ref"
+            flip_sha=$(git -C "$workdir" rev-parse HEAD)
+            rm -rf "$workdir"
+            echo "Pushed draft→Approved flip $flip_sha to $head_ref as $bot_login"
+
+            # Re-pin: the checks rollup and merge below must observe the
+            # post-flip SHA. Proceeding on a stale pre-flip head would merge
+            # content the human never saw flipped — hard-fail instead.
+            repinned=""
+            for _ in 1 2 3 4 5 6; do
+              if [ "$(gh pr view "$PR" -R "$REPO" --json headRefOid --jq '.headRefOid')" = "$flip_sha" ]; then
+                repinned="yes"
+                break
+              fi
+              sleep 5
+            done
+            if [ -z "$repinned" ]; then
+              echo "::error::PR #$PR head never advanced to flip commit $flip_sha; aborting before checks/merge."
+              exit 1
+            fi
+            return 0
+          }
+
           process_pr() {
             local PR="$1"
             echo "::group::PR #$PR"
@@ -221,6 +306,10 @@ jobs:
               echo "::endgroup::"
               return 0
             fi
+
+            # Flip Draft→Approved on phase specs before waiting on checks so
+            # the flip commit's checks are included in the rollup below.
+            maybe_flip_draft_specs "$PR"
 
             # Do NOT use `gh pr checks --watch` — this job can register as a
             # pending check and deadlock on itself.
