@@ -68,6 +68,10 @@ import {
   ISurfaceMapRepository
 } from './repositories/surface-map.repository';
 import {
+  ReviewChecklistRepository,
+  IReviewChecklistRepository
+} from './repositories/review-checklist.repository';
+import {
   AggregatorService,
   IAggregatorService
 } from './services/aggregator.service';
@@ -193,6 +197,9 @@ container
 container
   .bind<ISurfaceMapRepository>(WORKFLOW_TOKENS.SurfaceMapRepository)
   .to(SurfaceMapRepository);
+container
+  .bind<IReviewChecklistRepository>(WORKFLOW_TOKENS.ReviewChecklistRepository)
+  .to(ReviewChecklistRepository);
 container
   .bind<IExecutorService>(WORKFLOW_TOKENS.ExecutorService)
   .to(ExecutorService);

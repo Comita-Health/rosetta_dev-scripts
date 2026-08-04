@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** the reviewer prompt now injects the target repo's
+  optional `.sdlc/review-checklist.md` (SPEC-BUG-reviewer-house-bar-P1
+  T-01), resolved from the judged tree via `ReviewChecklistRepository`
+  (T-03 tree-resolution rule). The assessment schema gains per-item
+  `checklistFindings`, and a failed `mandatory` item overrides a
+  concurring verdict to disagree. No file → unchanged pre-checklist
+  prompt/verdict shape; a malformed checklist fails loud with a named
+  `CONTRACT_MALFORMED` error. The engine ships no checklist content.
 - **ci:** `.github/workflows/ci.yml`'s `test` job now runs `bun run typecheck`
   (`tsc --noEmit`) for `team-setup` and `sdlc-workflow`, each before that
   package's `test:coverage` step (SPEC-BUG-ci-typecheck-gate-P1 T-01). Jest
