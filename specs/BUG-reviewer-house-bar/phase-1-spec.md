@@ -64,12 +64,12 @@ team-setup, and consumers declare their own.
 
 ### Acceptance criteria
 
-- [ ] test: with a checklist present, the reviewer prompt contains its items
+- [x] test: with a checklist present, the reviewer prompt contains its items
       and the parsed verdict carries per-item findings; concur with a failed
       mandatory item is treated as disagree.
-- [ ] test: with no checklist file, prompt and verdict shapes are
+- [x] test: with no checklist file, prompt and verdict shapes are
       byte-compatible with current behavior (no regression).
-- [ ] test: a malformed checklist file fails loud at intake (named error),
+- [x] test: a malformed checklist file fails loud at intake (named error),
       not silently ignored.
 
 ## Task T-02: Record verdict outcomes so gate precision is measurable
@@ -88,12 +88,12 @@ task only guarantees the data exists going forward.
 
 ### Acceptance criteria
 
-- [ ] test: a veto recorded via `check-veto` appends outcome records
+- [x] test: a veto recorded via `check-veto` appends outcome records
       referencing the phase's task verdicts; `record-merge` marks merged
       tasks' verdicts `stood`.
-- [ ] test: outcome records are idempotent across resume (no duplicates for
+- [x] test: outcome records are idempotent across resume (no duplicates for
       the same run/task/gate).
-- [ ] agent: diff confined to verdict/outcome recording and its tests — no
+- [x] agent: diff confined to verdict/outcome recording and its tests — no
       scoring, thresholds, or gate-behavior changes in this spec.
 
 ## Out of scope
