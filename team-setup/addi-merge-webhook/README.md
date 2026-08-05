@@ -12,12 +12,17 @@ Actions `pull_request_review` delivery is unreliable. Webhooks are reliable
 but cannot start workflows directly — this bridge posts
 `repository_dispatch` with `client_payload.pr_number`.
 
-## Dual-org routes
+## Multi-tenant routes
 
-| Org                | Path               | App / credentials                         |
+Tenants are **config**, not code. Each configured slug gets
+`POST /webhook/{tenant}`. Defaults ship Rosetta only:
+
+| Org                | Path               | Credentials                               |
 | ------------------ | ------------------ | ----------------------------------------- |
 | Rosetta-Foundation | `/webhook/rosetta` | `rosetta-s-addi-m` / `~/.config/rosetta/` |
-| Comita-Health      | `/webhook/comita`  | `addi-m` / `~/.config/comita/`            |
+
+Add another consumer by extending `ADDI_TENANTS` / `ADDI_TENANT_ORGS` and
+providing `${TENANT}_*` secrets — no source change.
 
 Legacy single-tenant: `POST /webhook` with `ADDI_*` env vars.
 
@@ -26,38 +31,31 @@ Legacy single-tenant: `POST /webhook` with `ADDI_*` env vars.
 ```bash
 cd team-setup/addi-merge-webhook
 bun install
+export ADDI_TENANTS=rosetta
 export ROSETTA_WEBHOOK_SECRET='…'
 export ROSETTA_CLIENT_ID='Iv23lifPkkooMoMiz5Jk'
 export ROSETTA_APP_PRIVATE_KEY_PATH="$HOME/.config/rosetta/github-app.pem"
-export COMITA_WEBHOOK_SECRET='…'
-export COMITA_CLIENT_ID='Iv23li7Ascc7UNomoH8S'
-export COMITA_APP_PRIVATE_KEY_PATH="$HOME/.config/comita/github-app.pem"
 export PORT=8787
 bun run dev
 ```
 
 ## Deploy (AWS Lambda Function URL)
 
-Uses AWS profile `comita-dev` (account hosting Comita workloads). Stores PEM +
-webhook secrets in Secrets Manager (`addi/merge-webhook`), creates/updates
-Lambda `addi-merge-webhook` with a public Function URL, then upserts **org**
-webhooks (App webhooks are inactive until toggled in the UI; org hooks work
-today via `organization_hooks: write`):
+Requires `AWS_PROFILE` (no default). Stores PEM + webhook secrets in Secrets
+Manager (`addi/merge-webhook`), creates/updates Lambda `addi-merge-webhook`
+with a public Function URL, then upserts **org** webhooks for each entry in
+`ADDI_TENANT_ORGS` (default `rosetta:Rosetta-Foundation`):
 
 ```bash
-bun run deploy
-# or: AWS_PROFILE=comita-dev bash deploy/deploy.sh
+AWS_PROFILE=<your-profile> bun run deploy
+# or: AWS_PROFILE=<your-profile> bash deploy/deploy.sh
 ```
 
 After deploy:
 
-- Health: `GET https://<url-id>.lambda-url.us-east-1.on.aws/health`
-- Live URL is also written to `~/.config/comita/addi-merge-webhook.url`
+- Health: `GET https://<url-id>.lambda-url.<region>.on.aws/health`
+- Live URL is written to `~/.config/rosetta/addi-merge-webhook.url`
 - Org hooks subscribe to **`pull_request_review`** only
-
-**Current production URL** (`comita-dev` / `us-east-1`):
-
-`https://kfjifzn4cza53dmr4xqdcrgk4m0ugopm.lambda-url.us-east-1.on.aws`
 
 ## Bridge duties
 

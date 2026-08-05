@@ -1,12 +1,18 @@
 #!/usr/bin/env bash
-# Deploy dual-tenant addi-merge-webhook to AWS Lambda Function URL (comita-dev)
-# and wire Comita + Rosetta org webhooks for pull_request_review.
+# Deploy addi-merge-webhook to AWS Lambda Function URL and wire org webhooks
+# for pull_request_review.
+#
+# Tenants are config, not code. Defaults ship Rosetta-Foundation only:
+#   ADDI_TENANTS=rosetta
+#   ADDI_TENANT_ORGS=rosetta:Rosetta-Foundation
+# Add another consumer by extending those lists and providing
+#   ${TENANT}_CLIENT_ID and ${TENANT}_PEM (or ~/.config/${tenant}/github-app.pem).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-AWS_PROFILE="${AWS_PROFILE:-comita-dev}"
+: "${AWS_PROFILE:?Set AWS_PROFILE to the account that hosts this Lambda}"
 AWS_REGION="${AWS_REGION:-us-east-1}"
 FUNCTION_NAME="${FUNCTION_NAME:-addi-merge-webhook}"
 SECRET_NAME="${SECRET_NAME:-addi/merge-webhook}"
@@ -14,12 +20,13 @@ ROLE_NAME="${ROLE_NAME:-addi-merge-webhook-role}"
 RUNTIME="${RUNTIME:-nodejs22.x}"
 HANDLER="${HANDLER:-lambda.handler}"
 
+ADDI_TENANTS="${ADDI_TENANTS:-rosetta}"
+ADDI_TENANT_ORGS="${ADDI_TENANT_ORGS:-rosetta:Rosetta-Foundation}"
+
 export AWS_PROFILE AWS_REGION
 
-ROSETTA_CLIENT_ID="${ROSETTA_CLIENT_ID:-Iv23lifPkkooMoMiz5Jk}"
-COMITA_CLIENT_ID="${COMITA_CLIENT_ID:-Iv23li7Ascc7UNomoH8S}"
-ROSETTA_PEM="${ROSETTA_PEM:-$HOME/.config/rosetta/github-app.pem}"
-COMITA_PEM="${COMITA_PEM:-$HOME/.config/comita/github-app.pem}"
+export ROSETTA_CLIENT_ID="${ROSETTA_CLIENT_ID:-Iv23lifPkkooMoMiz5Jk}"
+export ROSETTA_PEM="${ROSETTA_PEM:-$HOME/.config/rosetta/github-app.pem}"
 
 need() { command -v "$1" >/dev/null || { echo "missing $1" >&2; exit 1; }; }
 need aws
@@ -28,11 +35,39 @@ need python3
 need zip
 need openssl
 
-[[ -f "$ROSETTA_PEM" ]] || { echo "missing $ROSETTA_PEM" >&2; exit 1; }
-[[ -f "$COMITA_PEM" ]] || { echo "missing $COMITA_PEM" >&2; exit 1; }
+IFS=',' read -r -a TENANT_IDS <<<"$ADDI_TENANTS"
+for tenant in "${TENANT_IDS[@]}"; do
+  tenant="$(echo "$tenant" | tr '[:upper:]' '[:lower:]' | xargs)"
+  [[ -n "$tenant" ]] || continue
+  prefix="$(echo "$tenant" | tr '[:lower:]' '[:upper:]' | tr '-' '_')"
+  client_var="${prefix}_CLIENT_ID"
+  pem_var="${prefix}_PEM"
+  if [[ -z "${!client_var:-}" ]]; then
+    if [[ "$tenant" == "rosetta" ]]; then
+      export ROSETTA_CLIENT_ID
+    else
+      echo "Set ${client_var} for tenant $tenant" >&2
+      exit 1
+    fi
+  fi
+  if [[ -z "${!pem_var:-}" ]]; then
+    default_pem="$HOME/.config/$tenant/github-app.pem"
+    if [[ -f "$default_pem" ]]; then
+      export "${pem_var}=$default_pem"
+    elif [[ "$tenant" == "rosetta" && -f "$ROSETTA_PEM" ]]; then
+      export ROSETTA_PEM
+    else
+      echo "Set ${pem_var} (or place PEM at $default_pem) for tenant $tenant" >&2
+      exit 1
+    fi
+  fi
+  pem_path="${!pem_var:-}"
+  [[ -f "$pem_path" ]] || { echo "missing $pem_path" >&2; exit 1; }
+done
 
 ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
 echo "Deploying to account $ACCOUNT ($AWS_REGION) as $FUNCTION_NAME"
+echo "Tenants: $ADDI_TENANTS"
 
 # --- secret bundle -----------------------------------------------------------
 EXISTING_SECRET="$(
@@ -44,27 +79,24 @@ if [[ -n "$EXISTING_SECRET" && "$EXISTING_SECRET" != "None" ]]; then
   echo "Reusing webhook secrets from $SECRET_NAME"
   SECRET_JSON="$(aws secretsmanager get-secret-value --secret-id "$SECRET_NAME" \
     --query SecretString --output text)"
-  # Refresh PEMs / client IDs; keep webhook secrets stable
   SECRET_JSON="$(
-    ROSETTA_PEM="$ROSETTA_PEM" COMITA_PEM="$COMITA_PEM" \
-    ROSETTA_CLIENT_ID="$ROSETTA_CLIENT_ID" COMITA_CLIENT_ID="$COMITA_CLIENT_ID" \
-    SECRET_JSON="$SECRET_JSON" python3 - <<'PY'
-import json, os, pathlib
+    ADDI_TENANTS="$ADDI_TENANTS" SECRET_JSON="$SECRET_JSON" \
+    env python3 - <<'PY'
+import json, os, pathlib, secrets
+tenants = [t.strip() for t in os.environ["ADDI_TENANTS"].split(",") if t.strip()]
 old = json.loads(os.environ["SECRET_JSON"])
-bundle = {
-  "tenants": {
-    "rosetta": {
-      "webhookSecret": old["tenants"]["rosetta"]["webhookSecret"],
-      "clientId": os.environ["ROSETTA_CLIENT_ID"],
-      "privateKey": pathlib.Path(os.environ["ROSETTA_PEM"]).read_text(),
-    },
-    "comita": {
-      "webhookSecret": old["tenants"]["comita"]["webhookSecret"],
-      "clientId": os.environ["COMITA_CLIENT_ID"],
-      "privateKey": pathlib.Path(os.environ["COMITA_PEM"]).read_text(),
-    },
-  }
-}
+bundle = {"tenants": {}}
+for tenant in tenants:
+    prefix = tenant.upper().replace("-", "_")
+    client = os.environ[f"{prefix}_CLIENT_ID"]
+    pem = os.environ[f"{prefix}_PEM"]
+    prev = old.get("tenants", {}).get(tenant, {})
+    webhook = prev.get("webhookSecret") or secrets.token_hex(32)
+    bundle["tenants"][tenant] = {
+        "webhookSecret": webhook,
+        "clientId": client,
+        "privateKey": pathlib.Path(pem).read_text(),
+    }
 print(json.dumps(bundle))
 PY
   )"
@@ -73,30 +105,24 @@ PY
 else
   echo "Creating $SECRET_NAME"
   SECRET_JSON="$(
-    ROSETTA_PEM="$ROSETTA_PEM" COMITA_PEM="$COMITA_PEM" \
-    ROSETTA_CLIENT_ID="$ROSETTA_CLIENT_ID" COMITA_CLIENT_ID="$COMITA_CLIENT_ID" \
-    python3 - <<'PY'
+    ADDI_TENANTS="$ADDI_TENANTS" \
+    env python3 - <<'PY'
 import json, os, pathlib, secrets
-bundle = {
-  "tenants": {
-    "rosetta": {
-      "webhookSecret": secrets.token_hex(32),
-      "clientId": os.environ["ROSETTA_CLIENT_ID"],
-      "privateKey": pathlib.Path(os.environ["ROSETTA_PEM"]).read_text(),
-    },
-    "comita": {
-      "webhookSecret": secrets.token_hex(32),
-      "clientId": os.environ["COMITA_CLIENT_ID"],
-      "privateKey": pathlib.Path(os.environ["COMITA_PEM"]).read_text(),
-    },
-  }
-}
+tenants = [t.strip() for t in os.environ["ADDI_TENANTS"].split(",") if t.strip()]
+bundle = {"tenants": {}}
+for tenant in tenants:
+    prefix = tenant.upper().replace("-", "_")
+    bundle["tenants"][tenant] = {
+        "webhookSecret": secrets.token_hex(32),
+        "clientId": os.environ[f"{prefix}_CLIENT_ID"],
+        "privateKey": pathlib.Path(os.environ[f"{prefix}_PEM"]).read_text(),
+    }
 print(json.dumps(bundle))
 PY
   )"
   aws secretsmanager create-secret --name "$SECRET_NAME" \
     --secret-string "$SECRET_JSON" \
-    --description "Addi merge-on-approve webhook bridge (dual org)" >/dev/null
+    --description "Addi merge-on-approve webhook bridge" >/dev/null
 fi
 
 SECRET_ARN="$(aws secretsmanager describe-secret --secret-id "$SECRET_NAME" \
@@ -208,18 +234,15 @@ else
   aws lambda wait function-updated --function-name "$FUNCTION_NAME"
 fi
 
-# Function URL (public; auth is GitHub HMAC)
 URL_CFG="$(aws lambda get-function-url-config --function-name "$FUNCTION_NAME" \
   --query FunctionUrl --output text 2>/dev/null || true)"
 if [[ -z "$URL_CFG" || "$URL_CFG" == "None" ]]; then
   echo "Creating Function URL (AuthType NONE)"
-  # Older aws-cli (e.g. 2.7) lacks --invoke-mode; default BUFFERED is fine.
   aws lambda create-function-url-config \
     --function-name "$FUNCTION_NAME" \
     --auth-type NONE >/dev/null
 fi
 
-# Resource-based policy so unauthenticated Function URL invokes work
 aws lambda add-permission \
   --function-name "$FUNCTION_NAME" \
   --statement-id FunctionURLAllowPublicAccess \
@@ -234,11 +257,9 @@ aws lambda add-permission \
 
 FUNCTION_URL="$(aws lambda get-function-url-config --function-name "$FUNCTION_NAME" \
   --query FunctionUrl --output text)"
-# strip trailing slash
 FUNCTION_URL="${FUNCTION_URL%/}"
 echo "Function URL: $FUNCTION_URL"
 
-# Health check
 HEALTH="$(curl -fsS "$FUNCTION_URL/health" || true)"
 echo "Health: $HEALTH"
 [[ "$HEALTH" == '{"ok":true}' ]] || {
@@ -248,10 +269,9 @@ echo "Health: $HEALTH"
 
 # --- org webhooks ------------------------------------------------------------
 echo "Configuring org webhooks..."
-ROSETTA_PEM="$ROSETTA_PEM" COMITA_PEM="$COMITA_PEM" \
-ROSETTA_CLIENT_ID="$ROSETTA_CLIENT_ID" COMITA_CLIENT_ID="$COMITA_CLIENT_ID" \
-SECRET_JSON="$SECRET_JSON" FUNCTION_URL="$FUNCTION_URL" \
-python3 - <<'PY'
+ADDI_TENANT_ORGS="$ADDI_TENANT_ORGS" SECRET_JSON="$SECRET_JSON" \
+FUNCTION_URL="$FUNCTION_URL" \
+env python3 - <<'PY'
 import json, os, time, base64, pathlib, urllib.request, urllib.error
 from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.asymmetric import padding
@@ -312,8 +332,7 @@ def upsert_org_hook(org, token, url, secret):
     st, hooks = api("GET", f"https://api.github.com/orgs/{org}/hooks", token)
     if st != 200:
         raise SystemExit(f"list hooks {org}: {st} {hooks}")
-    tenant = "comita" if org == "Comita-Health" else "rosetta"
-    suffix = f"/webhook/{tenant}"
+    suffix = "/" + "/".join(url.rstrip("/").split("/")[-2:])
     existing = None
     for h in hooks:
         cfg_url = ((h.get("config") or {}).get("url") or "").rstrip("/")
@@ -350,34 +369,31 @@ def upsert_org_hook(org, token, url, secret):
 
 bundle = json.loads(os.environ["SECRET_JSON"])
 base = os.environ["FUNCTION_URL"].rstrip("/")
-
-upsert_org_hook(
-    "Comita-Health",
-    installation_token(
-        os.environ["COMITA_PEM"], os.environ["COMITA_CLIENT_ID"], "Comita-Health"
-    ),
-    f"{base}/webhook/comita",
-    bundle["tenants"]["comita"]["webhookSecret"],
-)
-upsert_org_hook(
-    "Rosetta-Foundation",
-    installation_token(
-        os.environ["ROSETTA_PEM"],
-        os.environ["ROSETTA_CLIENT_ID"],
-        "Rosetta-Foundation",
-    ),
-    f"{base}/webhook/rosetta",
-    bundle["tenants"]["rosetta"]["webhookSecret"],
-)
+pairs = [p.strip() for p in os.environ["ADDI_TENANT_ORGS"].split(",") if p.strip()]
+for pair in pairs:
+    tenant, org = pair.split(":", 1)
+    tenant, org = tenant.strip(), org.strip()
+    prefix = tenant.upper().replace("-", "_")
+    pem = os.environ[f"{prefix}_PEM"]
+    client_id = os.environ[f"{prefix}_CLIENT_ID"]
+    secret = bundle["tenants"][tenant]["webhookSecret"]
+    upsert_org_hook(
+        org,
+        installation_token(pem, client_id, org),
+        f"{base}/webhook/{tenant}",
+        secret,
+    )
 print("Org webhooks configured.")
 PY
 
-# Persist URL for docs / humans (no secrets)
-mkdir -p "$HOME/.config/comita"
-echo "$FUNCTION_URL" >"$HOME/.config/comita/addi-merge-webhook.url"
-echo "Wrote $HOME/.config/comita/addi-merge-webhook.url"
+mkdir -p "$HOME/.config/rosetta"
+echo "$FUNCTION_URL" >"$HOME/.config/rosetta/addi-merge-webhook.url"
+echo "Wrote $HOME/.config/rosetta/addi-merge-webhook.url"
 echo
 echo "Deploy complete."
-echo "  Health:  $FUNCTION_URL/health"
-echo "  Comita:  $FUNCTION_URL/webhook/comita"
-echo "  Rosetta: $FUNCTION_URL/webhook/rosetta"
+echo "  Health: $FUNCTION_URL/health"
+for tenant in "${TENANT_IDS[@]}"; do
+  tenant="$(echo "$tenant" | xargs)"
+  [[ -n "$tenant" ]] || continue
+  echo "  $tenant:  $FUNCTION_URL/webhook/$tenant"
+done

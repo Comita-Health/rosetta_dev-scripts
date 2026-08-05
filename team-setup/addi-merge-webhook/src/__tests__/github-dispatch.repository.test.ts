@@ -44,12 +44,12 @@ describe('GitHubDispatchRepository', () => {
         text: async () => ''
       });
 
-    await repo.dispatchAddiMerge('Comita-Health', 'comita_admissions', 18);
+    await repo.dispatchAddiMerge('example-org', 'example-app', 18);
 
     expect(fetchMock).toHaveBeenCalledTimes(3);
     const dispatchCall = fetchMock.mock.calls[2];
     expect(dispatchCall[0]).toBe(
-      'https://api.github.com/repos/Comita-Health/comita_admissions/dispatches'
+      'https://api.github.com/repos/example-org/example-app/dispatches'
     );
     expect(JSON.parse(dispatchCall[1].body as string)).toEqual({
       event_type: 'addi-merge-on-approve',

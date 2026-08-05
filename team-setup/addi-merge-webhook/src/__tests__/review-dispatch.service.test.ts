@@ -28,9 +28,9 @@ describe('ReviewDispatchService', () => {
     review: { state: 'approved' },
     pull_request: { number: 42 },
     repository: {
-      full_name: 'Comita-Health/comita_admissions',
-      name: 'comita_admissions',
-      owner: { login: 'Comita-Health' }
+      full_name: 'example-org/example-app',
+      name: 'example-app',
+      owner: { login: 'example-org' }
     }
   });
 
@@ -38,12 +38,12 @@ describe('ReviewDispatchService', () => {
     const result = await service.handlePullRequestReview(base());
     expect(result).toEqual({
       kind: 'dispatched',
-      repo: 'Comita-Health/comita_admissions',
+      repo: 'example-org/example-app',
       prNumber: 42
     });
     expect(dispatch.dispatchAddiMerge).toHaveBeenCalledWith(
-      'Comita-Health',
-      'comita_admissions',
+      'example-org',
+      'example-app',
       42
     );
   });
