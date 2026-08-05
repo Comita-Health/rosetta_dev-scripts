@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# Inventory PRDs across the Rosetta/Comita workspace: product status, specs,
+# Inventory PRDs across the platform and consumer workspace: product status, specs,
 # and sdlc-workflow runs — including idle / not-actively-worked items.
 #
 # Usage:
-#   ROSETTA_WORKSPACE=~/projects/comita ./prd-portfolio.sh
+#   ROSETTA_WORKSPACE=~/projects/rosetta ./prd-portfolio.sh
 #   PRD_PORTFOLIO_ALL=1 ./prd-portfolio.sh          # include Shipped/…
 #   PRD_PORTFOLIO_STALE_HOURS=72 ./prd-portfolio.sh
-#   PRD_PORTFOLIO_SCOPE=comita|rosetta|all ./prd-portfolio.sh
+#   PRD_PORTFOLIO_SCOPE=platform|consumer|all ./prd-portfolio.sh
 set -euo pipefail
 
 WORKSPACE="${ROSETTA_WORKSPACE:-$(pwd)}"
 RUNS_DIR="${ROSETTA_SDLC_RUNS_DIR:-${HOME}/.rosetta/sdlc-runs}"
 INCLUDE_TERMINAL="${PRD_PORTFOLIO_ALL:-0}"
 STALE_HOURS="${PRD_PORTFOLIO_STALE_HOURS:-48}"
-SCOPE="${PRD_PORTFOLIO_SCOPE:-all}" # comita | rosetta | all
+SCOPE="${PRD_PORTFOLIO_SCOPE:-all}" # platform | consumer | all
 
 if [[ ! -d "$WORKSPACE" ]]; then
   echo "workspace not found: $WORKSPACE" >&2
@@ -29,15 +29,16 @@ yaml_field() {
 path_in_scope() {
   local rel="$1"
   case "$SCOPE" in
-    comita)
-      [[ "$rel" == comita_* ]] || [[ "$rel" == */comita_* ]] || return 1
-      ;;
-    rosetta)
+    platform)
       [[ "$rel" == rosetta_* ]] || [[ "$rel" == */rosetta_* ]] || return 1
+      ;;
+    consumer)
+      local repo_name="${rel%%/*}"
+      [[ "$repo_name" == *_docs && "$repo_name" != "rosetta_docs" ]] || return 1
       ;;
     all) ;;
     *)
-      echo "unknown PRD_PORTFOLIO_SCOPE=$SCOPE (use comita|rosetta|all)" >&2
+      echo "unknown PRD_PORTFOLIO_SCOPE=$SCOPE (use platform|consumer|all)" >&2
       exit 1
       ;;
   esac
@@ -208,12 +209,17 @@ echo "  active=${count_active}  warm=${count_warm}  parked=${count_parked}  back
 
 echo ""
 echo "## Open docs PRs that may add PRDs (not yet on default branch)"
-for repo_dir in "$WORKSPACE"/comita_docs "$WORKSPACE"/rosetta_docs; do
+seen_repos="|"
+for repo_dir in "$WORKSPACE"/rosetta_docs "$WORKSPACE"/*_docs; do
   [[ -d "$repo_dir/.git" ]] || continue
+  case "$seen_repos" in
+    *"|$repo_dir|"*) continue ;;
+  esac
+  seen_repos="${seen_repos}${repo_dir}|"
   base=$(basename "$repo_dir")
   case "$SCOPE" in
-    comita) [[ "$base" == comita_* ]] || continue ;;
-    rosetta) [[ "$base" == rosetta_* ]] || continue ;;
+    platform) [[ "$base" == rosetta_* ]] || continue ;;
+    consumer) [[ "$base" == *_docs && "$base" != "rosetta_docs" ]] || continue ;;
   esac
   remote=$(git -C "$repo_dir" remote get-url origin 2>/dev/null || true)
   [[ -n "$remote" ]] || continue
@@ -242,5 +248,5 @@ echo "  active   — Live sdlc-workflow process for this run"
 echo "  other    — Non-default product status without run activity"
 echo ""
 echo "Tip: PRD_PORTFOLIO_ALL=1 includes Shipped/Deprecated/Superseded."
-echo "     PRD_PORTFOLIO_SCOPE=comita|rosetta|all filters product families."
-echo "     Do not confuse Comita PRD-NNNN with Rosetta PRD-NNNN (different products)."
+echo "     PRD_PORTFOLIO_SCOPE=platform|consumer|all filters product families."
+echo "     Do not confuse consumer PRD-NNNN with Rosetta PRD-NNNN (different products / namespaces)."

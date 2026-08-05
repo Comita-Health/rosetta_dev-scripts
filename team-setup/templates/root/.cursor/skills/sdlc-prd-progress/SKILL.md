@@ -27,8 +27,8 @@ Two modes:
 A PRD can still say `Draft` while the spec is `Approved` and tasks are merging.
 Prefer **spec + `sdlc-workflow status`** for "how much longer?"
 
-**Namespace warning:** Comita `PRD-NNNN` and Rosetta `PRD-NNNN` are different
-products. Always show the repo/path.
+**Namespace warning:** Consumer `PRD-NNNN` and Rosetta `PRD-NNNN` are different
+products / namespaces. Always show the repo/path.
 
 ---
 
@@ -50,14 +50,14 @@ are Draft/Proposed or have specs/runs but **are not actively being worked**.
 
    | Var                         | Default | Effect                                     |
    | --------------------------- | ------- | ------------------------------------------ |
-   | `PRD_PORTFOLIO_SCOPE`       | `all`   | `comita` \| `rosetta` \| `all`             |
+   | `PRD_PORTFOLIO_SCOPE`       | `all`   | `platform` \| `consumer` \| `all`          |
    | `PRD_PORTFOLIO_STALE_HOURS` | `48`    | Younger runs → `warm`                      |
    | `PRD_PORTFOLIO_ALL`         | `0`     | `1` includes Shipped/Deprecated/Superseded |
 
 2. Supplement with open docs PRs that **add** PRDs not yet on the default
-   branch (the script lists `gh pr list` for `comita_docs` / `rosetta_docs`
-   with `PRD` in the title). Example: Comita `PRD-0008` may only exist on an
-   open PR.
+   branch. The script lists `gh pr list` for `rosetta_docs` and every
+   non-Rosetta `*_docs` repository with `PRD` in the title. A consumer
+   `PRD-0008` may only exist on an open PR.
 
 3. Optionally list local runs: `ls ~/.rosetta/sdlc-runs/`.
 
@@ -82,7 +82,7 @@ are Draft/Proposed or have specs/runs but **are not actively being worked**.
 
 **Parked** (spec or run, not actively worked)
 
-- Comita PRD-0006 — Draft · no spec · backlog→parked if you treat open intent
+- Consumer PRD-0006 — Draft · no spec · backlog→parked if you treat open intent
 - …
 
 **Backlog** (Draft/Proposed/Accepted, no execution yet)
@@ -91,10 +91,10 @@ are Draft/Proposed or have specs/runs but **are not actively being worked**.
 
 **Open docs PRs** (PRD not on default branch yet)
 
-- comita_docs#12 — PRD-0008 Draft …
+- consumer_docs#12 — PRD-0008 Draft …
 ```
 
-Group by **product family** (Comita vs Rosetta). Call out parked items
+Group by **product family** (consumer vs platform). Call out parked items
 explicitly — that is the point of this mode.
 
 Industry practice aligns with a live portfolio view (status + delivery link +
@@ -188,4 +188,4 @@ gh pr list --head "sdlc/<run-id>/<taskId>" --json number,url,state
   **Parked** or **Backlog**.
 - Paste multi-thousand-line reviewer mega-diffs into other agent sessions.
 - Re-run `decompose` for progress — that creates a new Draft spec.
-- Equate Comita PRD-NNNN with Rosetta PRD-NNNN.
+- Equate consumer PRD-NNNN with Rosetta PRD-NNNN.

@@ -5,9 +5,9 @@
 # Usage:
 #   bash .cursor/skills/issue-resolve-watch/scripts/watch-issue-resolve.sh \
 #     --interval 30 \
-#     [--activate ~/.config/comita/github-app-activate.sh] \
+#     [--activate ~/.config/rosetta/github-app-activate.sh] \
 #     [--kickoff] \
-#     Comita-Health/comita_admissions#294
+#     Rosetta-Foundation/rosetta_dev-scripts#1
 #
 # Sentinel (stdout): AGENT_LOOP_WAKE_issue_resolve <json>
 # Pair with Cursor agent loop notify_on_output on ^AGENT_LOOP_WAKE_issue_resolve.
@@ -67,24 +67,17 @@ resolve_activate() {
     printf '%s' "$ROSETTA_GH_ACTIVATE"
     return
   fi
-  local cwd
-  cwd=$(pwd -P 2>/dev/null || pwd)
-  case "$cwd" in
-    */comita|*/comita/*)
-      if [[ -x "$HOME/.config/comita/github-app-activate.sh" ]]; then
-        printf '%s' "$HOME/.config/comita/github-app-activate.sh"
-        return
-      fi
-      ;;
-  esac
   if [[ -x "$HOME/.config/rosetta/github-app-activate.sh" ]]; then
     printf '%s' "$HOME/.config/rosetta/github-app-activate.sh"
     return
   fi
-  if [[ -x "$HOME/.config/comita/github-app-activate.sh" ]]; then
-    printf '%s' "$HOME/.config/comita/github-app-activate.sh"
-    return
-  fi
+  local candidate
+  for candidate in "$HOME"/.config/*/github-app-activate.sh; do
+    if [[ -x "$candidate" ]]; then
+      printf '%s' "$candidate"
+      return
+    fi
+  done
   printf ''
 }
 
