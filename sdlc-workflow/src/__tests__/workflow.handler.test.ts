@@ -49,7 +49,8 @@ describe('WorkflowHandler', () => {
       context: 'c',
       tasks: [makeTask()],
       envelope: makeEnvelope(),
-      markdown: '---\nstatus: Draft\n---\n# spec'
+      markdown: '---\nstatus: Draft\n---\n# spec',
+      warnings: []
     });
     writeSpec = jest
       .fn()
@@ -61,7 +62,7 @@ describe('WorkflowHandler', () => {
       .toConstantValue({ getPrd });
     container
       .bind<ISpecFileRepository>(WORKFLOW_TOKENS.SpecFileRepository)
-      .toConstantValue({ writeSpec });
+      .toConstantValue({ writeSpec, writeCloseout: jest.fn() });
     container
       .bind<IDecomposeService>(WORKFLOW_TOKENS.DecomposeService)
       .toConstantValue({ decompose });
@@ -85,6 +86,7 @@ describe('WorkflowHandler', () => {
     expect(decompose).toHaveBeenCalledTimes(1);
     expect(synthesize).toHaveBeenCalledWith([makeStory()], {
       prdId: 'PRD-0099',
+      repoPath: '/tmp/target-repo',
       phase: 1,
       phaseTitle: 'Walk',
       owner: 'Russ Watson',
@@ -111,6 +113,29 @@ describe('WorkflowHandler', () => {
       expect.anything(),
       expect.objectContaining({ phaseTitle: 'Phase 3' })
     );
+  });
+
+  it('surfaces synthesis diff-forecast warnings in the CLI output', async () => {
+    synthesize.mockResolvedValueOnce({
+      specId: 'SPEC-PRD-0099-P1',
+      prdId: 'PRD-0099',
+      phase: 1,
+      summary: 's',
+      context: 'c',
+      tasks: [makeTask()],
+      envelope: makeEnvelope(),
+      markdown: '---\nstatus: Draft\n---\n# spec',
+      warnings: [
+        'Task T-01: engineering notes reference "docs/out.md" outside the ' +
+          "envelope's allowedPaths — likely mid-run breach"
+      ]
+    });
+
+    await handler.runDecompose(INPUT);
+
+    const output = logSpy.mock.calls.map(c => String(c[0])).join('\n');
+    expect(output).toContain('docs/out.md');
+    expect(output).toContain('outside the envelope');
   });
 
   it('propagates synthesis validation failure and writes nothing', async () => {

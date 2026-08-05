@@ -1,17 +1,14 @@
-import { existsSync } from 'fs';
 import { inject, injectable } from 'inversify';
 import path from 'path';
 import type { IAgentRunnerRepository } from '../repositories/agent-runner.repository';
 import type { IGitRepository } from '../repositories/git.repository';
 import type { IRunStateRepository } from '../repositories/run-state.repository';
 import type { ISpecDocRepository } from '../repositories/spec-doc.repository';
-import type { ISurfaceMapRepository } from '../repositories/surface-map.repository';
 import { WORKFLOW_TOKENS } from '../tokens';
 import { RunState, SpecDocument, SpecTask, stepKey } from '../types';
 import { agentSpendK } from '../utils/agent-spend';
 import { inputsDigest } from '../utils/digest';
 import { buildImplementationPrompt } from '../utils/implementation-prompt';
-import { validateSpec } from '../utils/spec-validate';
 import { taskIntegrationTip } from '../utils/task-base';
 
 export interface ExecutorInput {
@@ -25,6 +22,11 @@ export interface ExecutorInput {
    * point of a dry run. Enforcing runs are not.
    */
   shadow?: boolean;
+  /**
+   * Process argv captured at invocation start for the launch record (#37).
+   * Defaults to `process.argv` when omitted.
+   */
+  launchArgv?: string[];
 }
 
 /** Optional progress sink for native heartbeat (#39) — not a Service call. */
@@ -99,7 +101,7 @@ const hasStep = (state: RunState, name: string, taskId: string): boolean =>
 /**
  * Latest phase step for a task (by completedAt). Used so a green phase with
  * a failed merge call can re-enter the gate pipeline without reopening
- * breach-terminal tasks (Comita Phase 0b: conflict → fix → resume).
+ * breach-terminal tasks (Phase 0b: conflict → fix → resume).
  */
 const latestPhaseStep = (state: RunState, taskId: string) => {
   const phases = Object.values(state.steps).filter(
@@ -118,102 +120,38 @@ const isMerged = (state: RunState, taskId: string): boolean =>
   state.taskResults[taskId]?.mergedSha !== undefined;
 
 /**
- * True when a red/blocked gate step was recorded under a digest that no
- * longer matches the current worktree head — a fix commit landed after the
- * breach, so resume must re-enter the gate pipeline rather than treat the
- * red phase as terminal forever.
+ * Wave 0: true when a gate remediation landed *after* the given phase step
+ * was recorded.
+ *
+ * @remarks
+ * Breach-terminal-per-digest is the right default — retrying identical
+ * content just burns the same verdict again. But a remediation round
+ * deliberately changes the task head, and the implementation digest is
+ * rooted at {task content, integration tip}, neither of which moves when
+ * the agent commits a fix. Without this check the fix would sit on the
+ * branch forever, never judged. Compared by timestamp rather than digest
+ * because selection cannot recompute a gate digest it has no head SHA for.
  */
-const gateStaleVsTip = (
+const remediatedAfter = (
   state: RunState,
   taskId: string,
-  gateName: string,
-  freshDigest: string
-): boolean =>
-  Object.values(state.steps).some(step => {
-    if (step.name !== gateName || step.taskId !== taskId) {
-      return false;
-    }
-    const outcome = step.verdict?.outcome;
-    if (outcome !== 'breach' && outcome !== 'blocked') {
-      return false;
-    }
-    return step.inputsDigest !== freshDigest;
-  });
-
-/** Tip-moved recoverability across the gates that freeze a red phase. */
-const redGatesStaleVsTip = (
-  state: RunState,
-  task: SpecTask,
-  implDigest: string,
-  integrationTip: string,
-  worktreeHead: string | undefined,
-  envelope: SpecDocument['envelope']
+  phaseCompletedAt: string
 ): boolean => {
-  if (worktreeHead === undefined || worktreeHead.length === 0) {
-    return false;
-  }
-  const chain = { implDigest, headSha: worktreeHead };
-  return (
-    gateStaleVsTip(
-      state,
-      task.id,
-      'verification',
-      inputsDigest({ ...chain, criteria: task.acceptanceCriteria })
-    ) ||
-    gateStaleVsTip(
-      state,
-      task.id,
-      'envelope',
-      inputsDigest({ ...chain, envelope, baseRef: integrationTip })
-    ) ||
-    gateStaleVsTip(
-      state,
-      task.id,
-      'reviewer',
-      inputsDigest({ ...chain, task, baseRef: integrationTip })
-    ) ||
-    gateStaleVsTip(
-      state,
-      task.id,
-      'ci',
-      inputsDigest({ ...chain, gate: 'ci' })
-    )
-  );
-};
-
-/** True when the latest CI step is a non-escalating block (retryable). */
-const latestCiRetryableBlock = (state: RunState, taskId: string): boolean => {
-  const ciSteps = Object.values(state.steps).filter(
-    step => step.name === 'ci' && step.taskId === taskId
-  );
-  if (ciSteps.length === 0) {
-    return false;
-  }
-  const latest = ciSteps.reduce((best, step) =>
-    step.completedAt > best.completedAt ? step : best
-  );
-  if (latest.verdict?.outcome !== 'blocked') {
-    return false;
-  }
-  const reasons = latest.verdict.reasons ?? [];
-  return reasons.some(
-    reason =>
-      reason.includes('no check runs') || reason.includes('no CI results')
-  );
+  const remediation = state.remediations?.[taskId];
+  return remediation !== undefined && remediation.recordedAt > phaseCompletedAt;
 };
 
 const selectReadyTasks = (
   spec: SpecDocument,
   state: RunState,
-  maxParallel: number,
-  tipHeads: Record<string, string> = {}
+  maxParallel: number
 ): { task: SpecTask; implDigest: string; baseSha: string }[] => {
   const ready: { task: SpecTask; implDigest: string; baseSha: string }[] = [];
   for (const task of spec.tasks) {
     if (ready.length >= maxParallel) break;
     // Merged tasks are terminal — tip advances (#42/#44) change the
     // implementation digest root, which must NOT reopen a task that
-    // already landed on the integration branch (Comita live-val shadow-2:
+    // already landed on the integration branch (consumer live-val shadow-2:
     // re-running T-02 after record-merge → empty diff + reviewer breach).
     if (isMerged(state, task.id)) continue;
     if (!task.dependsOn.every(dep => isMerged(state, dep))) continue;
@@ -232,30 +170,16 @@ const selectReadyTasks = (
         // Completed at the current content: resume the gate pipeline until
         // phase lands. After a *pass* phase with no merge step, re-select
         // so enforce can retry `gh pr merge` (dirty PR / flaky API). A
-        // *breach* phase is terminal unless tip moved after a red
-        // verification (fix commit) or CI was a retryable empty-checks
-        // race — both must auto-recover without a human clearing state.
+        // *breach* phase stays terminal for this digest — unless a Wave 0
+        // remediation round has since pushed a fix, which is new content
+        // the gates have not judged.
         const phase = latestPhaseStep(state, task.id);
         if (phase !== undefined) {
           const passed = phase.verdict?.outcome === 'pass';
           const mergeDone = hasStep(state, 'merge', task.id);
-          if (mergeDone) {
+          const remediated = remediatedAfter(state, task.id, phase.completedAt);
+          if (mergeDone || (!passed && !remediated)) {
             continue;
-          }
-          if (!passed) {
-            const tipHead = tipHeads[task.id];
-            const recoverable =
-              redGatesStaleVsTip(
-                state,
-                task,
-                digest,
-                tip,
-                tipHead,
-                spec.envelope
-              ) || latestCiRetryableBlock(state, task.id);
-            if (!recoverable) {
-              continue;
-            }
           }
         }
       }
@@ -270,8 +194,6 @@ export class ExecutorService implements IExecutorService {
   constructor(
     @inject(WORKFLOW_TOKENS.SpecDocRepository)
     private readonly _specDocRepo: ISpecDocRepository,
-    @inject(WORKFLOW_TOKENS.SurfaceMapRepository)
-    private readonly _surfaceRepo: ISurfaceMapRepository,
     @inject(WORKFLOW_TOKENS.GitRepository)
     private readonly _gitRepo: IGitRepository,
     @inject(WORKFLOW_TOKENS.AgentRunnerRepository)
@@ -281,6 +203,14 @@ export class ExecutorService implements IExecutorService {
   ) {}
 
   async executeReady(input: PoolInput): Promise<PoolOutcome> {
+    // #37 / fail-loud T-01: persist the launch record *before* intake so a
+    // crash between invocation start and the first step-cache boundary never
+    // leaves `status` answering RUN_NOT_FOUND. Resume loads this same file.
+    const prior = this._runStateRepo.load(input.runsDir, input.runId);
+    if (prior === null) {
+      this._runStateRepo.save(input.runsDir, this.createLaunchState(input));
+    }
+
     // Enforce loads the Approved blob from origin/<default> so a stale
     // operator working tree cannot block wave N+1 after a task merge.
     // Shadow keeps the local file (unlanded Draft specs are the point).
@@ -290,59 +220,17 @@ export class ExecutorService implements IExecutorService {
     }
     const spec = loaded.spec;
 
-    // Structural defects are cheap here and ruinous later. An envelope naming
-    // a surface the repo does not define, for instance, is an unconditional
-    // breach at the envelope gate — every task fails no matter how good the
-    // code is, after a full wave of agent work has already been paid for.
-    const violations = validateSpec(
-      spec.tasks,
-      spec.envelope,
-      Object.keys(this._surfaceRepo.load(input.repoPath))
-    );
-    if (violations.length > 0) {
-      const state = this.loadOrInitState(input, spec);
-      this._runStateRepo.appendVerdict(input.runsDir, state, {
-        gate: 'intake',
-        outcome: 'blocked',
-        wouldEscalate: true,
-        reasons: ['invalid-spec', ...violations],
-        recordedAt: new Date().toISOString()
-      });
-      return {
-        kind: 'blocked',
-        spec,
-        state,
-        detail: 'invalid-spec',
-        outcomes: []
-      };
-    }
-
     const existing = this._runStateRepo.load(input.runsDir, input.runId);
-    const state: RunState = existing ?? this.initState(input, spec);
-    // Worktree heads let resume detect "verification failed, then tip moved"
-    // without reopening unrelated red phases.
-    const tipHeads: Record<string, string> = {};
-    for (const task of spec.tasks) {
-      const worktreePath = path.join(
-        input.runsDir,
-        input.runId,
-        'worktrees',
-        task.id
-      );
-      if (!existsSync(worktreePath)) {
-        continue;
-      }
-      try {
-        tipHeads[task.id] = this._gitRepo.headSha(worktreePath);
-      } catch {
-        // Missing / corrupt worktree — leave unset; selection stays conservative.
-      }
-    }
-    const selected = selectReadyTasks(spec, state, input.maxParallel, tipHeads);
+    const state: RunState = existing ?? this.createLaunchState(input, spec);
+
+    const selected = selectReadyTasks(spec, state, input.maxParallel);
     if (selected.length === 0) {
-      // No side effects: nothing is persisted for a no-op invocation.
+      // No further side effects for a no-op wave (launch record may already
+      // exist from this or a prior invocation — do not wipe or rewrite it).
       return { kind: 'no-ready-task', spec, state: existing, outcomes: [] };
     }
+
+    this.enrichLaunchFromSpec(input.runsDir, state, spec);
 
     // Worktree creation mutates the shared .git directory — do it
     // sequentially; only the agent runs themselves fan out. Tip is the
@@ -492,20 +380,6 @@ export class ExecutorService implements IExecutorService {
     ok = commitOutcome.ok;
     detail = commitOutcome.detail;
 
-    // A clean worktree with no commit is terminal at this content digest —
-    // re-running selects nothing. Record it so the run surfaces a task that
-    // would otherwise just be missing from the wave.
-    if (commitOutcome.noCommit === true) {
-      this._runStateRepo.recordExceptions(input.runsDir, state, [
-        {
-          trigger: 'no-commit',
-          taskId: task.id,
-          context: [detail.slice(0, 500)],
-          recordedAt: new Date().toISOString()
-        }
-      ]);
-    }
-
     // Mutations of the shared state object are synchronous, so concurrent
     // task completions serialize on the event loop — each recordTaskResult
     // persists the full accumulated state and none are lost.
@@ -555,7 +429,7 @@ export class ExecutorService implements IExecutorService {
     task: SpecTask,
     agentOk: boolean,
     agentDetail: string
-  ): { ok: boolean; detail: string; noCommit?: boolean } {
+  ): { ok: boolean; detail: string } {
     const head = this._gitRepo.headSha(worktreePath);
     if (head !== tipSha) {
       return { ok: agentOk, detail: agentDetail };
@@ -565,7 +439,6 @@ export class ExecutorService implements IExecutorService {
     if (uncommitted.length === 0) {
       return {
         ok: false,
-        noCommit: true,
         detail:
           agentDetail.length > 0
             ? agentDetail
@@ -599,6 +472,85 @@ export class ExecutorService implements IExecutorService {
             : '')
       };
     }
+  }
+
+  /**
+   * Launch record written at invocation start (#37). When `spec` is known
+   * (intake path), prefer it; otherwise best-effort parse the local file for
+   * forensics — intake still owns the approval decision.
+   */
+  private createLaunchState(
+    input: ExecutorInput,
+    spec?: SpecDocument
+  ): RunState {
+    const now = new Date().toISOString();
+    let specId = 'UNKNOWN';
+    let specDigest = '';
+    if (spec !== undefined) {
+      specId = spec.id;
+      specDigest = inputsDigest(spec);
+    } else {
+      try {
+        const local = this._specDocRepo.read(input.specPath);
+        specId = local.id;
+        specDigest = inputsDigest(local);
+      } catch {
+        // Missing / malformed — intake records the concrete refusal reason.
+      }
+    }
+    return {
+      runId: input.runId,
+      specId,
+      specPath: input.specPath,
+      specDigest,
+      baseSha: this._gitRepo.headSha(input.repoPath),
+      launchArgv: [...(input.launchArgv ?? process.argv)],
+      startedAt: now,
+      taskResults: {},
+      verdicts: [],
+      exceptions: [],
+      criterionVerdicts: [],
+      steps: {},
+      tokenSpendK: 0,
+      ciFixAttempts: {},
+      gateFixAttempts: {},
+      remediations: {},
+      mergeBlockedRetries: 0,
+      updatedAt: now
+    };
+  }
+
+  /** After intake passes, pin the Approved-spec id/digest onto the launch record. */
+  private enrichLaunchFromSpec(
+    runsDir: string,
+    state: RunState,
+    spec: SpecDocument
+  ): void {
+    const digest = inputsDigest(spec);
+    if (state.specId === spec.id && state.specDigest === digest) {
+      return;
+    }
+    state.specId = spec.id;
+    state.specDigest = digest;
+    this._runStateRepo.save(runsDir, state);
+  }
+
+  private loadOrInitState(input: ExecutorInput, spec: SpecDocument): RunState {
+    const existing = this._runStateRepo.load(input.runsDir, input.runId);
+    if (existing !== null) {
+      // Do not clobber a best-effort launch identity with an intake stub
+      // (id UNKNOWN) — only promote when intake resolved a real document.
+      if (
+        spec.id !== 'UNKNOWN' &&
+        (existing.specId !== spec.id ||
+          existing.specDigest !== inputsDigest(spec))
+      ) {
+        existing.specId = spec.id;
+        existing.specDigest = inputsDigest(spec);
+      }
+      return existing;
+    }
+    return this.createLaunchState(input, spec);
   }
 
   /**
@@ -711,30 +663,6 @@ export class ExecutorService implements IExecutorService {
     }
 
     return { kind: 'ok', spec };
-  }
-
-  private initState(input: ExecutorInput, spec: SpecDocument): RunState {
-    return {
-      runId: input.runId,
-      specId: spec.id,
-      specPath: input.specPath,
-      baseSha: this._gitRepo.headSha(input.repoPath),
-      taskResults: {},
-      verdicts: [],
-      exceptions: [],
-      criterionVerdicts: [],
-      steps: {},
-      tokenSpendK: 0,
-      ciFixAttempts: {},
-      updatedAt: new Date().toISOString()
-    };
-  }
-
-  private loadOrInitState(input: ExecutorInput, spec: SpecDocument): RunState {
-    return (
-      this._runStateRepo.load(input.runsDir, input.runId) ??
-      this.initState(input, spec)
-    );
   }
 }
 

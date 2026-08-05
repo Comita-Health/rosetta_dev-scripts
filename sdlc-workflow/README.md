@@ -23,7 +23,7 @@ PRD-0011 (Full-Loop SDLC Automation):
   the T-03 live CI monitor — checks are polled to terminal and failures
   dispatch a fix agent (at most 3 attempts, persisted across resume)
   before the post-cycle verdict reaches the aggregator; and T-04 gate
-  enforcement — all four gates green auto-merges the task PR (merge SHA
+  enforcement — every gate green auto-merges the task PR (merge SHA
   recorded in run state and the `sdlc.merge.v1` artifact, attributed to
   `machine-gates`), any red gate blocks with a `merge-blocked`
   escalation, and `--shadow` restores the record-only calibration mode;
@@ -53,6 +53,9 @@ bun run dev -- decompose --prd PRD-0011 --repo ../../rosetta_chronicle
 #   --phase      rollout phase to specify (default: 1)
 #   --budget-k   token budget in thousands, recorded in the envelope (default: 200)
 
+# Lint a spec file's format before intake (no LLM call, no --repo; hook/CI safe)
+bun run dev -- spec-lint --spec ../specs/PRD-0011/phase-2-spec.md
+
 # Execute all ready tasks from an Approved spec (parallel worktrees)
 bun run dev -- run --spec ../specs/PRD-0011/phase-3-spec.md --repo .. \
   --chronicle-repo ../../rosetta_chronicle_roustalski
@@ -67,6 +70,12 @@ bun run dev -- run --spec ../specs/PRD-0011/phase-3-spec.md --repo .. \
 #   --shadow          record gate verdicts but never merge (calibration mode)
 #   --heartbeat       emit structured progress every N seconds (default: 30;
 #                     0 disables). Also appends <runsDir>/<runId>/heartbeat.jsonl
+#   --operator        GitHub login assigned on needs-human escalation issues
+#                     (also accepted via SDLC_OPERATOR env; never hardcoded)
+
+# Operator default: detach with --supervise --detach + --heartbeat, then check
+# in on wakes — do not block the agent chat on sandbox waits.
+# See docs/operator-background-supervise.md (team-setup skill: sdlc-run-supervise).
 
 # Operator default: --supervise --detach + --heartbeat, then check in on
 # wakes — do not block the agent chat on sandbox waits.
@@ -82,19 +91,164 @@ bun run dev -- record-merge --run-id <run-id> --sha <merged-sha> \
 bun run dev -- check-veto --run-id <run-id> --repo .. \
   --chronicle-repo ../../rosetta_chronicle_roustalski
 
+# Generate or refresh a spec's closeout PR from a run's recorded verdicts —
+# checkboxes and status: Done are derived, never authored (SPEC-PRD-0023-P1).
+# The phase boundary does this automatically; run it by hand to close out a
+# spec that landed before the machinery existed, or after an interruption.
+bun run dev -- closeout --run-id <run-id> \
+  --spec specs/PRD-0023/phase-1-spec.md --repo ..
+
 # Inspect a run: task results, cached step graph, verdicts, exceptions (T-09)
 bun run dev -- status --run-id <run-id>
+
+# Lint an ADR-0008 spec before intake (front-matter parse, envelope schema,
+# checkbox integrity) — no LLM call, no --repo; hook/CI safe (#40)
+bun run dev -- spec-lint --spec ../specs/BUG-envelope-spec-integrity/phase-1-spec.md
+
+# Queue a spec to launch automatically when the current supervised run
+# finishes and this spec is Approved (SPEC-BUG-retro-and-queued-plans-P1 T-02)
+bun run dev -- queue-run --spec ../specs/PRD-0011/phase-4-spec.md --repo ..
+
+# List queued launch records (FIFO, oldest first)
+bun run dev -- status --queue
 ```
+
+`decompose` grounds the synthesized envelope in the target repo tree (#35):
+every `allowedPaths` glob must match at least one existing path in the
+`--repo` checkout, or be justified as a new-path intent by a task naming
+the file it creates in its engineering notes. Anything else fails synthesis
+with `ENVELOPE_UNGROUNDED`, listing the offending globs. A diff-forecast
+heuristic also warns (without blocking) when a task's engineering notes
+reference a path no `allowedPaths` glob covers, so the human reviews a
+coherent envelope instead of discovering the gap as a mid-run breach.
 
 `decompose` hard-stops after writing the Draft spec. Approval is a
 `status: Draft → Approved` flip in a dedicated commit (ADR-0008) —
 `run` refuses anything but an Approved spec, records the refusal as a
-blocked verdict, and executes at most one task per invocation. The envelope
+blocked verdict in `state.json`, and exits non-zero. A launch record
+(`state.json` with run id, spec digest, base SHA, argv, `startedAt`, empty
+steps) is written at invocation start — before intake — so a crash never
+leaves `status` answering `RUN_NOT_FOUND` (#37). Surface labels fail closed
+at synthesis (#36): every synthesized `forbiddenSurfaces` label must resolve
+against the target repo's `.sdlc/surfaces.json`, and an unresolvable label
+aborts `decompose` with `SURFACE_UNRESOLVABLE` — the label named and the
+repo's known labels listed — rather than being silently dropped before a
+human reviews the spec. The known labels are also fed into the synthesis
+prompt so the model picks from real surfaces. The envelope
 gate evaluates the task branch diff against the spec's blast-radius envelope
-(forbidden-surface labels resolve via `<repo>/.sdlc/surfaces.json`). Since
+(forbidden-surface labels resolve via `.sdlc/surfaces.json` read from the
+tree under judgment — see the tree-resolution rule below). Since
 P3 T-04 the gates enforce by default: green across the board merges the
 task PR automatically; any red gate blocks and escalates (`--shadow`
 disables enforcement for calibration).
+
+The **sandbox gate is part of that aggregate.** A declared sandbox that
+deployed unhealthily blocks the merge, so "it merged" means "it deployed".
+A repo with no `.sdlc/environments.json` contract is not a failure — the
+absence of a contract is not evidence of a broken deploy — and does not
+block.
+
+### Recoverable stops instead of terminal ones (Wave 0)
+
+A postmortem over 23 real runs found **62.7% of elapsed time had no
+supervisor process running at all** (1,560 of 2,487 minutes). Almost none of
+that was slow work; it was the engine stopping on conditions that were
+recoverable and then waiting for a human to relaunch it. Four behaviors
+changed:
+
+| Stop                     | Old behavior                                  | Now                                                                              |
+| ------------------------ | --------------------------------------------- | -------------------------------------------------------------------------------- |
+| CI has no check runs yet | `blocked` on the first poll → escalate → exit | Poll a bounded **appear window** first; absence is a wait, not a verdict         |
+| Reviewer disagreement    | terminal                                      | Bounded remediation round, then escalate                                         |
+| Envelope breach          | terminal                                      | Bounded remediation round (trim scope — never widen the envelope), then escalate |
+| `merge-blocked`          | supervisor exits                              | Bounded retry with backoff, invalidating the `ci` and phase steps                |
+
+**CI appear window.** Every CI block in the entire corpus — all 16 of 59
+verdicts — read `no check runs` or `no CI results for <sha>`. There were
+**zero actual CI failures**, because the engine pushed and polled before
+GitHub had registered the check runs. The gate now distinguishes three
+states: not yet reported (keep waiting, up to `checksAppearTimeoutMs`),
+reported and failing (the existing bounded fix loop), and appear-deadline
+exceeded (escalate — a check suite that never registers is a real
+misconfiguration, not something to spin on).
+
+**Gate remediation.** Reviewer disagreement and envelope breach were 22 of
+44 historical escalations, and each one ended its run cold — even though
+median reviewer dispatch is only 1.16 minutes, so re-judging is cheap. A red
+reviewer or envelope gate now re-dispatches the implementation agent in the
+task's existing worktree with the failing verdicts' reasons as input,
+commits and pushes the fix, and lets the gates judge the new head. The
+budget is explicit (`gateFixAttempts` per task in `state.json`, default 2)
+and exhaustion escalates loudly rather than spinning. Envelope remediation
+is instructed to **reduce the diff**, never to raise `maxDiffLines` — a gate
+that negotiates its own threshold is not a gate. Each round is recorded in
+`state.remediations` and a `[remediate] <task> …` line in `monitor.log`.
+
+**Merge-blocked retry.** The supervisor exited on `merge-blocked` 28 times
+across 79 waves, each ending the process. It now retries up to
+`MERGE_BLOCKED_RETRY_LIMIT` times with backoff, invalidating the step-cache
+entries that could produce a different answer (`ci` and the phase
+aggregate). Retries are counted in `state.mergeBlockedRetries`, and
+exhaustion is still a loud terminal exit.
+
+**Recurring escalations re-notify.** `emitOnce` deduped on the escalation
+title alone, so a given escalation woke a human exactly once ever and
+recurrence was silently swallowed. Escalations now carry an `occurrenceKey`
+(the branch head SHA, or the implementation digest for a task with no head)
+folded into the dedupe marker: the same finding on unchanged content stays
+quiet, but the same finding after an agent pushed a fix wakes the human
+again.
+
+**Instrumentation.** Only `starting`, `implementation` and `reviewer` set a
+heartbeat step, so 52.6% of measured work was unobservable and time from the
+uninstrumented steps accrued under whatever label was left standing —
+overstating reviewer time by roughly 3.5 minutes a segment. `sandbox`,
+`verification` (including per-criterion verifier-agent progress), `ci` and
+`merge` now set their own labels.
+
+### Crash-safe, single-writer runs (Wave 1)
+
+Wave 0's retry loops are only trustworthy if the state they resume from
+survived the last crash, so `state.json` became durable and exclusively
+owned (SPEC-PRD-0021-P1):
+
+- **Atomic writes.** Every save goes to a temp file in the same directory,
+  `fsync`s, then `rename`s over the target. A reader polling during a write
+  sees one complete document or the previous one — never a truncated prefix —
+  and a kill mid-write leaves the previous state fully parseable.
+- **One writer per run.** `run.lock` in the run directory is taken by
+  exclusive file create, so the kernel picks the winner. `run` / `supervise`
+  hold it for the whole session; short-lived mutators take a momentary lock
+  around their write. A second engine fails immediately with `RUN_LOCK_HELD`
+  naming the live pid, host, owner and start time rather than blocking or
+  clobbering. A lock whose owner is dead **on this host** is reclaimable —
+  otherwise a SIGKILLed run would be permanently unresumable — but a pid
+  recorded on another host never is, because it cannot be probed from here.
+- **Shared retry policy.** `RetryExecutorService` is the single place the
+  attempt cap, the backoff curve (doubling, capped at 30s) and the
+  `RecoveryHistory` schema are defined. It re-invokes the caller's step and
+  nothing else: it has no reference to a verdict type and no branch that can
+  construct or soften one, because a retry layer able to do that would make
+  every gate advisory.
+- **Non-gate steps retry, gates do not.** PR open, sandbox deploy and
+  Chronicle commit are retried through the executor and record their attempt
+  trail on the step (`steps[key].recovery`), so a flaky step is visible
+  afterwards instead of only in a log. Only a _thrown_ sandbox error retries;
+  an unhealthy deploy is a verdict. Recovered steps land in the step cache
+  like any other, so a resume reuses them with no hand-edits and no duplicate
+  PR, deploy, or ledger commit.
+- **Sanitized agent dispatch.** Nested-agent markers (`CURSOR_AGENT`,
+  `CLAUDECODE`, the askpass pair, …) are stripped before spawning any agent.
+  A child that inherits them can decide it is re-entrant and exit without
+  doing the work — a silent no-op indistinguishable from "nothing to change",
+  after which every gate judges an unmodified branch. The list is a denylist,
+  not a `CURSOR_*` wildcard, because the engine dispatches _with_
+  `CURSOR_AGENT_BIN` and `CURSOR_MODEL`.
+- **Detached launches are verified, not assumed.** The parent used to sample
+  child liveness once at 1.5s; on a loaded machine it sampled mid-boot, so it
+  printed "detached" and exited 0 for a run that died a second later. It now
+  watches for up to 8s and stops early on evidence either way — the child's
+  own `supervise.exit` record, or a dead pid.
 
 ### Engine branches and target-repo hooks (#41)
 
@@ -109,6 +263,86 @@ engine therefore:
 Target repos may alternatively allow `sdlc/*` in their branch check; either
 path unblocks multi-task runs. CI still validates the PR.
 
+### Spec integrity: `spec-lint` and the single-writer rule (#40)
+
+Two guards protect the spec file itself.
+
+**Single-writer rule.** A product-task diff must never edit anything under
+`specs/**` (nor a nested `**/specs/**`) — including flipping its own
+acceptance-criteria checkboxes or changing `status:`. The envelope gate
+hard-breaches on any spec-tree path even when `allowedPaths` explicitly
+covers it: the canonical self-ticking move (an agent closing its own
+checkboxes in the same diff that implements the task) is a breach, not a
+convenience. Checkbox state and phase `Done` closeout have exactly one
+writer — the engine closeout / docs PR after the product tasks merge
+(PRD-0023) — so run-time truth can never be forged mid-run.
+
+**`spec-lint`.** `spec-lint --spec <path>` validates an Approved spec's
+Markdown without an LLM call or a `--repo`, so it runs from a pre-commit
+hook or CI. It layers three named checks and exits non-zero on the first
+failing class:
+
+- front-matter / structure parse (`SPEC_MALFORMED` — e.g. a missing
+  envelope field),
+- envelope schema + inline-array integrity (`SPEC_MALFORMED` for a
+  formatter-reshaped array, `SPEC_INVALID` for an empty `allowedPaths` or a
+  non-positive `maxDiffLines` / `budgetK`),
+- checkbox integrity (`SPEC_INVALID` when a task carries no criteria,
+  `SPEC_MALFORMED` when a criterion is missing a recognized verification
+  tier — `test:` / `agent:` / `manual:` / `docs:`).
+
+Its reason for existing is the Prettier incident: `prettier --write` on a
+`*.md` spec can fold the envelope's inline flow array into a YAML block
+sequence that the tolerant parser silently mis-joins into one garbage glob,
+after which the envelope guards nothing. `spec-lint` names that reshape
+before intake silently accepts it.
+
+### Closeout: checkboxes derived from verdicts (SPEC-PRD-0023-P1)
+
+The single-writer rule above says agents never tick their own criteria. This is
+the writer that does. When the last task of a phase merges, the phase boundary
+generates a **closeout PR** whose entire diff is derived from `state.json`:
+
+1. `closeout-aggregate.service` reads the run's recorded verdicts and returns
+   one record per spec criterion — `pass`, `fail`, `human-required`, or an
+   explicit `no-verdict` for criteria the run never judged. Nothing is omitted,
+   because a missing entry and an unverified criterion must not look alike.
+2. `spec-closeout.ts` applies that map to the spec markdown on the default
+   branch: a criterion with a passing verdict is ticked, everything else is
+   left alone, and `status: Done` is written **only** when every criterion
+   passes, every task merged, and every phase gate is green. Partial coverage
+   never downgrades or placeholders the existing status.
+3. `closeout.service` commits through `SpecFileRepository.writeCloseout` — the
+   one route allowed to overwrite a spec — onto the stable branch
+   `sdlc/closeout/<spec-id>`, then opens or **updates in place** the PR for
+   that branch. Identity is the branch, not the title, so an interrupted job
+   re-run leaves exactly one PR reflecting the latest verdicts.
+
+The PR body is generated too: a table of verified criteria citing
+`(task, gate, evidence link)`, a **Remainder** section naming every criterion
+the run could not verify and why, and — when the spec arrives with boxes a
+human ticked by hand — a section listing them. Closeout **never unticks**: a
+hand tick is a human's record of hand verification. It does not count toward
+`status: Done` either, so it appears in both lists.
+
+Two consequences elsewhere:
+
+- **A phase is not complete until its closeout PR exists.** `phaseComplete`
+  requires all tasks merged _and_ a closeout PR that is open or merged, queried
+  live (`utils/run-completion.ts`). "All tasks merged" was what let five specs
+  land while still reading `status: Approved`. A closed-unmerged closeout PR, or
+  a `gh` failure that leaves the answer unknown, both read as incomplete —
+  claiming a phase is done on the strength of a network error is worse than
+  making the operator look.
+- **The phase Chronicle artifact links the closeout PR** (`closeoutPr` in the
+  digest payload), so the docs PR is reachable from the memory record. The
+  digest step's cache key includes whether that link was available, so a
+  closeout that only succeeds on a later attempt still gets published.
+
+`closeout --run-id <id> --spec <path> --repo <path>` runs the same code by hand
+for a spec that landed before this existed. Shadow runs never close out — they
+record verdicts without merging, so there is nothing to document.
+
 ### Progress heartbeat (#39)
 
 `run --heartbeat <seconds>` (default `30`) prints
@@ -119,6 +353,65 @@ to disable. Prefer `--supervise --detach` for long detached runs (see #38 /
 #43 F2 and `docs/operator-background-supervise.md`) — do not rely on IDE
 harness backgrounding.
 
+### Detached / supervise exit detection (#38)
+
+A `--supervise` (or detached supervise child) process installs exit traps so
+**trappable** terminations — clean return, thrown error, `SIGTERM` /
+`SIGINT` — always write:
+
+| Artifact                           | Role                                                    |
+| ---------------------------------- | ------------------------------------------------------- |
+| `<runsDir>/<runId>/supervise.exit` | JSON `{ code, reason, abnormal, at }`                   |
+| `monitor.log` terminal line        | `[supervise] exit code=… reason=… abnormal=…`           |
+| Durable wake                       | `sdlc_supervisor` event under `~/.rosetta/wake/pending` |
+
+`abnormal: false` is reserved for legitimate all-tasks-merged completion
+(`code: 0`). A zero exit that left work incomplete (`stopped`, e.g.
+`no-ready-task` / shadow human gate) is still `abnormal: true` so the
+artifacts alone distinguish quiet incompleteness from success.
+
+**The engine is the single writer of `supervise.exit`.** It used to have two
+incompatible formats on disk, because `sdlc-continuity-daemon.sh` deleted the
+file before a relaunch and then `echo $?`'d a bare exit code over it — which
+destroyed the `reason`/`abnormal` evidence and left a `0` that could not be
+told apart from a zero-exit with work unmerged. The daemon's relaunch probe
+now writes `supervise.relaunch-exit` instead. `SuperviseExitRepository.read`
+still parses the bare-integer form, reporting it as `abnormal: true`, so
+pre-Wave-0 run directories remain readable.
+
+**Detection boundary:** exit traps own every termination Node can handle.
+`SIGKILL`, OOM-kill, and power-loss cannot run a handler by definition —
+those remain the continuity layer's job (`supervise.pid` liveness +
+heartbeat staleness in `sdlc-continuity-daemon.sh`). Startup-window death
+(child dies before the first wave) is still caught by the detach parent's
+post-spawn grace probe (PR #83/#84).
+
+### Durable launch queue (SPEC-BUG-retro-and-queued-plans-P1 T-02)
+
+Planning is parallel but hand-off was manual: approving spec B while spec
+A's supervised run is still active used to strand B — nothing launched it
+when A finished. `queue-run --spec <path> --repo <path> …` closes that gap
+with a durable FIFO record, `<runsDir>/queue/<n>.json`, capturing the same
+argv surface as the continuity daemon's `launch.json` (`argv`, `execArgv`,
+`execPath`, `cwd`) so a later launch needs nothing else on hand. A second
+`queue-run` for the same spec path is a no-op (dedup by resolved path);
+`status --queue` lists every queued record, oldest first.
+
+The completing supervise loop is the interim consumer: once an **enforce**
+run (never `--shadow`) merges every task, it peeks the queue head and —
+the same `buildSuperviseChildArgv` + process-detach mechanics `--detach`
+already uses — launches it detached, but only once that record's own spec
+reads `status: Approved` from `origin/<default>` (a working-tree fallback
+covers a spec outside the queued repo checkout). An unapproved head stays
+queued with a visible `[queue] … not yet Approved` `monitor.log` line, so
+it is retried at the next enforce completion rather than dropped. A launch
+that fails to start (spawn error, or the child dies before it survives the
+same startup grace window `--detach` uses) is never a silent drop either:
+the record stays queued for retry and a durable `sdlc_queue_launch` wake
+surfaces the failure. This is the interim consumer only — PRD-0020's event
+daemon later owns the same queue via its watch registry against this
+unchanged record format.
+
 ## Repo-owned `.sdlc/` contracts
 
 The engine never owns deployment or test mechanics — the target repo
@@ -127,7 +420,9 @@ declares them:
 ```jsonc
 // .sdlc/environments.json — only the "sandbox" entry is ever read (S-04:
 // no code path can reach any other environment). Commands receive the
-// deployed SHA as SDLC_SANDBOX_SHA; health output must echo it.
+// deployed SHA as SDLC_SANDBOX_SHA and, when the engine knows it, the base
+// of the change as SDLC_SANDBOX_BASE_SHA; health output must echo the
+// deployed SHA.
 {
   "sandbox": {
     "deployCommand": "git push origin HEAD:build-env/dev && gh run watch --exit-status",
@@ -165,13 +460,126 @@ that contract is unconditional.
 // .sdlc/verification.json — scripted check for test-tier criteria.
 { "testCommand": "bun test" }
 
-// .sdlc/surfaces.json — forbidden-surface label → path globs.
+// .sdlc/surfaces.json — forbidden-surface label → path globs. Also grounds
+// synthesis (#36): decompose aborts on any forbiddenSurfaces label missing
+// from this map (SURFACE_UNRESOLVABLE) instead of dropping it.
 { "migrations": ["**/migrations/**"] }
+```
+
+```markdown
+<!-- .sdlc/review-checklist.md — optional; a flat checkbox list the reviewer
+     evaluates item by item (T-01). Trailing "(mandatory)" is a hard bar: a
+     failed mandatory item overrides a concurring verdict. Absent file →
+     unchanged pre-checklist prompt/verdict shape. The engine ships no
+     content — the workspace's HSR/inline-docs bar lands here via
+     team-setup; other consumers declare their own. -->
+
+- [ ] Every new HSR class has TSDoc (mandatory)
+- [ ] Prefer readability over cleverness
 ```
 
 A missing contract never fails the run: the corresponding gate records
 itself `blocked` (sandbox) or degrades the criteria to `human-required`
-(verification), keeping the shadow-mode phase verdict honest.
+(verification), keeping the shadow-mode phase verdict honest. The one
+evaluation-time exception is the surface map: an envelope that declares
+`forbiddenSurfaces` cannot be judged without it, so a missing
+`surfaces.json` at the judged tree is a named breach reason (see below). A
+second, fail-closed exception is synthesis time: `decompose` refuses to
+write a spec whose `forbiddenSurfaces` cannot all resolve against
+`surfaces.json` (a missing map resolves no labels), because a label no gate
+can enforce is a silent compliance hole, not a degradable check.
+
+### Path-aware deploy: `SDLC_SANDBOX_BASE_SHA` (SPEC-PRD-0011-P4)
+
+Both sandbox commands receive two variables:
+
+| Variable                | Meaning                                                                              |
+| ----------------------- | ------------------------------------------------------------------------------------ |
+| `SDLC_SANDBOX_SHA`      | The commit being delivered. Health output **must** contain it verbatim.              |
+| `SDLC_SANDBOX_BASE_SHA` | The base that commit is a change _against_, when the engine knows it. May be absent. |
+
+The base is the task's integration tip for a task deploy (the same ref the
+envelope and reviewer gates diff against), the run's starting tip for the
+phase-boundary deploy, and the default-branch tip for a veto revert. It is
+exported only when non-empty: an empty value looks "set" to
+`[ -n "$SDLC_SANDBOX_BASE_SHA" ]`, so a script would take the range path with
+no range, conclude nothing changed, and silently skip a real deploy. When it
+is absent a script should fall back to its own `git merge-base`.
+
+**Path policy is repo-owned, deliberately.** The engine publishes the range
+and nothing more. What counts as deployable differs per repo — a filter baked
+into the engine would be wrong for the next consumer, and a repo's own
+`.github/path-filters.yml` applies to `push`, not to a `workflow_dispatch` the
+engine triggers. A consumer that wants a fast-pass for docs-only or test-only
+changes decides that in its deploy script, exits 0 without dispatching, and
+has its health script print `SDLC_SANDBOX_SHA` with a skip marker so the SHA
+echo contract still holds.
+
+### Deploy ledger: content-keyed dedup and race avoidance (SPEC-PRD-0022-P1)
+
+Every deploy is recorded in `<runsDir>/<runId>/deploys.jsonl`, an append-only
+ledger keyed by the **tree-content SHA** (`git rev-parse <commit>^{tree}`)
+rather than the commit. A merge commit's SHA always differs from the PR head
+it merged even when the tree is byte-identical, so commit comparison reported
+"never deployed" for content that was already live and paid for the deploy
+twice.
+
+Each record carries the content SHA, the commit, the trigger (`task`, `merge`,
+`phase-boundary`, `push`), the workflow run URL when the deploy script printed
+one, and a status of `in-flight`, `healthy`, `failed`, or `reused`. The
+in-flight marker is written _before_ dispatch, because the window a concurrent
+trigger needs to see is exactly the one where a deploy is running.
+
+Three skips come out of it:
+
+- **Content live under another commit → reuse.** Neither deploy nor health
+  runs, and a `reused` record names what it reused. The health probe is
+  skipped on purpose: the live app answers with the commit it was deployed
+  from, so probing it for the new SHA would fail on identical content. The
+  ledger record is the evidence.
+- **A deploy of this content is in flight → dispatch skipped, health probed.**
+  This is the phase-boundary-versus-push race. A second dispatch cannot make
+  the target converge sooner and can thrash it; if health has not caught up
+  the verdict is red and a later wave retries.
+- **This exact commit already healthy → deploy skipped, health verified.** The
+  pre-existing SHA idempotency, now also satisfied from the ledger rather than
+  only from run state — run state keeps just the latest deploy, so a later
+  deploy overwriting the record used to force a redundant redeploy.
+
+Ledger records survive restart and are readable by run ID after the run ends.
+When git cannot resolve a tree SHA the ledger is skipped for that dispatch and
+the deploy proceeds as it did before: a missing content key costs at most one
+redundant deploy, which is a better trade than failing delivery outright.
+
+### Tree-resolution rule for evaluation-time `.sdlc/` reads
+
+Any gate that reads a `.sdlc/` contract while judging a change must read
+it from the **git tree under judgment** — the task's PR tip (or the merged
+integration tip for phase-level checks) — never from the operator's local
+checkout (SPEC-BUG-envelope-spec-integrity-P1 T-03). A locally edited
+(uncommitted) contract therefore cannot sway a verdict, and a contract
+missing from the judged tree is a **named gate error**, not a silent
+local-file fallback.
+
+Audit of evaluation-time `.sdlc/` call sites and how each complies:
+
+- **Envelope gate → `surfaces.json`** — resolved as a git blob at the
+  gate's `headRef` via `SurfaceMapRepository.loadAtRef` (`git show
+<ref>:.sdlc/surfaces.json`). Missing at that ref with
+  `forbiddenSurfaces` declared → breach reason naming the contract path
+  and the judged ref. `SurfaceMapRepository.load` (working-tree read)
+  remains for synthesis-time use only; gates must not call it.
+- **Reviewer gate → `review-checklist.md`** — resolved as a git blob at
+  the gate's `headRef` via `ReviewChecklistRepository.loadAtRef` (T-01,
+  same pattern as the surface map). Missing at that ref is not an error —
+  the contract is optional, so a missing file degrades to the
+  pre-checklist prompt/verdict shape rather than blocking the run.
+- **Sandbox gate → `environments.json`** — loaded from the task
+  **worktree**, which is the engine-owned checkout of the judged branch
+  tip (commands must execute from a filesystem checkout). Compliant: the
+  worktree _is_ the judged tree.
+- **Verification (test tier) → `verification.json`** — same worktree
+  rule as the sandbox contract. Compliant for the same reason.
 
 ## Resumable step graph (T-09)
 
@@ -211,6 +619,24 @@ trailers. Verdict artifacts carry gate identity, inputs digest, outcome,
 and resolvable evidence refs, and read back through
 `GatePolicyQueryService` so future gate policy can learn from track record.
 
+For a `SPEC-BUG-*` run, the same phase boundary also dispatches one retro
+inference call over the spec's Context section and the run's full
+verdict/exception history — "what would have caught this earlier, and
+which stage should own that check" (SPEC-BUG-retro-and-queued-plans-P1
+T-01). Recommendations commit as one `sdlc.retro.v1` artifact and link
+from a `[retro]`-tagged queue Inbox item. Idempotent across resume;
+non-`BUG-*` runs unaffected; a model failure degrades
+loud-but-nonblocking with a `[retro] WARNING` in `monitor.log`.
+
+**Verdict outcomes (BUG-reviewer-house-bar-P1 T-02):** `record-merge --task`
+and `check-veto`'s revert path each annotate the affected task's gate
+verdicts with a compact `sdlc.outcome.v1` artifact — `outcome: stood` when
+the merge holds, `outcome: vetoed` when a queue veto reverts it — one
+record per `(runId, taskId, gate)`, keyed so a resumed run overwrites
+rather than duplicates. This makes per-gate precision (how often a concur
+preceded a veto/rework, how often a breach was overridden) computable from
+the ledger; no read-side reporting ships in this task.
+
 ## Environment
 
 Inference runs over one of three transports, selected automatically:
@@ -243,12 +669,21 @@ Handler / Service / Repository with InversifyJS (workspace rule):
   the T-09 step cache.
 - `services/decompose.service.ts` — PRD → `ProductStory[]` (right-sizing prompt).
 - `services/spec-synthesis.service.ts` — stories → tasks + envelope → validated
-  ADR-0008 Markdown.
+  ADR-0008 Markdown. Grounds `allowedPaths` in the target repo tree
+  (`utils/envelope-grounding.ts`, #35): ungrounded globs fail with
+  `ENVELOPE_UNGROUNDED`; task-note paths outside the envelope surface as
+  diff-forecast warnings. Fails closed on `forbiddenSurfaces` labels that do
+  not resolve against the target repo's `.sdlc/surfaces.json` (#36).
 - `services/executor.service.ts` — approved-spec intake and the P3 T-01
   task pool: merged-dependency eligibility, bounded parallel agent
-  fan-out, one worktree per task.
+  fan-out, one worktree per task. Persists the #37 launch record
+  (`state.json`) before intake so forensics survive a mid-start crash.
 - `services/envelope-gate.service.ts` — diff vs blast-radius envelope,
-  shadow-mode verdict (T-02).
+  shadow-mode verdict (T-02); resolves `surfaces.json` at the judged ref,
+  never local disk (envelope-spec-integrity T-03). `maxDiffLines` exempts
+  test files (`*.test.*` / `*.spec.*` / `__tests__/**` / `__mocks__/**`,
+  `isTestPath`) from the size budget — they still count for `allowedPaths`
+  / `forbiddenSurfaces` (BUG-retro-and-queued-plans-P1 retro).
 - `services/pr-lifecycle.service.ts` — P3 T-02: push the task branch,
   find-or-create its PR with deterministic title/body (`utils/pr-content`).
 - `services/sandbox-deploy.service.ts` — task-branch build → sandbox via the
@@ -262,25 +697,51 @@ Handler / Service / Repository with InversifyJS (workspace rule):
   (commit status context `sdlc/reviewer` + overview comment); best-effort
 - `services/reviewer-gate.service.ts` — independent reviewer agent over the
   diff + task + envelope only; concur/disagree with cited reasons and the
-  full transcript attached (T-05).
+  full transcript attached (T-05). When the target repo declares
+  `.sdlc/review-checklist.md`, the prompt includes it and the verdict
+  carries per-item `checklistFindings`; a failed `mandatory` item overrides
+  a model concur to disagree (SPEC-BUG-reviewer-house-bar-P1 T-01).
 - `services/aggregator.service.ts` — combines ci / verification / reviewer /
-  envelope into one phase verdict and derives exception-ledger entries
-  (reviewer disagreement, third CI fix attempt, envelope breach, budget
-  exhaustion) (P2 T-06).
-- `services/escalation.service.ts` — P3 T-06: turns exception entries into
-  interrupting `action-required` queue items (idempotent by title).
-- `services/ci-gate.service.ts` — the live CI gate (P3 T-03): polls the
-  pushed branch's check runs to terminal, dispatches a fix agent on
-  failure (failing logs in the prompt, ≤3 attempts persisted in
-  `ciFixAttempts`), pushes fixes, and returns the post-cycle verdict with
-  the cycle transcript as evidence; honest `blocked` when the branch is
-  not pushed.
+  envelope / sandbox into one phase verdict and derives exception-ledger
+  entries (reviewer disagreement, third CI fix attempt, envelope breach,
+  failed sandbox deploy, budget exhaustion) (P2 T-06). A repo with no
+  sandbox contract is distinguished from a sandbox that deployed unhealthily
+  — only the latter blocks.
+- `services/gate-remediation.service.ts` — Wave 0: re-dispatches the
+  implementation agent against a red reviewer or envelope gate in the task's
+  existing worktree, commits and pushes the fix so the gates re-judge the
+  new head. Bounded by `gateFixAttempts` per task and the run's token
+  budget; envelope remediation must trim the diff, never widen the envelope
+  (`utils/gate-fix-prompt.ts`).
+- `services/escalation.service.ts` — P3 T-06 / fail-loud T-04: turns
+  exception entries into interrupting `action-required` queue items,
+  assigned needs-human GitHub issues (`--operator` / `SDLC_OPERATOR`), and
+  durable wake-inbox events (idempotent by title **and** `occurrenceKey`, so
+  the same finding on a new head SHA re-notifies). Swallowed GitHub failures
+  append a loud `monitor.log` warning without blocking the run.
+- `repositories/issue.repository.ts` — `gh issue` create / find-by-title.
+- `repositories/wake-inbox.repository.ts` — durable `~/.rosetta/wake` emits.
+  `emitOnce` dedupes per (title, `occurrenceKey`); the occurrence is hashed
+  into the marker so a long dedupe key cannot truncate it away.
+- `services/ci-gate.service.ts` — the live CI gate (P3 T-03): waits a
+  bounded appear window for the pushed branch's check runs to register,
+  polls them to terminal, dispatches a fix agent on failure (failing logs in
+  the prompt, ≤3 attempts persisted in `ciFixAttempts`), pushes fixes, and
+  returns the post-cycle verdict with the cycle transcript as evidence;
+  honest `blocked` when the branch is not pushed or when checks never appear
+  within the window.
 - `services/digest.service.ts` — phase-boundary digest to the PRD-0007
   personal queue; append-only. Veto is a separate `check-veto` command
   that reads the item back (T-07 / P3 T-05).
+- `services/retro.service.ts` — `SPEC-BUG-*` phase-boundary retro: one
+  inference call over the spec Context + verdict/exception history,
+  committed as `sdlc.retro.v1` and linked from a `[retro]` queue item;
+  append-only, same idempotency contract as the digest (T-01).
 - `services/chronicle-commit.service.ts` — versioned run artifacts +
   merged-SHA / veto-revert recording (`sdlc.merge.v1`, `sdlc.revert.v1`),
-  committed per ADR-0007 (T-08 / P3 T-05).
+  committed per ADR-0007 (T-08 / P3 T-05); also annotates the affected
+  tasks' gate verdicts `stood` / `vetoed` via `sdlc.outcome.v1`
+  (BUG-reviewer-house-bar-P1 T-02).
 - `services/gate-policy-query.service.ts` — reads verdict artifacts back
   for gate-policy consumption (T-08).
 - `repositories/` — PRD parsing (`prd`), model transports (`anthropic`,
@@ -290,14 +751,22 @@ Handler / Service / Repository with InversifyJS (workspace rule):
   (`spec-file`), spec reads (`spec-doc`), git worktrees/diffs (`git`),
   workspace-mutating agent runs (`agent-runner`), resumable run state with
   the step graph (`run-state`), protected-surface map (`surface-map`),
-  `.sdlc/` contracts (`contract`), contract command execution
+  the optional review checklist (`review-checklist`), `.sdlc/` contracts
+  (`contract`), contract command execution
   (`shell-command`), evidence artifacts (`evidence`), PRD-0007 queue
   appends (`queue`), Chronicle ledger artifacts + ADR-0007 commits
-  (`chronicle-artifact`), GitHub check-run status (`ci-status`).
+  (`chronicle-artifact`), GitHub check-run status (`ci-status`), and the
+  `queue-run` durable launch queue — FIFO `<runsDir>/queue/<n>.json`
+  records deduped by spec path (`run-queue`, T-02).
 - `utils/` — pure functions: PRD parser, JSON-schema validator, spec renderer,
-  ADR-0008 format validator, spec parser (round-trip of the renderer), glob
-  matcher, criterion-tier parser, inputs digest (`digest`), and the
-  implementation / reviewer / verifier agent prompt builders.
+  ADR-0008 format validator, spec parser (round-trip of the renderer, now
+  including the Context section), spec format lint (`spec-lint`, the
+  hook/CI-safe pre-intake guard), glob matcher, criterion-tier parser,
+  inputs digest (`digest`), a `monitor.log` line appender (`monitor`),
+  queued-run argv construction (`queue-argv`, mirrors `supervise-argv` for
+  the launch queue), the optional review-checklist markdown parser
+  (`review-checklist`), and the implementation / reviewer / verifier /
+  retro agent prompt builders.
 
 ## Testing
 

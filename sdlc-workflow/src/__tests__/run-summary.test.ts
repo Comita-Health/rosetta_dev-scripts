@@ -41,6 +41,9 @@ const makeState = (overrides: Partial<RunState> = {}): RunState => ({
   steps: {},
   tokenSpendK: 0,
   ciFixAttempts: {},
+  gateFixAttempts: {},
+  remediations: {},
+  mergeBlockedRetries: 0,
   updatedAt: 'x',
   ...overrides
 });

@@ -25,7 +25,7 @@ same heuristics):
 | Signal | Examples |
 | ------ | -------- |
 | Label | `verify-live` or `live-verify` |
-| Paths | `accounts-frontend`, `AccountsAuthRedirect`, `accounts-redirect`, `comitaRedirect`, `return-to`, `session-expiry`, `deploy-organization.yml`, `frontend-accounts-stack`, `frontend-app.ts` |
+| Paths | `accounts-frontend`, `AccountsAuthRedirect`, `accounts-redirect`, `return-to`, `session-expiry`, `deploy-organization.yml`, `frontend-accounts-stack`, `frontend-app.ts` |
 | Title/body | `redirect_uri`, logout, cookie, SSO, Phase 0e, cutover, post-login, `accounts.dev` / `admit.dev` |
 
 When unsure, arm anyway and/or add the `verify-live` label.
@@ -53,29 +53,31 @@ When unsure, arm anyway and/or add the `verify-live` label.
 # From workspace root (paths work after team-setup update-config)
 bash .claude/skills/deploy-verify-watch/scripts/watch-deploy-verify.sh \
   --interval 30 \
-  --activate ~/.config/comita/github-app-activate.sh \
+  --activate ~/.config/rosetta/github-app-activate.sh \
   --workflow "Deploy Organization" \
   --environment dev \
   --frontend \
   --dispatch-on-arm \
   --kickoff \
-  Comita-Health/comita_admissions#296
+  Rosetta-Foundation/rosetta_dev-scripts#1
 ```
 
 Classify only:
 
 ```bash
 bash .claude/skills/deploy-verify-watch/scripts/watch-deploy-verify.sh \
-  --classify Comita-Health/comita_admissions#296
+  --classify Rosetta-Foundation/rosetta_dev-scripts#1
 # exit 0 = needs live verify
 ```
 
-Optional: `--activate ~/.config/rosetta/github-app-activate.sh` (Rosetta).
+Optional: `--activate ~/.config/<workspace>/github-app-activate.sh` for a
+consumer workspace.
 `--no-auto-dispatch` if you will dispatch manually but still want completion wakes.
 
 ## On wake
 
-1. `eval "$(bash ~/.config/<rosetta|comita>/github-app-activate.sh)"` when present.
+1. `eval "$(bash ~/.config/rosetta/github-app-activate.sh)"` by default, or
+   use the consumer workspace's `~/.config/<workspace>/github-app-activate.sh`.
 2. Read the wake JSON (`reason`, `sha`, `runUrl`, `target`).
 3. Act by reason:
    - `kickoff` / `deploy_dispatched` / `head_pushed`: wait for deploy outcome

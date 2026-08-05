@@ -72,11 +72,42 @@ describe('CursorCliRepository', () => {
     });
   });
 
+  it('reports a non-zero exit that produced no stderr at all', async () => {
+    // `spawnSync` omits stderr when the child is killed by a signal; reading
+    // it unguarded turned a CLI failure into an unrelated TypeError.
+    spawnMock.mockReturnValue({ status: 137, stdout: '' });
+
+    await expect(repo.complete('hi')).rejects.toMatchObject({
+      code: 'INFERENCE_FAILED',
+      details: ['']
+    });
+  });
+
   it('fails typed on empty output', async () => {
     spawnMock.mockReturnValue({ status: 0, stdout: '  \n', stderr: '' });
 
     await expect(repo.complete('hi')).rejects.toMatchObject({
       code: 'INFERENCE_FAILED'
     });
+  });
+
+  // SPEC-PRD-0021-P1 T-05. This transport carries the reviewer, verifier and
+  // decompose prompts; an inherited nested-agent marker surfaces here as the
+  // empty-output failure above, which reads as a model problem.
+  it('completes without the orchestrator nested-agent flags', async () => {
+    process.env.CURSOR_AGENT = '1';
+    process.env.CLAUDECODE = '1';
+    spawnMock.mockReturnValue({ status: 0, stdout: 'ok', stderr: '' });
+    try {
+      await repo.complete('hi');
+
+      const [, , options] = spawnMock.mock.calls[0];
+      expect(options.env.CURSOR_AGENT).toBeUndefined();
+      expect(options.env.CLAUDECODE).toBeUndefined();
+      expect(options.env.PATH).toBe(process.env.PATH);
+    } finally {
+      delete process.env.CURSOR_AGENT;
+      delete process.env.CLAUDECODE;
+    }
   });
 });

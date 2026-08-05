@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import 'reflect-metadata';
 import { Container } from 'inversify';
+import { readFileSync } from 'fs';
 import path from 'path';
 import chalk from 'chalk';
 import yargs from 'yargs';
@@ -51,14 +52,17 @@ import {
   IPullRequestRepository
 } from './repositories/pull-request.repository';
 import {
-  GitHubIssueRepository,
-  IGitHubIssueRepository
-} from './repositories/github-issue.repository';
-import { BlockerService, IBlockerService } from './services/blocker.service';
+  RunQueueRepository,
+  IRunQueueRepository
+} from './repositories/run-queue.repository';
 import {
   RunStateRepository,
   IRunStateRepository
 } from './repositories/run-state.repository';
+import {
+  RunLockRepository,
+  IRunLockRepository
+} from './repositories/run-lock.repository';
 import {
   SpecDocRepository,
   ISpecDocRepository
@@ -71,6 +75,10 @@ import {
   SurfaceMapRepository,
   ISurfaceMapRepository
 } from './repositories/surface-map.repository';
+import {
+  ReviewChecklistRepository,
+  IReviewChecklistRepository
+} from './repositories/review-checklist.repository';
 import {
   AggregatorService,
   IAggregatorService
@@ -106,6 +114,7 @@ import {
 } from './services/spec-synthesis.service';
 import { CiGateService, ICiGateService } from './services/ci-gate.service';
 import { DigestService, IDigestService } from './services/digest.service';
+import { RetroService, IRetroService } from './services/retro.service';
 import {
   ChronicleCommitService,
   IChronicleCommitService
@@ -123,6 +132,26 @@ import {
   IEscalationService
 } from './services/escalation.service';
 import {
+  GateRemediationService,
+  IGateRemediationService
+} from './services/gate-remediation.service';
+import {
+  RetryExecutorService,
+  IRetryExecutorService
+} from './services/retry-executor.service';
+import {
+  DeployRecordRepository,
+  IDeployRecordRepository
+} from './repositories/deploy-record.repository';
+import {
+  CloseoutAggregateService,
+  ICloseoutAggregateService
+} from './services/closeout-aggregate.service';
+import {
+  CloseoutService,
+  ICloseoutService
+} from './services/closeout.service';
+import {
   HeartbeatService,
   IHeartbeatService
 } from './services/heartbeat.service';
@@ -135,12 +164,26 @@ import {
   IProcessDetachRepository
 } from './repositories/process-detach.repository';
 import {
+  IssueRepository,
+  IIssueRepository
+} from './repositories/issue.repository';
+import {
+  SuperviseExitRepository,
+  ISuperviseExitRepository
+} from './repositories/supervise-exit.repository';
+import {
+  WakeInboxRepository,
+  IWakeInboxRepository
+} from './repositories/wake-inbox.repository';
+import {
   SuperviseService,
   ISuperviseService
 } from './services/supervise.service';
 import { WORKFLOW_TOKENS } from './tokens';
 import { WorkflowError } from './types';
 import { resolveInferenceBackend } from './utils/backend-select';
+import { runExitCode } from './utils/run-exit';
+import { lintSpec } from './utils/spec-lint';
 
 const container = new Container();
 const modelBinding = container.bind<IModelRepository>(
@@ -178,11 +221,17 @@ container
   .bind<IAgentRunnerRepository>(WORKFLOW_TOKENS.AgentRunnerRepository)
   .to(AgentRunnerRepository);
 container
+  .bind<IRunLockRepository>(WORKFLOW_TOKENS.RunLockRepository)
+  .to(RunLockRepository);
+container
   .bind<IRunStateRepository>(WORKFLOW_TOKENS.RunStateRepository)
   .to(RunStateRepository);
 container
   .bind<ISurfaceMapRepository>(WORKFLOW_TOKENS.SurfaceMapRepository)
   .to(SurfaceMapRepository);
+container
+  .bind<IReviewChecklistRepository>(WORKFLOW_TOKENS.ReviewChecklistRepository)
+  .to(ReviewChecklistRepository);
 container
   .bind<IExecutorService>(WORKFLOW_TOKENS.ExecutorService)
   .to(ExecutorService);
@@ -226,6 +275,7 @@ container
   .to(CiStatusRepository);
 container.bind<ICiGateService>(WORKFLOW_TOKENS.CiGateService).to(CiGateService);
 container.bind<IDigestService>(WORKFLOW_TOKENS.DigestService).to(DigestService);
+container.bind<IRetroService>(WORKFLOW_TOKENS.RetroService).to(RetroService);
 container
   .bind<IChronicleCommitService>(WORKFLOW_TOKENS.ChronicleCommitService)
   .to(ChronicleCommitService);
@@ -236,17 +286,32 @@ container
   .bind<IPullRequestRepository>(WORKFLOW_TOKENS.PullRequestRepository)
   .to(PullRequestRepository);
 container
-  .bind<IGitHubIssueRepository>(WORKFLOW_TOKENS.GitHubIssueRepository)
-  .to(GitHubIssueRepository);
+  .bind<IIssueRepository>(WORKFLOW_TOKENS.IssueRepository)
+  .to(IssueRepository);
 container
-  .bind<IBlockerService>(WORKFLOW_TOKENS.BlockerService)
-  .to(BlockerService);
+  .bind<IWakeInboxRepository>(WORKFLOW_TOKENS.WakeInboxRepository)
+  .to(WakeInboxRepository);
 container
   .bind<IPrLifecycleService>(WORKFLOW_TOKENS.PrLifecycleService)
   .to(PrLifecycleService);
 container
   .bind<IEscalationService>(WORKFLOW_TOKENS.EscalationService)
   .to(EscalationService);
+container
+  .bind<IGateRemediationService>(WORKFLOW_TOKENS.GateRemediationService)
+  .to(GateRemediationService);
+container
+  .bind<IRetryExecutorService>(WORKFLOW_TOKENS.RetryExecutorService)
+  .to(RetryExecutorService);
+container
+  .bind<IDeployRecordRepository>(WORKFLOW_TOKENS.DeployRecordRepository)
+  .to(DeployRecordRepository);
+container
+  .bind<ICloseoutAggregateService>(WORKFLOW_TOKENS.CloseoutAggregateService)
+  .to(CloseoutAggregateService);
+container
+  .bind<ICloseoutService>(WORKFLOW_TOKENS.CloseoutService)
+  .to(CloseoutService);
 container
   .bind<IHeartbeatService>(WORKFLOW_TOKENS.HeartbeatService)
   .to(HeartbeatService);
@@ -256,6 +321,12 @@ container
 container
   .bind<IProcessDetachRepository>(WORKFLOW_TOKENS.ProcessDetachRepository)
   .to(ProcessDetachRepository);
+container
+  .bind<ISuperviseExitRepository>(WORKFLOW_TOKENS.SuperviseExitRepository)
+  .to(SuperviseExitRepository);
+container
+  .bind<IRunQueueRepository>(WORKFLOW_TOKENS.RunQueueRepository)
+  .to(RunQueueRepository);
 container.bind<IRunHandler>(WORKFLOW_TOKENS.RunHandler).to(RunHandler);
 container
   .bind<ISuperviseService>(WORKFLOW_TOKENS.SuperviseService)
@@ -303,6 +374,47 @@ yargs(hideBin(process.argv))
         }
         process.exit(1);
       }
+    }
+  )
+  .command(
+    'spec-lint',
+    'Validate an ADR-0008 spec file: front-matter parse, envelope schema, and checkbox integrity — no LLM call, no --repo required (hook/CI safe)',
+    y =>
+      y.option('spec', {
+        type: 'string',
+        demandOption: true,
+        describe: 'Path to the implementation spec Markdown file'
+      }),
+    argv => {
+      let markdown: string;
+      try {
+        markdown = readFileSync(argv.spec, 'utf-8');
+      } catch {
+        console.error(
+          chalk.red(`\n✗ SPEC_MALFORMED: spec file not found: ${argv.spec}`)
+        );
+        process.exit(1);
+        return;
+      }
+      const report = lintSpec(markdown);
+      if (report.ok) {
+        console.log(
+          chalk.green(`✓ ${report.specId} — ${report.status} — spec-lint clean`)
+        );
+        console.log(
+          chalk.gray(
+            `  tasks: ${report.taskCount}, acceptance criteria: ${report.criterionCount}`
+          )
+        );
+        return;
+      }
+      console.error(
+        chalk.red(`\n✗ spec-lint found ${report.findings.length} issue(s):`)
+      );
+      for (const finding of report.findings) {
+        console.error(chalk.red(`  - ${finding.code}: ${finding.message}`));
+      }
+      process.exit(1);
     }
   )
   .command(
@@ -396,20 +508,12 @@ yargs(hideBin(process.argv))
           describe:
             'Upper bound on concurrently running implementation agents (P3 T-01)'
         })
-        // No `default` on either flag: yargs counts a defaulted option as
-        // supplied, so `.conflicts()` would fire on every invocation —
-        // including one that passes neither. Absent means enforcing.
         .option('shadow', {
           type: 'boolean',
+          default: false,
           describe:
             'Calibration mode: record gate verdicts but never merge (P3 T-04)'
         })
-        .option('enforce', {
-          type: 'boolean',
-          describe:
-            'Explicitly select enforcing mode (the default) — green gates auto-merge'
-        })
-        .conflicts('enforce', 'shadow')
         .option('heartbeat', {
           type: 'number',
           default: 30,
@@ -437,6 +541,11 @@ yargs(hideBin(process.argv))
           type: 'string',
           describe:
             'Supervise: path for the live heartbeat monitor log (default: <runsDir>/<runId>/monitor.log)'
+        })
+        .option('operator', {
+          type: 'string',
+          describe:
+            'GitHub login assigned on needs-human escalation issues (also SDLC_OPERATOR env)'
         }),
     async argv => {
       const supervise = container.get<ISuperviseService>(
@@ -447,6 +556,18 @@ yargs(hideBin(process.argv))
         `${path
           .basename(argv.spec)
           .replace(/\.md$/, '')}-${new Date().toISOString().slice(0, 10)}`;
+      const operatorFlag =
+        typeof argv.operator === 'string' ? argv.operator.trim() : '';
+      const operatorEnv =
+        typeof process.env.SDLC_OPERATOR === 'string'
+          ? process.env.SDLC_OPERATOR.trim()
+          : '';
+      const operator =
+        operatorFlag.length > 0
+          ? operatorFlag
+          : operatorEnv.length > 0
+            ? operatorEnv
+            : undefined;
       try {
         const result = await supervise.run({
           specPath: argv.spec,
@@ -455,26 +576,103 @@ yargs(hideBin(process.argv))
           runsDir: argv['runs-dir'],
           chronicleRepo: argv['chronicle-repo'],
           maxParallel: argv['max-parallel'],
-          shadow: argv.shadow === true,
+          shadow: argv.shadow,
           heartbeatSeconds: argv.heartbeat,
           supervise: argv.supervise === true || argv.detach === true,
           detach: argv.detach === true,
           maxWaves: argv['max-waves'],
-          monitorPath: argv.monitor
+          monitorPath: argv.monitor,
+          operator,
+          launchArgv: process.argv
         });
         if (result.kind === 'detached') {
           process.exit(0);
         }
-        if (result.kind === 'failed') {
+        // Refused intake, blocked wave, or task failure all exit non-zero
+        // (#37 / fail-loud T-01) — mapping lives in utils for testability.
+        if (runExitCode(result) !== 0) {
           process.exit(1);
         }
-        const last = result.lastWave;
-        if (last !== undefined) {
-          const anyFailed = last.tasks.some(task => task.kind === 'failed');
-          if (last.outcome === 'blocked' || anyFailed) {
-            process.exit(1);
+      } catch (err) {
+        if (err instanceof WorkflowError) {
+          console.error(chalk.red(`\n✗ ${err.code}: ${err.message}`));
+          for (const detail of err.details) {
+            console.error(chalk.red(`  - ${detail}`));
           }
+        } else {
+          console.error(chalk.red(`\n✗ ${err}`));
         }
+        process.exit(1);
+      }
+    }
+  )
+  .command(
+    'queue-run',
+    'Write a durable launch record for a spec, launched detached when the current supervised run completes and the spec is Approved (T-02)',
+    y =>
+      y
+        .option('spec', {
+          type: 'string',
+          demandOption: true,
+          describe: 'Path to the spec to launch when its turn comes'
+        })
+        .option('repo', {
+          type: 'string',
+          demandOption: true,
+          describe: 'Path to the target repo the queued run will execute in'
+        })
+        .option('run-id', {
+          type: 'string',
+          describe: 'Stable run identifier for the queued launch'
+        })
+        .option('runs-dir', {
+          type: 'string',
+          default: path.join(os.homedir(), '.rosetta', 'sdlc-runs'),
+          describe: 'Directory holding run state and the launch queue'
+        })
+        .option('chronicle-repo', {
+          type: 'string',
+          describe: 'Personal Chronicle ledger repo for the queued run'
+        })
+        .option('max-parallel', {
+          type: 'number',
+          default: 3,
+          describe: 'Concurrent implementation agents for the queued run'
+        })
+        .option('heartbeat', {
+          type: 'number',
+          default: 30,
+          describe: 'Heartbeat interval (seconds) for the queued run'
+        })
+        .option('max-waves', {
+          type: 'number',
+          default: 20,
+          describe: 'Max wave iterations for the queued run'
+        })
+        .option('monitor', {
+          type: 'string',
+          describe: 'Monitor log path override for the queued run'
+        })
+        .option('operator', {
+          type: 'string',
+          describe:
+            'GitHub login assigned on needs-human escalation issues for the queued run'
+        }),
+    argv => {
+      const handler = container.get<IRunHandler>(WORKFLOW_TOKENS.RunHandler);
+      try {
+        handler.queueRun({
+          specPath: argv.spec,
+          repoPath: argv.repo,
+          runId: argv['run-id'],
+          runsDir: argv['runs-dir'],
+          chronicleRepo: argv['chronicle-repo'],
+          maxParallel: argv['max-parallel'],
+          heartbeatSeconds: argv.heartbeat,
+          maxWaves: argv['max-waves'],
+          monitorPath: argv.monitor,
+          operator: argv.operator
+        });
       } catch (err) {
         if (err instanceof WorkflowError) {
           console.error(chalk.red(`\n✗ ${err.code}: ${err.message}`));
@@ -531,8 +729,8 @@ yargs(hideBin(process.argv))
           runsDir: argv['runs-dir'],
           runId: argv['run-id'],
           mergedSha: argv.sha,
-          taskId: argv.task,
-          repoPath: argv.repo
+          repoPath: argv.repo,
+          taskId: argv.task
         });
       } catch (err) {
         if (err instanceof WorkflowError) {
@@ -595,30 +793,45 @@ yargs(hideBin(process.argv))
     }
   )
   .command(
-    'status',
-    'Show a run: task results, cached step graph, verdicts, exceptions (T-09)',
+    'closeout',
+    "Generate or refresh a spec's closeout PR from a run's recorded verdicts — checkboxes and status: Done are derived, never authored (SPEC-PRD-0023-P1)",
     y =>
       y
         .option('run-id', {
           type: 'string',
           demandOption: true,
-          describe: 'Run identifier to inspect'
+          describe: 'Run whose recorded verdicts the closeout derives from'
+        })
+        .option('spec', {
+          type: 'string',
+          demandOption: true,
+          describe: 'Path to the spec to close out (inside --repo)'
+        })
+        .option('repo', {
+          type: 'string',
+          demandOption: true,
+          describe: 'Path to the repo owning the spec'
         })
         .option('runs-dir', {
           type: 'string',
           default: path.join(os.homedir(), '.rosetta', 'sdlc-runs'),
           describe: 'Directory holding run state'
         }),
-    argv => {
+    async argv => {
       const handler = container.get<IRunHandler>(WORKFLOW_TOKENS.RunHandler);
       try {
-        handler.showStatus({
+        await handler.closeout({
           runsDir: argv['runs-dir'],
-          runId: argv['run-id']
+          runId: argv['run-id'],
+          repoPath: argv.repo,
+          specPath: argv.spec
         });
       } catch (err) {
         if (err instanceof WorkflowError) {
           console.error(chalk.red(`\n✗ ${err.code}: ${err.message}`));
+          for (const detail of err.details) {
+            console.error(chalk.red(`  - ${detail}`));
+          }
         } else {
           console.error(chalk.red(`\n✗ ${err}`));
         }
@@ -627,60 +840,44 @@ yargs(hideBin(process.argv))
     }
   )
   .command(
-    'blockers',
-    'Report which needs-human issues for a run the human has cleared',
+    'status',
+    'Show a run: task results, cached step graph, verdicts, exceptions (T-09); or list the launch queue with --queue (T-02)',
     y =>
       y
         .option('run-id', {
           type: 'string',
-          demandOption: true,
           describe: 'Run identifier to inspect'
-        })
-        .option('repo', {
-          type: 'string',
-          demandOption: true,
-          describe: 'Target repo the needs-human issues were filed against'
         })
         .option('runs-dir', {
           type: 'string',
           default: path.join(os.homedir(), '.rosetta', 'sdlc-runs'),
           describe: 'Directory holding run state'
         })
-        .option('json', {
+        .option('queue', {
           type: 'boolean',
           default: false,
-          describe: 'Emit machine-readable JSON (used by the daemon)'
+          describe: 'List queued launch records instead of a run (T-02)'
         }),
     argv => {
-      const blockers = container.get<IBlockerService>(
-        WORKFLOW_TOKENS.BlockerService
-      );
+      const handler = container.get<IRunHandler>(WORKFLOW_TOKENS.RunHandler);
       try {
-        const report = blockers.query({
-          runsDir: argv['runs-dir'],
-          runId: argv['run-id'],
-          repoPath: argv.repo
-        });
-        if (argv.json) {
-          console.log(JSON.stringify(report));
+        if (argv.queue === true) {
+          handler.listQueue({ runsDir: argv['runs-dir'] });
           return;
         }
-        if (report.blockers.length === 0) {
-          console.log(chalk.green(`No recorded blockers for ${report.runId}.`));
-          return;
-        }
-        for (const blocker of report.blockers) {
-          const mark =
-            blocker.state === 'cleared' ? chalk.green('✓') : chalk.yellow('•');
-          console.log(
-            `  ${mark} ${blocker.taskId} — ${blocker.trigger} (${blocker.state})`
+        if (argv['run-id'] === undefined) {
+          console.error(
+            chalk.red(
+              '\n✗ status requires --run-id (or --queue to list the launch queue)'
+            )
           );
+          process.exit(1);
+          return;
         }
-        console.log(
-          report.resumable
-            ? chalk.green('\nAll blockers cleared — safe to resume.')
-            : chalk.yellow('\nOpen blockers remain; resuming will re-stall.')
-        );
+        handler.showStatus({
+          runsDir: argv['runs-dir'],
+          runId: argv['run-id']
+        });
       } catch (err) {
         if (err instanceof WorkflowError) {
           console.error(chalk.red(`\n✗ ${err.code}: ${err.message}`));

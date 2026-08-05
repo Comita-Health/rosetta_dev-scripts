@@ -1,4 +1,5 @@
 import { parseAllCriteria, parseCriterionTier } from '../utils/criterion-tier';
+import { RECOGNIZED_TIERS } from '../utils/spec-lint';
 
 describe('parseCriterionTier', () => {
   it('parses each known tier prefix', () => {
@@ -9,6 +10,18 @@ describe('parseCriterionTier', () => {
     });
     expect(parseCriterionTier('agent: probes the sandbox').tier).toBe('agent');
     expect(parseCriterionTier('manual: sign-off').tier).toBe('manual');
+    expect(parseCriterionTier('docs: README covers the contract').tier).toBe(
+      'docs'
+    );
+  });
+
+  it('accepts every tier the format lint accepts', () => {
+    // These two lists drifted over `docs:`: intake passed the lint and then
+    // verification threw on the first docs criterion, which also took closeout
+    // down when it read the same spec back.
+    for (const tier of RECOGNIZED_TIERS) {
+      expect(parseCriterionTier(`${tier}: something`).tier).toBe(tier);
+    }
   });
 
   it('rejects a missing prefix', () => {

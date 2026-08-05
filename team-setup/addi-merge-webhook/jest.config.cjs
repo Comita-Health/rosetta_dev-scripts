@@ -17,7 +17,12 @@ module.exports = {
     '^(\\.{1,2}/.*)\\.js$': '$1'
   },
   testMatch: ['**/__tests__/**/*.test.ts'],
-  collectCoverageFrom: ['src/**/*.ts', '!src/index.ts'],
+  collectCoverageFrom: [
+    'src/**/*.ts',
+    '!src/index.ts',
+    '!src/lambda.ts',
+    '!src/composition.ts'
+  ],
   coverageThreshold: {
     global: {
       branches: 80,

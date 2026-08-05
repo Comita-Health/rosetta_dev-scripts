@@ -131,6 +131,37 @@ describe('DigestService (T-07 phase-boundary digest)', () => {
     expect(appendItem.mock.calls[0][1]).toContain('phase');
   });
 
+  // SPEC-PRD-0023-P1 T-05: the closeout PR is reachable from the run's own
+  // Chronicle record, so "was this phase documented" is answerable from the
+  // ledger rather than from someone's memory of a PR number.
+  it('links the closeout PR into the phase artifact once one exists', async () => {
+    const outcome = await service.post({
+      ...INPUT,
+      taskId: 'phase',
+      merges: [{ taskId: 'T-01', mergedSha: 'aaa' }],
+      closeoutPrUrl: 'https://github.com/o/r/pull/12'
+    });
+
+    expect(outcome.digest.closeoutPr).toBe('https://github.com/o/r/pull/12');
+    expect(writeArtifact).toHaveBeenCalledWith(
+      '/chronicle',
+      'run-1',
+      'digest-phase',
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          closeoutPr: 'https://github.com/o/r/pull/12'
+        })
+      })
+    );
+  });
+
+  it('populates no closeout link for a phase that has none yet', async () => {
+    const outcome = await service.post({ ...INPUT, taskId: 'phase' });
+
+    expect(outcome.digest.closeoutPr).toBeUndefined();
+    expect(Object.keys(outcome.digest)).not.toContain('closeoutPr');
+  });
+
   it('re-posting is a no-op append (resume never duplicates the digest)', async () => {
     await service.post(INPUT);
     appendItem.mockReturnValue(false); // title already present in queue.md

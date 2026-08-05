@@ -1,13 +1,20 @@
 import 'reflect-metadata';
 import { Container } from 'inversify';
-import type { IGitHubIssueRepository } from '../repositories/github-issue.repository';
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'fs';
+import os from 'os';
+import path from 'path';
+import type { IIssueRepository } from '../repositories/issue.repository';
 import type { IQueueRepository } from '../repositories/queue.repository';
+import {
+  WakeInboxRepository,
+  type IWakeInboxRepository
+} from '../repositories/wake-inbox.repository';
 import {
   EscalationService,
   IEscalationService,
-  NEEDS_HUMAN_LABEL,
   escalationTitle
 } from '../services/escalation.service';
+import { WorkflowError } from '../types';
 import { WORKFLOW_TOKENS } from '../tokens';
 import { ExceptionEntry } from '../types';
 
@@ -21,34 +28,47 @@ const entry = (
   recordedAt: 'x'
 });
 
-describe('EscalationService (P3 T-06)', () => {
+describe('EscalationService (P3 T-06 + fail-loud T-04)', () => {
   let service: IEscalationService;
   let appendItem: jest.Mock;
-  let upsert: jest.Mock;
+  let findByTitle: jest.Mock;
+  let createIssue: jest.Mock;
+  let wakeRepo: IWakeInboxRepository;
+  let wakeDir: string;
+  let monitorPath: string;
+  let tmpRoot: string;
 
   beforeEach(() => {
+    tmpRoot = mkdtempSync(path.join(os.tmpdir(), 'escalate-'));
+    wakeDir = path.join(tmpRoot, 'wake');
+    monitorPath = path.join(tmpRoot, 'monitor.log');
+
     appendItem = jest.fn().mockReturnValue(true);
-    upsert = jest.fn().mockReturnValue({
-      number: 7,
-      url: 'https://github.com/o/r/issues/7',
-      state: 'OPEN'
+    findByTitle = jest.fn().mockReturnValue(null);
+    createIssue = jest.fn().mockReturnValue({
+      url: 'https://github.com/org/repo/issues/7',
+      number: 7
     });
+
     const container = new Container();
     container
       .bind<IQueueRepository>(WORKFLOW_TOKENS.QueueRepository)
       .toConstantValue({ appendItem, itemTags: jest.fn() });
     container
-      .bind<IGitHubIssueRepository>(WORKFLOW_TOKENS.GitHubIssueRepository)
-      .toConstantValue({
-        upsert,
-        findOpenByLabel: jest.fn(),
-        isResolved: jest.fn(),
-        ensureLabel: jest.fn()
-      });
+      .bind<IIssueRepository>(WORKFLOW_TOKENS.IssueRepository)
+      .toConstantValue({ findByTitle, create: createIssue });
+    container
+      .bind<IWakeInboxRepository>(WORKFLOW_TOKENS.WakeInboxRepository)
+      .to(WakeInboxRepository);
     container
       .bind<IEscalationService>(WORKFLOW_TOKENS.EscalationService)
       .to(EscalationService);
     service = container.get(WORKFLOW_TOKENS.EscalationService);
+    wakeRepo = container.get(WORKFLOW_TOKENS.WakeInboxRepository);
+  });
+
+  afterEach(() => {
+    rmSync(tmpRoot, { recursive: true, force: true });
   });
 
   it.each([
@@ -63,10 +83,10 @@ describe('EscalationService (P3 T-06)', () => {
         chronicleRepo: '/chronicle',
         runId: 'run-1',
         entries: [entry(trigger)],
-        evidenceIds: ['T-01-reviewer-transcript']
+        evidenceIds: ['T-01-reviewer-transcript'],
+        wakeDir
       });
 
-      expect(outcome.posted).toHaveLength(1);
       expect(outcome.posted[0]).toBe(escalationTitle('run-1', entry(trigger)));
       const [, title, tags] = appendItem.mock.calls[0];
       expect(title).toContain('T-01');
@@ -82,167 +102,273 @@ describe('EscalationService (P3 T-06)', () => {
     }
   );
 
-  it('skips posting without a chronicle repo and is idempotent by title', () => {
-    expect(
-      service.post({
-        runId: 'run-1',
-        entries: [entry('envelope-breach')]
-      }).posted
-    ).toEqual([]);
+  it('skips the queue without a chronicle repo but still wakes', () => {
+    const outcome = service.post({
+      runId: 'run-1',
+      entries: [entry('envelope-breach')],
+      wakeDir
+    });
     expect(appendItem).not.toHaveBeenCalled();
+    expect(createIssue).not.toHaveBeenCalled();
+    expect(outcome.wakes).toHaveLength(1);
+  });
 
+  it('is idempotent by title for queue + wake across resume', () => {
     appendItem.mockReturnValueOnce(true).mockReturnValueOnce(false);
     const first = service.post({
       chronicleRepo: '/chronicle',
       runId: 'run-1',
-      entries: [entry('envelope-breach')]
+      entries: [entry('envelope-breach')],
+      wakeDir
     });
     const second = service.post({
       chronicleRepo: '/chronicle',
       runId: 'run-1',
-      entries: [entry('envelope-breach')]
+      entries: [entry('envelope-breach')],
+      wakeDir
     });
     expect(first.posted).toHaveLength(1);
+    expect(first.wakes).toHaveLength(1);
+    expect(second.wakes).toHaveLength(0);
     expect(second.posted).toHaveLength(0);
   });
 
-  it('files a needs-human issue keyed by run/task/trigger with the unblock command', () => {
-    const outcome = service.post({
-      repoPath: '/repo',
-      runId: 'run-1',
-      entries: [entry('envelope-breach')],
-      evidenceIds: ['T-01-diff']
-    });
-
-    expect(outcome.issueUrls).toEqual(['https://github.com/o/r/issues/7']);
-    const [call] = upsert.mock.calls;
-    expect(call[0].key).toBe('run-1/T-01/envelope-breach');
-    expect(call[0].labels).toEqual(
-      expect.arrayContaining([
-        NEEDS_HUMAN_LABEL,
-        'sdlc-run:run-1',
-        'trigger:envelope-breach',
-        'task:T-01'
-      ])
-    );
-    expect(call[0].body).toContain('envelope-breach detail');
-    expect(call[0].body).toContain('allowedPaths');
-    expect(call[0].body).toContain('Close this issue');
-  });
-
-  it('carries a task-specific remedy for manual-criterion stalls', () => {
-    service.post({
-      repoPath: '/repo',
-      runId: 'run-1',
-      entries: [entry('manual-criterion')]
-    });
-
-    expect(upsert.mock.calls[0][0].body).toContain('record-merge');
-  });
-
-  it('skips the issue surface without a repo path', () => {
+  it('with an operator configured, posted needs-human issues include the assignee', () => {
     const outcome = service.post({
       chronicleRepo: '/chronicle',
       runId: 'run-1',
-      entries: [entry('no-commit')]
-    });
-
-    expect(upsert).not.toHaveBeenCalled();
-    expect(outcome.issueUrls).toEqual([]);
-    expect(outcome.posted).toHaveLength(1);
-  });
-
-  // Every trigger must carry a next action. A trigger that falls through to
-  // the generic remedy leaves the human in exactly the state the surface
-  // exists to fix: told something is wrong, not told what to do.
-  it.each([
-    ['reviewer-disagreement', 'reviewer transcript'],
-    ['envelope-breach', 'allowedPaths'],
-    ['ci-fix-attempts-exhausted', 'three CI fixes'],
-    ['budget-exhaustion', 'budgetK'],
-    ['merge-blocked', 'Clear the red gate'],
-    ['manual-criterion', 'record-merge'],
-    ['no-commit', 'without committing anything'],
-    ['agent-timeout', 'wall-clock budget'],
-    ['pr-open-failed', 'GitHub App'],
-    ['supervisor-died', 'supervise.log'],
-    ['phase-blocked-on-unmerged', 'every task is merged']
-  ] as const)('carries a %s-specific remedy', (trigger, expected) => {
-    service.post({
       repoPath: '/repo',
-      runId: 'run-1',
-      entries: [entry(trigger)]
+      operator: 'russwatson',
+      entries: [entry('merge-blocked')],
+      monitorPath,
+      wakeDir
     });
 
-    expect(upsert.mock.calls[0][0].body).toContain(expected);
-  });
-
-  it('falls back to a generic remedy for an unrecognized trigger', () => {
-    service.post({
-      repoPath: '/repo',
-      runId: 'run-1',
-      entries: [entry('something-new' as ExceptionEntry['trigger'])]
-    });
-
-    expect(upsert.mock.calls[0][0].body).toContain(
-      'Resume once the blocker is cleared'
+    expect(createIssue).toHaveBeenCalledTimes(1);
+    const [, input] = createIssue.mock.calls[0];
+    expect(input.assignee).toBe('russwatson');
+    expect(input.title).toBe(escalationTitle('run-1', entry('merge-blocked')));
+    expect(outcome.issues[input.title]).toBe(
+      'https://github.com/org/repo/issues/7'
     );
   });
 
-  it('does nothing at all when there are no entries', () => {
+  it('without an operator, issues still post and monitor.log warns about no assignee', () => {
     const outcome = service.post({
       chronicleRepo: '/chronicle',
-      repoPath: '/repo',
       runId: 'run-1',
-      entries: []
+      repoPath: '/repo',
+      entries: [entry('merge-blocked')],
+      monitorPath,
+      wakeDir
     });
 
-    expect(outcome).toEqual({ posted: [], issueUrls: [] });
-    expect(appendItem).not.toHaveBeenCalled();
-    expect(upsert).not.toHaveBeenCalled();
+    expect(createIssue).toHaveBeenCalledTimes(1);
+    const [, input] = createIssue.mock.calls[0];
+    expect(input.assignee).toBeUndefined();
+    expect(outcome.posted.length).toBeGreaterThan(0);
+
+    const monitor = readFileSync(monitorPath, 'utf8');
+    expect(monitor).toContain('WARNING: no operator configured');
+    expect(monitor).toContain('without assignee');
   });
 
-  it('notes the absence of context rather than filing an empty issue', () => {
-    service.post({
-      repoPath: '/repo',
+  it('every escalation entry emits exactly one wake event (idempotent across resume)', () => {
+    const entries = [
+      entry('envelope-breach', 'T-01'),
+      entry('merge-blocked', 'T-02')
+    ];
+    const first = service.post({
+      chronicleRepo: '/chronicle',
       runId: 'run-1',
-      entries: [
-        { trigger: 'no-commit', taskId: 'T-01', context: [], recordedAt: 'x' }
-      ]
-    });
-
-    expect(upsert.mock.calls[0][0].body).toContain(
-      'no additional context recorded'
-    );
-  });
-
-  it('omits the task label for a run-level escalation', () => {
-    service.post({
       repoPath: '/repo',
-      runId: 'run-1',
-      entries: [
-        { trigger: 'supervisor-died', context: ['exited 1'], recordedAt: 'x' }
-      ]
+      operator: 'ops',
+      entries,
+      wakeDir
     });
+    expect(first.wakes).toHaveLength(2);
 
-    const { labels, body } = upsert.mock.calls[0][0];
-    expect(labels).not.toContain('task:undefined');
-    expect(body).toContain('run-level');
+    findByTitle.mockReturnValue({
+      url: 'https://github.com/org/repo/issues/7',
+      number: 7
+    });
+    appendItem.mockReturnValue(false);
+    const second = service.post({
+      chronicleRepo: '/chronicle',
+      runId: 'run-1',
+      repoPath: '/repo',
+      operator: 'ops',
+      entries,
+      wakeDir
+    });
+    expect(second.wakes).toHaveLength(0);
+    expect(createIssue).toHaveBeenCalledTimes(2);
+
+    // Two pending wake files from the first call; resume did not add more.
+    const pending = path.join(wakeDir, 'pending');
+    const files = readdirSync(pending).filter(f => f.endsWith('.json'));
+    expect(files).toHaveLength(2);
   });
 
-  it('keeps the queue item when GitHub is unreachable', () => {
-    upsert.mockImplementation(() => {
-      throw new Error('gh issue create failed');
+  it('a failed GitHub issue post appends a visible monitor.log warning while the run continues', () => {
+    // Real IssueRepository shape: the gh stderr lives in WorkflowError
+    // details, not the message — the loud line must surface both.
+    createIssue.mockImplementation(() => {
+      throw new WorkflowError('gh issue failed', 'GH_FAILED', [
+        'HTTP 403: Resource not accessible by integration'
+      ]);
     });
 
     const outcome = service.post({
       chronicleRepo: '/chronicle',
-      repoPath: '/repo',
       runId: 'run-1',
-      entries: [entry('agent-timeout')]
+      repoPath: '/repo',
+      operator: 'ops',
+      entries: [entry('ci-fix-attempts-exhausted')],
+      monitorPath,
+      wakeDir
     });
 
-    expect(outcome.posted).toHaveLength(1);
-    expect(outcome.issueUrls).toEqual([]);
+    // Queue + wake still delivered; no throw.
+    expect(appendItem).toHaveBeenCalled();
+    expect(outcome.wakes).toHaveLength(1);
+    expect(outcome.issues).toEqual({});
+
+    const monitor = readFileSync(monitorPath, 'utf8');
+    expect(monitor).toContain(
+      'WARNING: failed to post needs-human GitHub issue'
+    );
+    expect(monitor).toContain('HTTP 403');
+  });
+
+  it('reuses an existing open issue by title instead of creating a duplicate', () => {
+    findByTitle.mockReturnValue({
+      url: 'https://github.com/org/repo/issues/3',
+      number: 3
+    });
+
+    const outcome = service.post({
+      runId: 'run-1',
+      repoPath: '/repo',
+      operator: 'ops',
+      entries: [entry('budget-exhaustion')],
+      wakeDir
+    });
+
+    expect(createIssue).not.toHaveBeenCalled();
+    expect(
+      outcome.issues[escalationTitle('run-1', entry('budget-exhaustion'))]
+    ).toBe('https://github.com/org/repo/issues/3');
+    expect(outcome.wakes).toHaveLength(1);
+  });
+
+  it('emitOnce on the wake repo itself is idempotent', () => {
+    const a = wakeRepo.emitOnce({
+      kind: 'sdlc_escalation',
+      dedupeKey: 'k',
+      prompt: 'p',
+      wakeDir
+    });
+    const b = wakeRepo.emitOnce({
+      kind: 'sdlc_escalation',
+      dedupeKey: 'k',
+      prompt: 'p',
+      wakeDir
+    });
+    expect(a).not.toBeNull();
+    expect(b).toBeNull();
+  });
+
+  // Wave 0: before this, a notified marker was never cleared and carried no
+  // occurrence component, so an escalation title woke a human exactly once
+  // ever — every recurrence against new content was silently swallowed.
+  it('emitOnce re-notifies for a new occurrence key and stays quiet for a repeat', () => {
+    const emit = (occurrenceKey: string): string | null =>
+      wakeRepo.emitOnce({
+        kind: 'sdlc_escalation',
+        dedupeKey: 'k',
+        prompt: 'p',
+        occurrenceKey,
+        wakeDir
+      });
+
+    expect(emit('sha-aaa')).not.toBeNull();
+    expect(emit('sha-aaa')).toBeNull(); // a resume, not new evidence
+    expect(emit('sha-bbb')).not.toBeNull(); // the fix pushed a new head
+    expect(emit('sha-bbb')).toBeNull();
+
+    // One pending file throughout: recurrence overwrites rather than
+    // piling up N inbox entries for one problem.
+    const files = readdirSync(path.join(wakeDir, 'pending')).filter(f =>
+      f.endsWith('.json')
+    );
+    expect(files).toHaveLength(1);
+  });
+
+  it('keeps occurrence keys distinct even when the dedupe key fills the slug budget and the keys share a long prefix', () => {
+    // Two length hazards at once: the title alone overflows the 96-char slug
+    // cap (so the suffix must be reserved before truncation), and the two
+    // occurrence keys differ only in their final character (so the suffix
+    // cannot itself be a truncation).
+    const longKey = `ACTION REQUIRED: SDLC ${'x'.repeat(80)} T-01 — reviewer-disagreement`;
+    const emit = (occurrenceKey: string): string | null =>
+      wakeRepo.emitOnce({
+        kind: 'sdlc_escalation',
+        dedupeKey: longKey,
+        prompt: 'p',
+        occurrenceKey,
+        wakeDir
+      });
+
+    expect(emit('0000000000000000000000000000000000000001')).not.toBeNull();
+    expect(emit('0000000000000000000000000000000000000002')).not.toBeNull();
+  });
+
+  // The engine passes `wakeDir` explicitly, but the daemon and hook scripts
+  // read the same inbox through ROSETTA_WAKE_DIR — an emit that ignored the
+  // env var would write somewhere nothing is watching.
+  it('falls back to ROSETTA_WAKE_DIR when no wake directory is passed', () => {
+    const envDir = path.join(tmpRoot, 'env-wake');
+    const prior = process.env.ROSETTA_WAKE_DIR;
+    process.env.ROSETTA_WAKE_DIR = envDir;
+    try {
+      const emitted = wakeRepo.emit({
+        kind: 'sdlc_escalation',
+        dedupeKey: 'env-k',
+        prompt: 'p'
+      });
+      expect(emitted.startsWith(path.join(envDir, 'pending'))).toBe(true);
+
+      const once = wakeRepo.emitOnce({
+        kind: 'sdlc_escalation',
+        dedupeKey: 'env-once',
+        prompt: 'p'
+      });
+      expect(once).not.toBeNull();
+      expect(
+        wakeRepo.emitOnce({
+          kind: 'sdlc_escalation',
+          dedupeKey: 'env-once',
+          prompt: 'p'
+        })
+      ).toBeNull();
+    } finally {
+      if (prior === undefined) delete process.env.ROSETTA_WAKE_DIR;
+      else process.env.ROSETTA_WAKE_DIR = prior;
+    }
+  });
+
+  it('escalation passes its occurrence key through to the wake marker', () => {
+    const post = (occurrenceKey: string) =>
+      service.post({
+        runId: 'run-1',
+        entries: [entry('reviewer-disagreement')],
+        occurrenceKey,
+        wakeDir
+      });
+
+    expect(post('head-1').wakes).toHaveLength(1);
+    expect(post('head-1').wakes).toHaveLength(0);
+    expect(post('head-2').wakes).toHaveLength(1);
   });
 });

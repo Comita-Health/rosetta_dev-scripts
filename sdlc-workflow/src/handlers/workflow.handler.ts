@@ -44,6 +44,7 @@ export class WorkflowHandler implements IWorkflowHandler {
       `Phase ${input.phase}`;
     const spec = await this._synthesis.synthesize(stories, {
       prdId: input.prdId,
+      repoPath: input.repoPath,
       phase: input.phase,
       phaseTitle,
       owner: prd.owner,
@@ -53,6 +54,9 @@ export class WorkflowHandler implements IWorkflowHandler {
     console.log(
       chalk.green(`  ✓ ${spec.specId}: ${spec.tasks.length} tasks synthesized`)
     );
+    for (const warning of spec.warnings) {
+      console.log(chalk.yellow(`  ⚠ ${warning}`));
+    }
 
     const specPath = this._specRepo.writeSpec(
       input.repoPath,

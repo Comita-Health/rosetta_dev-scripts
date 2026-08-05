@@ -11,6 +11,10 @@ import {
   RunStateRepository
 } from '../repositories/run-state.repository';
 import {
+  IRunLockRepository,
+  RunLockRepository
+} from '../repositories/run-lock.repository';
+import {
   ChronicleCommitService,
   IChronicleCommitService
 } from '../services/chronicle-commit.service';
@@ -78,6 +82,9 @@ const makeState = (): RunState => ({
   steps: {},
   tokenSpendK: 0,
   ciFixAttempts: {},
+  gateFixAttempts: {},
+  remediations: {},
+  mergeBlockedRetries: 0,
   updatedAt: 'x'
 });
 
@@ -103,6 +110,9 @@ describe('ChronicleCommitService + GatePolicyQueryService (T-08)', () => {
       )
       .to(ChronicleArtifactRepository);
     container
+      .bind<IRunLockRepository>(WORKFLOW_TOKENS.RunLockRepository)
+      .to(RunLockRepository);
+    container
       .bind<IRunStateRepository>(WORKFLOW_TOKENS.RunStateRepository)
       .to(RunStateRepository);
     container
@@ -117,7 +127,7 @@ describe('ChronicleCommitService + GatePolicyQueryService (T-08)', () => {
     query = container.get<IGatePolicyQueryService>(
       WORKFLOW_TOKENS.GatePolicyQueryService
     );
-    stateRepo = new RunStateRepository();
+    stateRepo = new RunStateRepository(new RunLockRepository());
   });
 
   afterEach(() => {
@@ -252,6 +262,86 @@ describe('ChronicleCommitService + GatePolicyQueryService (T-08)', () => {
     });
   });
 
+  it('BUG-reviewer-house-bar-P1 T-02: record-merge annotates the merged task\u2019s verdicts `stood`', async () => {
+    const state = makeState();
+    stateRepo.save(runsDir, state);
+
+    await service.recordMerge({
+      chronicleRepo: ledger,
+      runsDir,
+      runId: 'run-1',
+      mergedSha: 'abc123def456',
+      taskId: 'T-01'
+    });
+
+    const repo = new ChronicleArtifactRepository();
+    const outcomes = repo
+      .readArtifacts(ledger, 'run-1')
+      .filter(artifact => artifact.schema === 'sdlc.outcome.v1');
+    expect(outcomes).toHaveLength(2);
+    expect(outcomes.map(o => o.payload)).toEqual(
+      expect.arrayContaining([
+        {
+          taskId: 'T-01',
+          gate: 'envelope',
+          verdictInputsDigest: 'env-digest',
+          outcome: 'stood'
+        },
+        {
+          taskId: 'T-01',
+          gate: 'verification',
+          verdictInputsDigest: 'ver-digest',
+          outcome: 'stood'
+        }
+      ])
+    );
+  });
+
+  it('BUG-reviewer-house-bar-P1 T-02: record-merge without a task ID annotates nothing (run-level merges have no task verdicts)', async () => {
+    const state = makeState();
+    stateRepo.save(runsDir, state);
+
+    await service.recordMerge({
+      chronicleRepo: ledger,
+      runsDir,
+      runId: 'run-1',
+      mergedSha: 'abc123def456'
+    });
+
+    const repo = new ChronicleArtifactRepository();
+    const outcomes = repo
+      .readArtifacts(ledger, 'run-1')
+      .filter(artifact => artifact.schema === 'sdlc.outcome.v1');
+    expect(outcomes).toHaveLength(0);
+  });
+
+  it('BUG-reviewer-house-bar-P1 T-02: outcome records are idempotent across resume (no duplicates for the same run/task/gate)', async () => {
+    const state = makeState();
+    stateRepo.save(runsDir, state);
+
+    await service.recordMerge({
+      chronicleRepo: ledger,
+      runsDir,
+      runId: 'run-1',
+      mergedSha: 'abc123def456',
+      taskId: 'T-01'
+    });
+    // Resume replays the same recordMerge call.
+    await service.recordMerge({
+      chronicleRepo: ledger,
+      runsDir,
+      runId: 'run-1',
+      mergedSha: 'abc123def456',
+      taskId: 'T-01'
+    });
+
+    const repo = new ChronicleArtifactRepository();
+    const outcomes = repo
+      .readArtifacts(ledger, 'run-1')
+      .filter(artifact => artifact.schema === 'sdlc.outcome.v1');
+    expect(outcomes).toHaveLength(2); // one per gate, not four
+  });
+
   it('rejects record-merge for an unknown run', async () => {
     await expect(
       service.recordMerge({
@@ -291,5 +381,132 @@ describe('ChronicleCommitService + GatePolicyQueryService (T-08)', () => {
     expect(message).toContain(
       'chronicle(sdlc): run-1 veto revert at revert-sha'
     );
+  });
+
+  it('BUG-reviewer-house-bar-P1 T-02: check-veto\u2019s revert path annotates the reverted tasks\u2019 verdicts `vetoed`', async () => {
+    const revertedVerdicts = makeState().verdicts;
+
+    await service.recordRevert({
+      chronicleRepo: ledger,
+      runId: 'run-1',
+      specId: 'SPEC-X',
+      revertedShas: ['merge-1', 'merge-2'],
+      revertSha: 'revert-sha-abc',
+      prUrl: 'https://github.com/org/repo/pull/42',
+      revertedVerdicts
+    });
+
+    const repo = new ChronicleArtifactRepository();
+    const outcomes = repo
+      .readArtifacts(ledger, 'run-1')
+      .filter(artifact => artifact.schema === 'sdlc.outcome.v1');
+    expect(outcomes).toHaveLength(2);
+    expect(outcomes.map(o => o.payload)).toEqual(
+      expect.arrayContaining([
+        {
+          taskId: 'T-01',
+          gate: 'envelope',
+          verdictInputsDigest: 'env-digest',
+          outcome: 'vetoed'
+        },
+        {
+          taskId: 'T-01',
+          gate: 'verification',
+          verdictInputsDigest: 'ver-digest',
+          outcome: 'vetoed'
+        }
+      ])
+    );
+    // The revert payload itself stays unchanged by the outcome side effect.
+    const revert = repo
+      .readArtifacts(ledger, 'run-1')
+      .find(artifact => artifact.schema === 'sdlc.revert.v1');
+    expect(revert?.payload).toEqual({
+      revertedShas: ['merge-1', 'merge-2'],
+      revertSha: 'revert-sha-abc',
+      prUrl: 'https://github.com/org/repo/pull/42',
+      trigger: 'queue-veto'
+    });
+  });
+
+  it('BUG-reviewer-house-bar-P1 T-02: a multi-task revert where two tasks share a gate name writes an outcome for both tasks, not just one', async () => {
+    // Regression for a dedup bug: the outcome-writer's collapse map was
+    // keyed by gate name alone, so two reverted tasks sharing a gate name
+    // (the common case — most tasks in a phase run through 'envelope' and
+    // 'verification') silently dropped all but one task's outcome record.
+    const revertedVerdicts = [
+      {
+        gate: 'envelope',
+        taskId: 'T-01',
+        outcome: 'pass' as const,
+        wouldEscalate: false,
+        reasons: [],
+        inputsDigest: 'env-digest-t01',
+        recordedAt: 'x'
+      },
+      {
+        gate: 'envelope',
+        taskId: 'T-02',
+        outcome: 'pass' as const,
+        wouldEscalate: false,
+        reasons: [],
+        inputsDigest: 'env-digest-t02',
+        recordedAt: 'x'
+      }
+    ];
+
+    await service.recordRevert({
+      chronicleRepo: ledger,
+      runId: 'run-1',
+      specId: 'SPEC-X',
+      revertedShas: ['merge-1', 'merge-2'],
+      revertSha: 'revert-sha-abc',
+      prUrl: 'https://github.com/org/repo/pull/42',
+      revertedVerdicts
+    });
+
+    const repo = new ChronicleArtifactRepository();
+    const outcomes = repo
+      .readArtifacts(ledger, 'run-1')
+      .filter(artifact => artifact.schema === 'sdlc.outcome.v1');
+    expect(outcomes).toHaveLength(2); // one per (taskId, gate), not one per gate
+    expect(outcomes.map(o => o.payload)).toEqual(
+      expect.arrayContaining([
+        {
+          taskId: 'T-01',
+          gate: 'envelope',
+          verdictInputsDigest: 'env-digest-t01',
+          outcome: 'vetoed'
+        },
+        {
+          taskId: 'T-02',
+          gate: 'envelope',
+          verdictInputsDigest: 'env-digest-t02',
+          outcome: 'vetoed'
+        }
+      ])
+    );
+  });
+
+  it('BUG-reviewer-house-bar-P1 T-02: revert outcome records are idempotent across resume (no duplicates for the same run/task/gate)', async () => {
+    const revertedVerdicts = makeState().verdicts;
+    const input = {
+      chronicleRepo: ledger,
+      runId: 'run-1',
+      specId: 'SPEC-X',
+      revertedShas: ['merge-1', 'merge-2'],
+      revertSha: 'revert-sha-abc',
+      prUrl: 'https://github.com/org/repo/pull/42',
+      revertedVerdicts
+    };
+
+    await service.recordRevert(input);
+    await service.recordRevert(input); // resume replays the same call
+
+    const repo = new ChronicleArtifactRepository();
+    const outcomes = repo
+      .readArtifacts(ledger, 'run-1')
+      .filter(artifact => artifact.schema === 'sdlc.outcome.v1');
+    expect(outcomes).toHaveLength(2); // one per gate, not four
   });
 });

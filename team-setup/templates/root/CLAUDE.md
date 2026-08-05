@@ -1,35 +1,28 @@
-# Comita Health — Engineering Workspace
+# Rosetta — Engineering Workspace
 
-This is the **Comita Health LLC** engineering workspace. It adopts
-[Rosetta](https://github.com/Rosetta-Foundation) as its shared memory layer and
-methodology: Chronicle is the memory, Wayfinder is the guide. Engine repos
-(`rosetta_*`) are cloned from Rosetta-Foundation; Comita app repos live in
-`Comita-Health`.
-
-> Connected care. Better outcomes.
+This is a **Rosetta** engineering workspace. Chronicle is the memory; Wayfinder
+is the guide. Engine repos (`rosetta_*`) live under
+[Rosetta-Foundation](https://github.com/Rosetta-Foundation). Consumer product
+repos, when present, live in the consumer's own GitHub org and are listed only
+in that consumer's workspace config — never hardcoded upstream.
 
 Agent tooling is dual-compatible: **Claude Code** and **Cursor Agent / CLI**.
 See `AGENTS.md` for the Cursor-oriented map; this file is the shared brief both
 tools load.
 
-## Healthcare Guardrails (non-negotiable)
+## Domain guardrails
 
-- **PHI is categorically out of scope** for chronicle capture and for git.
-  Never commit clinical data, patient identifiers, or production dumps.
-- **The promotion gate is the compliance boundary** — knowledge moves from a
-  personal chronicle to the org chronicle only by deliberate, reviewed
-  promotion (PRD-0006 / PRD-0009).
-- Prefer **local / self-hosted** options (ADR-0005) and **local inference**
-  (PRD-0016) for anything that cannot transit external APIs.
-- Provenance trailers and evidence links are the audit trail (ADR-0007).
-
-See `comita_docs/docs/policies/healthcare-guardrails.md` once published.
+Consumers own domain policy (what must never enter git, what surfaces are
+forbidden, what "verified" means). Declare it in the consumer's docs and in
+`.sdlc/` contracts — not by patching Rosetta engine defaults. See
+[ADR-0009](https://github.com/Rosetta-Foundation/rosetta_docs/blob/main/architecture/ADR-0009-platform-boundary-mechanism-vs-policy.md).
 
 ## Foundations — Read First
 
-`rosetta_docs/foundations/` is the project's constitution — founding context, manifesto,
-principles, glossary, and settled decisions. Read it before making architectural or product
-decisions. When implementation and philosophy conflict, philosophy wins.
+`rosetta_docs/foundations/` is the project's constitution — founding context,
+manifesto, principles, glossary, and settled decisions. Read it before making
+architectural or product decisions. When implementation and philosophy
+conflict, philosophy wins.
 
 ## SDLC runs (default supervise pattern)
 
@@ -67,17 +60,16 @@ Always use `bun` over `npm`/`yarn` (`bun install`, `bun run <script>`).
 ## Folder Structure
 
 ```
-comita/
-├── rosetta_dev-scripts/     Workspace tooling (Comita-Health fork of team-setup)
-├── rosetta_docs/            Rosetta PRDs, ADRs, foundations (upstream)
-├── rosetta_chronicle/       Memory engine (upstream)
-├── rosetta_wayfinder/       Knowledge guide (upstream)
-├── comita_docs/             Company docs, brand, policies
-├── comita_admissions/       Production app — referral & admissions management
+rosetta/
+├── rosetta_dev-scripts/     Workspace tooling (team-setup + sdlc-workflow)
+├── rosetta_docs/            PRDs, ADRs, foundations
+├── rosetta_chronicle/       Memory engine
+├── rosetta_wayfinder/       Knowledge guide
 └── rosetta_chronicle_<you>/ Personal chronicle (in your GitHub account)
 ```
 
-Each repo has a `CLAUDE.md` describing its purpose and structure.
+Consumer workspaces add their own product repos beside these. Each repo has a
+`CLAUDE.md` describing its purpose and structure.
 
 ## Architecture — Handler / Service / Repository (MANDATORY)
 
@@ -180,7 +172,7 @@ When work is complete, push the branch and open a PR **as Addi** (never as the
 human `gh` user — humans must Approve agent PRs):
 
 ```bash
-eval "$(bash ~/.config/comita/github-app-activate.sh)"   # or rosetta for Rosetta-Foundation
+eval "$(bash ~/.config/rosetta/github-app-activate.sh)"
 gh api graphql -f query='query { viewer { login } }' --jq '.data.viewer.login'  # must be *addi*[bot]
 git push -u origin HEAD
 gh pr create --title "…" --body "$(cat <<'EOF'
@@ -189,7 +181,8 @@ EOF
 )"
 ```
 
-See `.claude/rules/addi-authorship.md`. Same rule for `gh issue create`.
+Consumer workspaces use their own activate script under `~/.config/<workspace>/`
+instead. See `.claude/rules/addi-authorship.md`. Same rule for `gh issue create`.
 
 **No tool marketing in PR bodies or commits.** Never include `Made with Cursor`,
 `Made-with: Cursor`, or similar AI-tool footers/trailers. Prefer `--body` /

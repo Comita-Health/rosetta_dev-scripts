@@ -7,7 +7,7 @@
 identity for GitHub writes. Official identity is `cursor` (comments/reviews/team
 PRs) or the creating user’s personal OAuth (private automations). There is no
 supported “run as GitHub App X” switch. Therefore the unattended Approve →
-merge path that preserves Addi (`rosetta-s-addi-m[bot]` / Comita
+merge path that preserves Addi (`rosetta-s-addi-m[bot]` / consumer-org
 `addi-m[bot]`) is GHA + installation token, not Cursor Automations.
 
 Local `pr-approve-watch` is demoted to Request-changes + comment triage when
@@ -103,25 +103,8 @@ cron further.
 ## Follow-ups
 
 - Extract reusable workflow under `.github/workflows/reusable-*.yml` and
-  enable in `rosetta_docs` / Comita repos.
+  enable in `rosetta_docs` / consumer repos.
 - Optional second job: on `CONFLICTING`, open a tracking comment that pings
   Slack or files a short issue.
 - Keep IDE `pr-approve-watch` for comment triage until that logic is ported
   into an Addi-authenticated agent job (harder; not this spike).
-
-
-## Comita Health rollout
-
-Pilot repos: `Comita-Health/rosetta_dev-scripts`, then
-`Comita-Health/comita_admissions` (copy the same workflow file).
-
-| Item | Comita value |
-| ---- | ------------ |
-| App slug | `addi-m` |
-| Author logins | `app/addi-m`, `addi-m[bot]` |
-| Org vars | `ADDI_CLIENT_ID`, `ADDI_MERGE_ON_APPROVE=true` |
-| Org secret | `ADDI_APP_PRIVATE_KEY` |
-| Default branch (admissions) | `build-env/dev` (workflow is branch-agnostic) |
-
-Activate locally with `~/.config/comita/github-app-activate.sh`. Do not use the
-Rosetta App token against Comita repos.

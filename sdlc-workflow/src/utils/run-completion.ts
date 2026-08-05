@@ -1,3 +1,4 @@
+import type { PrState } from '../repositories/pull-request.repository';
 import type { RunState, SpecDocument } from '../types';
 
 /**
@@ -19,6 +20,42 @@ export const allTasksMerged = (
     return result?.mergedSha !== undefined && result.mergedSha.length > 0;
   });
 };
+
+/**
+ * True when a closeout PR state counts as "the phase is documented"
+ * (SPEC-PRD-0023-P1 T-04).
+ *
+ * @remarks
+ * `OPEN` counts because the human Approve on the closeout PR is a wanted
+ * touchpoint, not a blocker — a phase whose closeout is awaiting review is
+ * complete, and treating it as incomplete would strand the run. `CLOSED`
+ * (unmerged) does not count: someone rejected the closeout, so the phase's
+ * documentation was deliberately not accepted.
+ */
+export const closeoutSatisfies = (state: PrState): boolean =>
+  state === 'OPEN' || state === 'MERGED';
+
+/**
+ * True when every task has merged **and** the phase's closeout PR exists
+ * (SPEC-PRD-0023-P1 T-04) — the phase-completion predicate the supervisor and
+ * the run digest both report from.
+ *
+ * @remarks
+ * "All tasks merged" was necessary but never sufficient: merged code with no
+ * derived spec closeout is exactly the debt this phase exists to stop
+ * accruing, and reporting it as complete is what let five specs land while
+ * still reading as Approved. `closeoutPr` must be resolved live by the caller
+ * (see {@link IPullRequestRepository.latestForBranch}); passing a cached value
+ * would report a phase complete after its closeout PR was closed.
+ */
+export const phaseComplete = (
+  spec: SpecDocument,
+  state: RunState | null,
+  closeoutPr: { state: PrState } | null
+): boolean =>
+  allTasksMerged(spec, state) &&
+  closeoutPr !== null &&
+  closeoutSatisfies(closeoutPr.state);
 
 /**
  * True when at least one task completed implementation but is not yet merged

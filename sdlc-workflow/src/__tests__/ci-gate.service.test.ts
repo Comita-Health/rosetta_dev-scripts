@@ -25,6 +25,9 @@ const makeState = (): RunState => ({
   steps: {},
   tokenSpendK: 0,
   ciFixAttempts: {},
+  gateFixAttempts: {},
+  remediations: {},
+  mergeBlockedRetries: 0,
   updatedAt: 'x'
 });
 
@@ -44,7 +47,11 @@ describe('CiGateService (P3 T-03 live monitor + bounded fix cycle)', () => {
   let commit: jest.Mock;
   let recordCiFixAttempt: jest.Mock;
 
-  const input = () => ({
+  // `checksAppearTimeoutMs` is deliberately tiny by default: most cases here
+  // assert what happens when the window *expires*, which cannot race. Cases
+  // that assert checks arriving in time pass a window wide enough that a
+  // loaded machine cannot expire it between two mocked polls.
+  const input = (over: Record<string, unknown> = {}) => ({
     repoPath: '/repo',
     worktreePath: '/runs/run-1/worktrees/T-01',
     branch: 'sdlc/run-1/T-01',
@@ -54,7 +61,10 @@ describe('CiGateService (P3 T-03 live monitor + bounded fix cycle)', () => {
     state,
     budgetK: 200,
     pollIntervalMs: 1,
-    timeoutMs: 5_000
+    timeoutMs: 5_000,
+    checksAppearTimeoutMs: 20,
+    checksAppearPollIntervalMs: 1,
+    ...over
   });
 
   beforeEach(() => {
@@ -98,12 +108,16 @@ describe('CiGateService (P3 T-03 live monitor + bounded fix cycle)', () => {
         diffText: jest.fn(),
         fetch: jest.fn(),
         resolveSha: jest.fn(),
+        treeSha: jest.fn(),
+        worktreeForBranch: jest.fn(),
+        refExists: jest.fn().mockReturnValue(false),
         defaultBranch: jest.fn(),
-        fileAtRef: jest.fn().mockReturnValue(null),
-        pathDiffersFromRef: jest.fn().mockReturnValue(false),
+        fileAtRef: jest.fn(),
+        pathDiffersFromRef: jest.fn(),
         revertMerge: jest.fn(),
         stageAll,
         commit,
+        listFiles: jest.fn().mockReturnValue([]),
         removeWorktreeAsync: jest.fn()
       });
     container
@@ -126,7 +140,11 @@ describe('CiGateService (P3 T-03 live monitor + bounded fix cycle)', () => {
           .mockImplementation((_d, s: RunState, delta: number) => {
             s.tokenSpendK = (s.tokenSpendK ?? 0) + delta;
             return s.tokenSpendK;
-          })
+          }),
+        recordGateFixAttempt: jest.fn(),
+        recordRemediation: jest.fn(),
+        recordMergeBlockedRetry: jest.fn(),
+        invalidateSteps: jest.fn().mockReturnValue([])
       });
     container
       .bind<ICiGateService>(WORKFLOW_TOKENS.CiGateService)
@@ -134,49 +152,79 @@ describe('CiGateService (P3 T-03 live monitor + bounded fix cycle)', () => {
     gate = container.get<ICiGateService>(WORKFLOW_TOKENS.CiGateService);
   });
 
-  it('blocks honestly when the commit has no CI results (not pushed)', async () => {
+  it('blocks honestly when the commit still has no CI results after the appear window', async () => {
     checkRuns.mockReturnValue(null);
 
     const verdict = await gate.monitor(input());
 
     expect(verdict.gate).toBe('ci');
     expect(verdict.outcome).toBe('blocked');
-    expect(verdict.wouldEscalate).toBe(false);
+    // Wave 0: absence outlasting the appear window is a real problem —
+    // unpushed branch or unavailable `gh` — so it escalates rather than
+    // sitting in the ledger as a non-escalating block.
+    expect(verdict.wouldEscalate).toBe(true);
     expect(verdict.reasons[0]).toContain('no CI results for abc123');
+    expect(verdict.reasons[0]).toContain('after waiting');
     expect(verdict.taskId).toBe('T-01');
     expect(agentRun).not.toHaveBeenCalled();
   });
 
-  it('waits for check runs to register before treating zero as terminal', async () => {
-    checkRuns
-      .mockReturnValueOnce({ total: 0, failed: [], pending: [] })
-      .mockReturnValueOnce({ total: 0, failed: [], pending: [] })
-      .mockReturnValue(green);
-
-    const verdict = await gate.monitor({
-      ...input(),
-      pollIntervalMs: 1,
-      timeoutMs: 5_000
-    });
-
-    expect(verdict.outcome).toBe('pass');
-    expect(verdict.transcript).toContain(
-      'waiting for check runs to register for abc123'
-    );
-    expect(checkRuns).toHaveBeenCalledTimes(3);
-  });
-
-  it('blocks when zero check runs persist through the deadline', async () => {
+  it('blocks when the commit reports zero check runs for the whole appear window', async () => {
     checkRuns.mockReturnValue({ total: 0, failed: [], pending: [] });
 
+    const verdict = await gate.monitor(input());
+
+    expect(verdict.outcome).toBe('blocked');
+    expect(verdict.wouldEscalate).toBe(true);
+    expect(verdict.reasons[0]).toContain('no check runs');
+  });
+
+  // Wave 0's headline fix. Every one of the 16 blocked CI verdicts in the
+  // historical corpus was this shape: the engine polled once before GitHub
+  // registered the workflow runs, called it blocked, and escalated a run
+  // whose CI went on to pass.
+  it('waits for check runs to register rather than blocking on their absence', async () => {
+    checkRuns
+      .mockReturnValueOnce(null) // push not visible to gh yet
+      .mockReturnValueOnce({ total: 0, failed: [], pending: [] }) // sha known, no runs
+      .mockReturnValueOnce({ total: 2, failed: [], pending: ['ci'] }) // registered
+      .mockReturnValue(green);
+
+    const verdict = await gate.monitor(
+      input({ checksAppearTimeoutMs: 30_000 })
+    );
+
+    expect(verdict.outcome).toBe('pass');
+    expect(verdict.transcript).toContain('waiting for check runs to register');
+    expect(checkRuns).toHaveBeenCalledTimes(4);
+    expect(agentRun).not.toHaveBeenCalled();
+  });
+
+  it('restarts the appear window for each pushed fix SHA', async () => {
+    checkRuns
+      .mockReturnValueOnce(red) // abc123 fails → fix agent
+      .mockReturnValueOnce(null) // fixed sha not yet visible
+      .mockReturnValue(green); // then green
+
+    const verdict = await gate.monitor(
+      input({ checksAppearTimeoutMs: 30_000 })
+    );
+
+    expect(verdict.outcome).toBe('pass');
+    expect(verdict.reasons[0]).toContain('fixed-sha-1');
+    expect(agentRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('honours checksAppearTimeoutMs=0 as "absence is terminal" (single poll)', async () => {
+    checkRuns.mockReturnValue(null);
+
     const verdict = await gate.monitor({
       ...input(),
-      pollIntervalMs: 1,
-      timeoutMs: 5
+      checksAppearTimeoutMs: 0
     });
 
     expect(verdict.outcome).toBe('blocked');
-    expect(verdict.reasons[0]).toContain('no check runs');
+    expect(checkRuns).toHaveBeenCalledTimes(1);
   });
 
   it('polls pending checks to terminal and passes on green with evidence', async () => {
@@ -285,6 +333,25 @@ describe('CiGateService (P3 T-03 live monitor + bounded fix cycle)', () => {
     expect(push).not.toHaveBeenCalled();
     expect(verdict.outcome).toBe('breach');
     expect(verdict.transcript).toContain('produced no commit');
+  });
+
+  it('a fix agent that cannot be dispatched spends the attempt and re-polls', async () => {
+    checkRuns.mockReturnValue(red);
+    agentRun.mockRejectedValue(new Error('agent binary not on PATH'));
+
+    const verdict = await gate.monitor(input());
+
+    // Charging the attempt matters: an agent that cannot start will not start
+    // on the next pass either, and an uncharged attempt would spin forever.
+    expect(recordCiFixAttempt).toHaveBeenCalledTimes(CI_FIX_ATTEMPT_LIMIT);
+    // The dispatch is billed even when it throws — the tokens are spent
+    // whether or not the agent got far enough to help.
+    expect(state.tokenSpendK).toBeGreaterThan(0);
+    expect(push).not.toHaveBeenCalled();
+    expect(verdict.outcome).toBe('breach');
+    expect(verdict.transcript).toContain(
+      'fix agent dispatch failed: agent binary not on PATH'
+    );
   });
 
   it('engine-commits a dirty CI fix worktree when the agent left no tip advance (#41)', async () => {

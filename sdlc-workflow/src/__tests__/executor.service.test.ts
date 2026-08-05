@@ -1,11 +1,14 @@
 import 'reflect-metadata';
 import { Container } from 'inversify';
+import { existsSync, mkdtempSync, rmSync } from 'fs';
+import os from 'os';
 import path from 'path';
 import type { IAgentRunnerRepository } from '../repositories/agent-runner.repository';
 import type { IGitRepository } from '../repositories/git.repository';
 import type { IRunStateRepository } from '../repositories/run-state.repository';
+import { RunStateRepository } from '../repositories/run-state.repository';
+import { RunLockRepository } from '../repositories/run-lock.repository';
 import type { ISpecDocRepository } from '../repositories/spec-doc.repository';
-import type { ISurfaceMapRepository } from '../repositories/surface-map.repository';
 import {
   ExecutorService,
   IExecutorService,
@@ -14,7 +17,6 @@ import {
 } from '../services/executor.service';
 import { WORKFLOW_TOKENS } from '../tokens';
 import { RunState, SpecDocument, stepKey } from '../types';
-import { inputsDigest } from '../utils/digest';
 import { makeEnvelope, makeTask } from './fixtures';
 
 const makeSpec = (overrides: Partial<SpecDocument> = {}): SpecDocument => ({
@@ -49,6 +51,9 @@ const baseState = (): RunState => ({
   steps: {},
   tokenSpendK: 0,
   ciFixAttempts: {},
+  gateFixAttempts: {},
+  remediations: {},
+  mergeBlockedRetries: 0,
   updatedAt: 'x'
 });
 
@@ -56,7 +61,6 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
   let executor: IExecutorService;
   let specRead: jest.Mock;
   let specReadAtRef: jest.Mock;
-  let surfaceLoad: jest.Mock;
   let gitMock: jest.Mocked<IGitRepository>;
   let agentRun: jest.Mock;
   let stateMock: jest.Mocked<IRunStateRepository>;
@@ -64,11 +68,6 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
   beforeEach(() => {
     specRead = jest.fn().mockReturnValue(makeSpec());
     specReadAtRef = jest.fn().mockReturnValue(makeSpec());
-    // The fixture envelope forbids 'ci-config'; the map must define it or
-    // every task blocks at intake on an unresolvable surface label.
-    surfaceLoad = jest
-      .fn()
-      .mockReturnValue({ 'ci-config': ['.github/workflows/**'] });
     gitMock = {
       // The primary checkout is at base-sha; a worktree the agent committed
       // in reports a new head (the no-commit guard compares the two).
@@ -84,12 +83,16 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
       push: jest.fn(),
       fetch: jest.fn(),
       resolveSha: jest.fn(),
+      treeSha: jest.fn(),
+      worktreeForBranch: jest.fn(),
+      refExists: jest.fn().mockReturnValue(false),
       defaultBranch: jest.fn().mockReturnValue('build-env/dev'),
-      fileAtRef: jest.fn().mockReturnValue('spec contents'),
+      fileAtRef: jest.fn(),
       pathDiffersFromRef: jest.fn().mockReturnValue(false),
       revertMerge: jest.fn(),
       stageAll: jest.fn(),
       commit: jest.fn(),
+      listFiles: jest.fn().mockReturnValue([]),
       removeWorktreeAsync: jest.fn()
     };
     agentRun = jest.fn().mockResolvedValue({ ok: true, output: 'done' });
@@ -119,16 +122,17 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
         .mockImplementation((_d, state: RunState, delta: number) => {
           state.tokenSpendK = (state.tokenSpendK ?? 0) + delta;
           return state.tokenSpendK;
-        })
+        }),
+      recordGateFixAttempt: jest.fn(),
+      recordRemediation: jest.fn(),
+      recordMergeBlockedRetry: jest.fn(),
+      invalidateSteps: jest.fn().mockReturnValue([])
     };
 
     const container = new Container();
     container
       .bind<ISpecDocRepository>(WORKFLOW_TOKENS.SpecDocRepository)
       .toConstantValue({ read: specRead, readAtRef: specReadAtRef });
-    container
-      .bind<ISurfaceMapRepository>(WORKFLOW_TOKENS.SurfaceMapRepository)
-      .toConstantValue({ load: surfaceLoad });
     container
       .bind<IGitRepository>(WORKFLOW_TOKENS.GitRepository)
       .toConstantValue(gitMock);
@@ -165,56 +169,6 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
     expect(gitMock.addWorktree).not.toHaveBeenCalled();
   });
 
-  // The envelope gate fails closed on a label it cannot resolve, so a
-  // forbiddenSurfaces entry the repo never defined breaches every task no
-  // matter what the diff contains. Catching it at intake costs nothing;
-  // catching it at the gate costs a full wave of agent work first.
-  it('blocks at intake on a forbiddenSurfaces label the repo does not define', async () => {
-    specReadAtRef.mockReturnValue(
-      makeSpec({
-        envelope: makeEnvelope({
-          forbiddenSurfaces: ['ci-config', 'migrations']
-        })
-      })
-    );
-
-    const pool = await executor.executeReady(INPUT);
-
-    expect(pool.kind).toBe('blocked');
-    expect(pool.detail).toBe('invalid-spec');
-    expect(stateMock.appendVerdict).toHaveBeenCalledWith(
-      '/runs',
-      expect.anything(),
-      expect.objectContaining({
-        gate: 'intake',
-        outcome: 'blocked',
-        wouldEscalate: true,
-        reasons: expect.arrayContaining([
-          'invalid-spec',
-          expect.stringContaining('migrations')
-        ])
-      })
-    );
-    // Nothing may be spent before the spec is known to be runnable.
-    expect(agentRun).not.toHaveBeenCalled();
-    expect(gitMock.addWorktree).not.toHaveBeenCalled();
-  });
-
-  it('reports the labels the repo does define, so the fix is obvious', async () => {
-    specReadAtRef.mockReturnValue(
-      makeSpec({ envelope: makeEnvelope({ forbiddenSurfaces: ['frontend'] }) })
-    );
-
-    await executor.executeReady(INPUT);
-
-    const verdict = stateMock.appendVerdict.mock.calls[0][2];
-    expect(verdict.reasons.join(' ')).toContain('defined: ci-config');
-  });
-
-  // The gate is a human approving the PR that lands the spec, so the only
-  // spec an enforcing run may execute is the one on the default branch.
-  // Without this an agent flips `status: Approved` in its own checkout and
-  // launches -- which is exactly how the first canary skipped its own gate.
   describe('spec provenance', () => {
     it('blocks when the spec has not landed on the default branch', async () => {
       specReadAtRef.mockReturnValue(null);
@@ -247,7 +201,7 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
     it('refuses a spec outside the repo, which has nothing to compare to', async () => {
       const pool = await executor.executeReady({
         ...INPUT,
-        specPath: '/elsewhere/spec.md'
+        specPath: '/outside/spec.md'
       });
 
       expect(pool.kind).toBe('blocked');
@@ -272,13 +226,6 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
       expect(specRead).toHaveBeenCalled();
       expect(specReadAtRef).not.toHaveBeenCalled();
     });
-  });
-
-  it('does not block when every forbidden label resolves', async () => {
-    const pool = await executor.executeReady(INPUT);
-
-    expect(pool.kind).not.toBe('blocked');
-    expect(surfaceLoad).toHaveBeenCalledWith('/repo');
   });
 
   it('starts only tasks whose dependencies are merged', async () => {
@@ -328,533 +275,6 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
     expect(agentRun).not.toHaveBeenCalled();
   });
 
-  it('re-selects a red-phase task when tip advanced after verification breach', async () => {
-    const tipHead = 'fixed-tip-sha';
-    gitMock.headSha.mockImplementation((repoPath: string) =>
-      repoPath.includes('worktrees') ? tipHead : 'base-sha'
-    );
-    const { mkdtempSync, mkdirSync, rmSync } = await import('fs');
-    const { tmpdir } = await import('os');
-    const runsDir = mkdtempSync(path.join(tmpdir(), 'sdlc-recover-'));
-    const wt = path.join(runsDir, INPUT.runId, 'worktrees', 'T-01');
-    mkdirSync(wt, { recursive: true });
-
-    const state = baseState();
-    const digest = implementationDigest(makeSpec().tasks[0], 'base-sha');
-    const staleVerifyDigest = inputsDigest({
-      implDigest: digest,
-      headSha: 'old-failing-tip',
-      criteria: makeSpec().tasks[0].acceptanceCriteria
-    });
-    state.taskResults['T-01'] = {
-      taskId: 'T-01',
-      status: 'completed',
-      branch: 'sdlc/run-1/T-01',
-      inputsDigest: digest,
-      recordedAt: 'x'
-    };
-    state.steps[stepKey('implementation', 'T-01', digest)] = {
-      name: 'implementation',
-      taskId: 'T-01',
-      inputsDigest: digest,
-      completedAt: 'x'
-    };
-    state.steps[stepKey('verification', 'T-01', staleVerifyDigest)] = {
-      name: 'verification',
-      taskId: 'T-01',
-      inputsDigest: staleVerifyDigest,
-      completedAt: 'x',
-      verdict: {
-        gate: 'verification',
-        outcome: 'breach',
-        wouldEscalate: true,
-        reasons: ['tests failed'],
-        recordedAt: 'x'
-      }
-    };
-    state.steps[stepKey('phase', 'T-01', 'p')] = {
-      name: 'phase',
-      taskId: 'T-01',
-      inputsDigest: 'p',
-      completedAt: 'y',
-      verdict: {
-        gate: 'phase',
-        outcome: 'breach',
-        wouldEscalate: true,
-        reasons: ['failing gates: verification'],
-        recordedAt: 'y'
-      }
-    };
-    stateMock.load.mockReturnValue(state);
-
-    try {
-      const pool = await executor.executeReady({ ...INPUT, runsDir });
-      expect(pool.kind).toBe('executed');
-      expect(pool.outcomes.map(o => o.task.id)).toEqual(['T-01']);
-    } finally {
-      rmSync(runsDir, { recursive: true, force: true });
-    }
-  });
-
-  it('re-selects a red-phase task when only the envelope gate digest is stale vs tip', async () => {
-    const tipHead = 'envelope-fixed-tip';
-    gitMock.headSha.mockImplementation((repoPath: string) =>
-      repoPath.includes('worktrees') ? tipHead : 'base-sha'
-    );
-    const { mkdtempSync, mkdirSync, rmSync } = await import('fs');
-    const { tmpdir } = await import('os');
-    const runsDir = mkdtempSync(path.join(tmpdir(), 'sdlc-env-recover-'));
-    const wt = path.join(runsDir, INPUT.runId, 'worktrees', 'T-01');
-    mkdirSync(wt, { recursive: true });
-
-    const spec = makeSpec();
-    const state = baseState();
-    const digest = implementationDigest(spec.tasks[0], 'base-sha');
-    const staleEnvelopeDigest = inputsDigest({
-      implDigest: digest,
-      headSha: 'old-envelope-tip',
-      envelope: spec.envelope,
-      baseRef: 'base-sha'
-    });
-    // Fresh verification (pass) so redGates must walk past it to the stale
-    // envelope leg of the || chain.
-    const freshVerifyDigest = inputsDigest({
-      implDigest: digest,
-      headSha: tipHead,
-      criteria: spec.tasks[0].acceptanceCriteria
-    });
-    state.taskResults['T-01'] = {
-      taskId: 'T-01',
-      status: 'completed',
-      branch: 'sdlc/run-1/T-01',
-      inputsDigest: digest,
-      recordedAt: 'x'
-    };
-    state.steps[stepKey('implementation', 'T-01', digest)] = {
-      name: 'implementation',
-      taskId: 'T-01',
-      inputsDigest: digest,
-      completedAt: 'x'
-    };
-    state.steps[stepKey('verification', 'T-01', freshVerifyDigest)] = {
-      name: 'verification',
-      taskId: 'T-01',
-      inputsDigest: freshVerifyDigest,
-      completedAt: 'x',
-      verdict: {
-        gate: 'verification',
-        outcome: 'pass',
-        wouldEscalate: false,
-        reasons: [],
-        recordedAt: 'x'
-      }
-    };
-    state.steps[stepKey('envelope', 'T-01', staleEnvelopeDigest)] = {
-      name: 'envelope',
-      taskId: 'T-01',
-      inputsDigest: staleEnvelopeDigest,
-      completedAt: 'x',
-      verdict: {
-        gate: 'envelope',
-        outcome: 'breach',
-        wouldEscalate: true,
-        reasons: ['specs/** mid-run'],
-        recordedAt: 'x'
-      }
-    };
-    state.steps[stepKey('phase', 'T-01', 'p')] = {
-      name: 'phase',
-      taskId: 'T-01',
-      inputsDigest: 'p',
-      completedAt: 'y',
-      verdict: {
-        gate: 'phase',
-        outcome: 'breach',
-        wouldEscalate: true,
-        reasons: ['failing gates: envelope'],
-        recordedAt: 'y'
-      }
-    };
-    stateMock.load.mockReturnValue(state);
-
-    try {
-      const pool = await executor.executeReady({ ...INPUT, runsDir });
-      expect(pool.kind).toBe('executed');
-      expect(pool.outcomes.map(o => o.task.id)).toEqual(['T-01']);
-    } finally {
-      rmSync(runsDir, { recursive: true, force: true });
-    }
-  });
-
-  it('re-selects a red-phase task when only the reviewer gate digest is stale vs tip', async () => {
-    const tipHead = 'reviewer-fixed-tip';
-    gitMock.headSha.mockImplementation((repoPath: string) =>
-      repoPath.includes('worktrees') ? tipHead : 'base-sha'
-    );
-    const { mkdtempSync, mkdirSync, rmSync } = await import('fs');
-    const { tmpdir } = await import('os');
-    const runsDir = mkdtempSync(path.join(tmpdir(), 'sdlc-rev-recover-'));
-    const wt = path.join(runsDir, INPUT.runId, 'worktrees', 'T-01');
-    mkdirSync(wt, { recursive: true });
-
-    const spec = makeSpec();
-    const state = baseState();
-    const digest = implementationDigest(spec.tasks[0], 'base-sha');
-    const staleReviewerDigest = inputsDigest({
-      implDigest: digest,
-      headSha: 'old-reviewer-tip',
-      task: spec.tasks[0],
-      baseRef: 'base-sha'
-    });
-    state.taskResults['T-01'] = {
-      taskId: 'T-01',
-      status: 'completed',
-      branch: 'sdlc/run-1/T-01',
-      inputsDigest: digest,
-      recordedAt: 'x'
-    };
-    state.steps[stepKey('implementation', 'T-01', digest)] = {
-      name: 'implementation',
-      taskId: 'T-01',
-      inputsDigest: digest,
-      completedAt: 'x'
-    };
-    state.steps[stepKey('reviewer', 'T-01', staleReviewerDigest)] = {
-      name: 'reviewer',
-      taskId: 'T-01',
-      inputsDigest: staleReviewerDigest,
-      completedAt: 'x',
-      verdict: {
-        gate: 'reviewer',
-        outcome: 'breach',
-        wouldEscalate: true,
-        reasons: ['hard findings'],
-        recordedAt: 'x'
-      }
-    };
-    state.steps[stepKey('phase', 'T-01', 'p')] = {
-      name: 'phase',
-      taskId: 'T-01',
-      inputsDigest: 'p',
-      completedAt: 'y',
-      verdict: {
-        gate: 'phase',
-        outcome: 'breach',
-        wouldEscalate: true,
-        reasons: ['failing gates: reviewer'],
-        recordedAt: 'y'
-      }
-    };
-    stateMock.load.mockReturnValue(state);
-
-    try {
-      const pool = await executor.executeReady({ ...INPUT, runsDir });
-      expect(pool.kind).toBe('executed');
-      expect(pool.outcomes.map(o => o.task.id)).toEqual(['T-01']);
-    } finally {
-      rmSync(runsDir, { recursive: true, force: true });
-    }
-  });
-
-  it('re-selects a red-phase task when only the CI gate digest is stale vs tip', async () => {
-    const tipHead = 'ci-fixed-tip';
-    gitMock.headSha.mockImplementation((repoPath: string) =>
-      repoPath.includes('worktrees') ? tipHead : 'base-sha'
-    );
-    const { mkdtempSync, mkdirSync, rmSync } = await import('fs');
-    const { tmpdir } = await import('os');
-    const runsDir = mkdtempSync(path.join(tmpdir(), 'sdlc-ci-stale-'));
-    const wt = path.join(runsDir, INPUT.runId, 'worktrees', 'T-01');
-    mkdirSync(wt, { recursive: true });
-
-    const state = baseState();
-    const digest = implementationDigest(makeSpec().tasks[0], 'base-sha');
-    const staleCiDigest = inputsDigest({
-      implDigest: digest,
-      headSha: 'old-ci-tip',
-      gate: 'ci'
-    });
-    state.taskResults['T-01'] = {
-      taskId: 'T-01',
-      status: 'completed',
-      branch: 'sdlc/run-1/T-01',
-      inputsDigest: digest,
-      recordedAt: 'x'
-    };
-    state.steps[stepKey('implementation', 'T-01', digest)] = {
-      name: 'implementation',
-      taskId: 'T-01',
-      inputsDigest: digest,
-      completedAt: 'x'
-    };
-    state.steps[stepKey('ci', 'T-01', staleCiDigest)] = {
-      name: 'ci',
-      taskId: 'T-01',
-      inputsDigest: staleCiDigest,
-      completedAt: 'x',
-      verdict: {
-        gate: 'ci',
-        outcome: 'breach',
-        wouldEscalate: true,
-        reasons: ['check failed: test'],
-        recordedAt: 'x'
-      }
-    };
-    state.steps[stepKey('phase', 'T-01', 'p')] = {
-      name: 'phase',
-      taskId: 'T-01',
-      inputsDigest: 'p',
-      completedAt: 'y',
-      verdict: {
-        gate: 'phase',
-        outcome: 'breach',
-        wouldEscalate: true,
-        reasons: ['failing gates: ci'],
-        recordedAt: 'y'
-      }
-    };
-    stateMock.load.mockReturnValue(state);
-
-    try {
-      const pool = await executor.executeReady({ ...INPUT, runsDir });
-      expect(pool.kind).toBe('executed');
-      expect(pool.outcomes.map(o => o.task.id)).toEqual(['T-01']);
-    } finally {
-      rmSync(runsDir, { recursive: true, force: true });
-    }
-  });
-
-  it('re-selects a red-phase task when latest CI is a retryable empty-checks block', async () => {
-    // No worktree tip — recoverability comes solely from latestCiRetryableBlock.
-    const state = baseState();
-    const digest = implementationDigest(makeSpec().tasks[0], 'base-sha');
-    state.taskResults['T-01'] = {
-      taskId: 'T-01',
-      status: 'completed',
-      branch: 'sdlc/run-1/T-01',
-      inputsDigest: digest,
-      recordedAt: 'x'
-    };
-    state.steps[stepKey('implementation', 'T-01', digest)] = {
-      name: 'implementation',
-      taskId: 'T-01',
-      inputsDigest: digest,
-      completedAt: 'x'
-    };
-    state.steps[stepKey('ci', 'T-01', 'ci-old')] = {
-      name: 'ci',
-      taskId: 'T-01',
-      inputsDigest: 'ci-old',
-      completedAt: '2026-08-01T00:00:00.000Z',
-      verdict: {
-        gate: 'ci',
-        outcome: 'pass',
-        wouldEscalate: false,
-        reasons: [],
-        recordedAt: '2026-08-01T00:00:00.000Z'
-      }
-    };
-    state.steps[stepKey('ci', 'T-01', 'ci-empty')] = {
-      name: 'ci',
-      taskId: 'T-01',
-      inputsDigest: 'ci-empty',
-      completedAt: '2026-08-02T00:00:00.000Z',
-      verdict: {
-        gate: 'ci',
-        outcome: 'blocked',
-        wouldEscalate: false,
-        reasons: ['commit abc has no check runs'],
-        recordedAt: '2026-08-02T00:00:00.000Z'
-      }
-    };
-    state.steps[stepKey('phase', 'T-01', 'p')] = {
-      name: 'phase',
-      taskId: 'T-01',
-      inputsDigest: 'p',
-      completedAt: 'y',
-      verdict: {
-        gate: 'phase',
-        outcome: 'breach',
-        wouldEscalate: true,
-        reasons: ['failing gates: ci'],
-        recordedAt: 'y'
-      }
-    };
-    stateMock.load.mockReturnValue(state);
-
-    const pool = await executor.executeReady(INPUT);
-    expect(pool.kind).toBe('executed');
-    expect(pool.outcomes.map(o => o.task.id)).toEqual(['T-01']);
-  });
-
-  it('re-selects when latest CI block cites no CI results (gh unavailable race)', async () => {
-    const state = baseState();
-    const digest = implementationDigest(makeSpec().tasks[0], 'base-sha');
-    state.taskResults['T-01'] = {
-      taskId: 'T-01',
-      status: 'completed',
-      branch: 'sdlc/run-1/T-01',
-      inputsDigest: digest,
-      recordedAt: 'x'
-    };
-    state.steps[stepKey('implementation', 'T-01', digest)] = {
-      name: 'implementation',
-      taskId: 'T-01',
-      inputsDigest: digest,
-      completedAt: 'x'
-    };
-    state.steps[stepKey('ci', 'T-01', 'ci-null')] = {
-      name: 'ci',
-      taskId: 'T-01',
-      inputsDigest: 'ci-null',
-      completedAt: 'z',
-      verdict: {
-        gate: 'ci',
-        outcome: 'blocked',
-        wouldEscalate: false,
-        reasons: [
-          'no CI results for abc — branch not pushed or gh unavailable'
-        ],
-        recordedAt: 'z'
-      }
-    };
-    state.steps[stepKey('phase', 'T-01', 'p')] = {
-      name: 'phase',
-      taskId: 'T-01',
-      inputsDigest: 'p',
-      completedAt: 'y',
-      verdict: {
-        gate: 'phase',
-        outcome: 'breach',
-        wouldEscalate: true,
-        reasons: ['failing gates: ci'],
-        recordedAt: 'y'
-      }
-    };
-    stateMock.load.mockReturnValue(state);
-
-    const pool = await executor.executeReady(INPUT);
-    expect(pool.kind).toBe('executed');
-    expect(pool.outcomes.map(o => o.task.id)).toEqual(['T-01']);
-  });
-
-  it('does not re-select a red phase when CI is blocked for a non-retryable reason', async () => {
-    const state = baseState();
-    const digest = implementationDigest(makeSpec().tasks[0], 'base-sha');
-    state.taskResults['T-01'] = {
-      taskId: 'T-01',
-      status: 'completed',
-      branch: 'sdlc/run-1/T-01',
-      inputsDigest: digest,
-      recordedAt: 'x'
-    };
-    state.steps[stepKey('implementation', 'T-01', digest)] = {
-      name: 'implementation',
-      taskId: 'T-01',
-      inputsDigest: digest,
-      completedAt: 'x'
-    };
-    state.steps[stepKey('ci', 'T-01', 'ci-pending')] = {
-      name: 'ci',
-      taskId: 'T-01',
-      inputsDigest: 'ci-pending',
-      completedAt: 'z',
-      verdict: {
-        gate: 'ci',
-        outcome: 'blocked',
-        wouldEscalate: true,
-        reasons: ['check still pending at timeout: e2e'],
-        recordedAt: 'z'
-      }
-    };
-    state.steps[stepKey('phase', 'T-01', 'p')] = {
-      name: 'phase',
-      taskId: 'T-01',
-      inputsDigest: 'p',
-      completedAt: 'y',
-      verdict: {
-        gate: 'phase',
-        outcome: 'breach',
-        wouldEscalate: true,
-        reasons: ['failing gates: ci'],
-        recordedAt: 'y'
-      }
-    };
-    stateMock.load.mockReturnValue(state);
-
-    const pool = await executor.executeReady(INPUT);
-    expect(pool.kind).toBe('no-ready-task');
-  });
-
-  it('leaves tip unset when worktree headSha throws (selection stays conservative)', async () => {
-    const { mkdtempSync, mkdirSync, rmSync } = await import('fs');
-    const { tmpdir } = await import('os');
-    const runsDir = mkdtempSync(path.join(tmpdir(), 'sdlc-tip-throw-'));
-    const wt = path.join(runsDir, INPUT.runId, 'worktrees', 'T-01');
-    mkdirSync(wt, { recursive: true });
-    gitMock.headSha.mockImplementation((repoPath: string) => {
-      if (repoPath.includes('worktrees')) {
-        throw new Error('corrupt worktree');
-      }
-      return 'base-sha';
-    });
-
-    const state = baseState();
-    const digest = implementationDigest(makeSpec().tasks[0], 'base-sha');
-    const staleVerifyDigest = inputsDigest({
-      implDigest: digest,
-      headSha: 'old-failing-tip',
-      criteria: makeSpec().tasks[0].acceptanceCriteria
-    });
-    state.taskResults['T-01'] = {
-      taskId: 'T-01',
-      status: 'completed',
-      branch: 'sdlc/run-1/T-01',
-      inputsDigest: digest,
-      recordedAt: 'x'
-    };
-    state.steps[stepKey('implementation', 'T-01', digest)] = {
-      name: 'implementation',
-      taskId: 'T-01',
-      inputsDigest: digest,
-      completedAt: 'x'
-    };
-    state.steps[stepKey('verification', 'T-01', staleVerifyDigest)] = {
-      name: 'verification',
-      taskId: 'T-01',
-      inputsDigest: staleVerifyDigest,
-      completedAt: 'x',
-      verdict: {
-        gate: 'verification',
-        outcome: 'breach',
-        wouldEscalate: true,
-        reasons: ['tests failed'],
-        recordedAt: 'x'
-      }
-    };
-    state.steps[stepKey('phase', 'T-01', 'p')] = {
-      name: 'phase',
-      taskId: 'T-01',
-      inputsDigest: 'p',
-      completedAt: 'y',
-      verdict: {
-        gate: 'phase',
-        outcome: 'breach',
-        wouldEscalate: true,
-        reasons: ['failing gates: verification'],
-        recordedAt: 'y'
-      }
-    };
-    stateMock.load.mockReturnValue(state);
-
-    try {
-      const pool = await executor.executeReady({ ...INPUT, runsDir });
-      expect(pool.kind).toBe('no-ready-task');
-    } finally {
-      rmSync(runsDir, { recursive: true, force: true });
-    }
-  });
-
   it('re-selects a green-phase unmerged task so enforce can retry merge', async () => {
     const state = baseState();
     const digest = implementationDigest(makeSpec().tasks[0], 'base-sha');
@@ -892,6 +312,101 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
     expect(pool.outcomes[0].task.id).toBe('T-01');
     expect(pool.outcomes[0].cached).toBe(true);
     expect(agentRun).not.toHaveBeenCalled();
+  });
+
+  // Wave 0: breach-terminal-per-digest is right for identical content, but a
+  // remediation round deliberately changes the task head — and the
+  // implementation digest is rooted at {task content, integration tip},
+  // neither of which moves when the agent commits a fix. Without this the fix
+  // would sit on the branch forever, never judged.
+  describe('remediated tasks reopen for a re-gate (Wave 0)', () => {
+    const breachedState = (remediatedAt?: string) => {
+      const state = baseState();
+      const digest = implementationDigest(makeSpec().tasks[0], 'base-sha');
+      state.taskResults['T-01'] = {
+        taskId: 'T-01',
+        status: 'completed',
+        branch: 'sdlc/run-1/T-01',
+        inputsDigest: digest,
+        recordedAt: 'x'
+      };
+      state.steps[stepKey('implementation', 'T-01', digest)] = {
+        name: 'implementation',
+        taskId: 'T-01',
+        inputsDigest: digest,
+        completedAt: '2026-08-05T10:00:00.000Z'
+      };
+      state.steps[stepKey('phase', 'T-01', 'p')] = {
+        name: 'phase',
+        taskId: 'T-01',
+        inputsDigest: 'p',
+        completedAt: '2026-08-05T10:00:00.000Z',
+        verdict: {
+          gate: 'phase',
+          outcome: 'breach',
+          wouldEscalate: true,
+          reasons: ['failing gates: reviewer'],
+          recordedAt: 'x'
+        }
+      };
+      if (remediatedAt !== undefined) {
+        state.remediations['T-01'] = {
+          attempt: 1,
+          sha: 'fix-sha',
+          gates: ['reviewer'],
+          recordedAt: remediatedAt
+        };
+      }
+      return state;
+    };
+
+    it('re-selects a breached task whose remediation landed after the phase step', async () => {
+      stateMock.load.mockReturnValue(breachedState('2026-08-05T10:05:00.000Z'));
+
+      const pool = await executor.executeReady(INPUT);
+
+      expect(pool.kind).toBe('executed');
+      expect(pool.outcomes[0].task.id).toBe('T-01');
+      // The implementation is cached — only the gates need to run again, so
+      // the re-gate costs a reviewer round, not a fresh implementation.
+      expect(pool.outcomes[0].cached).toBe(true);
+      expect(agentRun).not.toHaveBeenCalled();
+    });
+
+    it('leaves a breached task terminal when the remediation predates the phase step', async () => {
+      // The phase gate already judged this fix and still breached — reopening
+      // would loop on content the gates have seen.
+      stateMock.load.mockReturnValue(breachedState('2026-08-05T09:55:00.000Z'));
+
+      const pool = await executor.executeReady(INPUT);
+
+      expect(pool.kind).toBe('no-ready-task');
+    });
+
+    it('leaves a breached task with no remediation terminal', async () => {
+      stateMock.load.mockReturnValue(breachedState());
+
+      const pool = await executor.executeReady(INPUT);
+
+      expect(pool.kind).toBe('no-ready-task');
+    });
+
+    it('does not reopen a remediated task that already merged', async () => {
+      const state = breachedState('2026-08-05T10:05:00.000Z');
+      state.taskResults['T-01'].mergedSha = 'merge-sha';
+      state.steps[stepKey('merge', 'T-01', 'm')] = {
+        name: 'merge',
+        taskId: 'T-01',
+        inputsDigest: 'm',
+        completedAt: '2026-08-05T10:10:00.000Z'
+      };
+      stateMock.load.mockReturnValue(state);
+
+      const pool = await executor.executeReady(INPUT);
+
+      // T-02 becomes eligible instead; T-01 is terminal.
+      expect(pool.outcomes.map(o => o.task.id)).toEqual(['T-02']);
+    });
   });
 
   it('a merged dependency unblocks its dependents', async () => {
@@ -1426,5 +941,150 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
         5
       );
     });
+  });
+});
+
+describe('fail-loud T-01 launch record (#37)', () => {
+  let executor: IExecutorService;
+  let specRead: jest.Mock;
+  let specReadAtRef: jest.Mock;
+  let gitMock: jest.Mocked<IGitRepository>;
+  let agentRun: jest.Mock;
+  let runsDir: string;
+  let stateRepo: RunStateRepository;
+
+  beforeEach(() => {
+    runsDir = mkdtempSync(path.join(os.tmpdir(), 'sdlc-launch-'));
+    stateRepo = new RunStateRepository(new RunLockRepository());
+    specRead = jest.fn().mockReturnValue(makeSpec());
+    specReadAtRef = jest.fn().mockReturnValue(makeSpec());
+    gitMock = {
+      headSha: jest
+        .fn()
+        .mockImplementation((repoPath: string) =>
+          repoPath.includes('worktrees') ? 'agent-sha' : 'base-sha'
+        ),
+      status: jest.fn().mockReturnValue(''),
+      addWorktree: jest.fn(),
+      diffStat: jest.fn(),
+      diffText: jest.fn(),
+      push: jest.fn(),
+      fetch: jest.fn(),
+      resolveSha: jest.fn(),
+      treeSha: jest.fn(),
+      worktreeForBranch: jest.fn(),
+      refExists: jest.fn().mockReturnValue(false),
+      defaultBranch: jest.fn().mockReturnValue('build-env/dev'),
+      fileAtRef: jest.fn(),
+      pathDiffersFromRef: jest.fn().mockReturnValue(false),
+      revertMerge: jest.fn(),
+      stageAll: jest.fn(),
+      commit: jest.fn(),
+      listFiles: jest.fn().mockReturnValue([]),
+      removeWorktreeAsync: jest.fn()
+    };
+    agentRun = jest.fn().mockResolvedValue({ ok: true, output: 'done' });
+
+    const container = new Container();
+    container
+      .bind<ISpecDocRepository>(WORKFLOW_TOKENS.SpecDocRepository)
+      .toConstantValue({ read: specRead, readAtRef: specReadAtRef });
+    container
+      .bind<IGitRepository>(WORKFLOW_TOKENS.GitRepository)
+      .toConstantValue(gitMock);
+    container
+      .bind<IAgentRunnerRepository>(WORKFLOW_TOKENS.AgentRunnerRepository)
+      .toConstantValue({ run: agentRun });
+    container
+      .bind<IRunStateRepository>(WORKFLOW_TOKENS.RunStateRepository)
+      .toConstantValue(stateRepo);
+    container
+      .bind<IExecutorService>(WORKFLOW_TOKENS.ExecutorService)
+      .to(ExecutorService);
+    executor = container.get<IExecutorService>(WORKFLOW_TOKENS.ExecutorService);
+  });
+
+  afterEach(() => rmSync(runsDir, { recursive: true, force: true }));
+
+  const launchInput = () => ({
+    ...INPUT,
+    runsDir,
+    launchArgv: ['node', 'sdlc-workflow', 'run', '--spec', INPUT.specPath]
+  });
+
+  it('leaves a readable launch state when killed between intake and the first recorded step', async () => {
+    agentRun.mockImplementation(async () => {
+      const mid = stateRepo.load(runsDir, 'run-1');
+      expect(mid).not.toBeNull();
+      expect(mid!.runId).toBe('run-1');
+      expect(mid!.startedAt).toEqual(expect.any(String));
+      expect(mid!.specDigest).toEqual(expect.any(String));
+      expect(mid!.specDigest!.length).toBeGreaterThan(0);
+      expect(mid!.baseSha).toBe('base-sha');
+      expect(mid!.launchArgv).toEqual(launchInput().launchArgv);
+      expect(mid!.steps).toEqual({});
+      throw new Error('killed between intake and first step');
+    });
+
+    await executor.executeReady(launchInput());
+
+    const state = stateRepo.load(runsDir, 'run-1');
+    expect(state).not.toBeNull();
+    expect(state!.startedAt).toEqual(expect.any(String));
+    expect(state!.specDigest!.length).toBeGreaterThan(0);
+    // status --run-id loads this same file — never RUN_NOT_FOUND.
+    expect(stateRepo.load(runsDir, 'run-1')?.runId).toBe('run-1');
+  });
+
+  it('records a refused intake in run state without creating a daemon-relaunchable half-run', async () => {
+    specReadAtRef.mockReturnValue(makeSpec({ status: 'Draft' }));
+
+    const pool = await executor.executeReady(launchInput());
+
+    expect(pool.kind).toBe('blocked');
+    expect(pool.detail).toBe('unapproved-spec');
+
+    const state = stateRepo.load(runsDir, 'run-1');
+    expect(state).not.toBeNull();
+    expect(state!.verdicts).toContainEqual(
+      expect.objectContaining({
+        gate: 'intake',
+        outcome: 'blocked',
+        reasons: expect.arrayContaining(['unapproved-spec'])
+      })
+    );
+    // Empty task/step maps: continuity daemon's run_is_finished stays
+    // false, but with no supervise.pid (executor never writes one) and a
+    // recorded intake refusal it is not a half-run the daemon would resume.
+    expect(state!.taskResults).toEqual({});
+    expect(state!.steps).toEqual({});
+    expect(existsSync(path.join(runsDir, 'run-1', 'supervise.pid'))).toBe(
+      false
+    );
+  });
+
+  it('preserves step-cache resume for a normally-progressing run', async () => {
+    const first = await executor.executeReady(launchInput());
+    expect(first.kind).toBe('executed');
+    expect(first.outcomes[0].cached).toBe(false);
+
+    const afterFirst = stateRepo.load(runsDir, 'run-1');
+    expect(afterFirst).not.toBeNull();
+    const implKey = Object.keys(afterFirst!.steps).find(k =>
+      k.startsWith('implementation:T-01:')
+    );
+    expect(implKey).toBeDefined();
+
+    agentRun.mockClear();
+    gitMock.addWorktree.mockClear();
+
+    const resumed = await executor.executeReady(launchInput());
+    expect(resumed.kind).toBe('executed');
+    expect(resumed.outcomes[0].cached).toBe(true);
+    expect(agentRun).not.toHaveBeenCalled();
+    expect(gitMock.addWorktree).not.toHaveBeenCalled();
+    expect(stateRepo.load(runsDir, 'run-1')!.steps[implKey!]).toEqual(
+      afterFirst!.steps[implKey!]
+    );
   });
 });

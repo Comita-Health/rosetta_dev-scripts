@@ -10,9 +10,14 @@ and AI. Chronicle is the memory; Wayfinder is the guide.
 This repo hosts two workspace packages:
 
 - [`team-setup/`](./team-setup) — the bootstrap + maintenance CLI described below.
-- [`sdlc-workflow/`](./sdlc-workflow) — PRD-0011 full-loop SDLC automation, phase 1:
-  decompose a PRD into a Draft implementation spec and stop at the human gate. See its
-  [README](./sdlc-workflow/README.md).
+- [`sdlc-workflow/`](./sdlc-workflow) — PRD-0011 full-loop SDLC automation: decompose a
+  PRD into an implementation spec, then execute the Approved spec end to end — parallel
+  task worktrees, five machine gates, auto-merge on green, sandbox deploy, Chronicle
+  artifacts, and a generated closeout PR that ticks the spec from recorded verdicts. A
+  human approves the spec and smokes the sandbox; the rest is machine-owned. See its
+  [README](./sdlc-workflow/README.md) for the engine and
+  [`rosetta_docs/architecture/sdlc/`](https://github.com/Rosetta-Foundation/rosetta_docs/tree/main/architecture/sdlc)
+  for the architecture reference with diagrams.
 
 ## Why Use Team Setup?
 

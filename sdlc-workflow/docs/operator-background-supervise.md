@@ -1,6 +1,6 @@
 # Operator background supervise
 
-Live-val roots: [rosetta_dev-scripts#38](https://github.com/Rosetta-Foundation/rosetta_dev-scripts/issues/38) (nohup/detach), [#39](https://github.com/Rosetta-Foundation/rosetta_dev-scripts/issues/39) (heartbeat), Comita Phase 0b enforce resume loop.
+Live-val roots: [rosetta_dev-scripts#38](https://github.com/Rosetta-Foundation/rosetta_dev-scripts/issues/38) (nohup/detach), [#39](https://github.com/Rosetta-Foundation/rosetta_dev-scripts/issues/39) (heartbeat), Phase 0b enforce resume loop.
 
 ## Why
 
@@ -66,16 +66,6 @@ file only (no full branch switch), once per run (`spec-origin-sync.attempted`).
 Product-task diffs must not edit `specs/**` — the envelope gate hard-breaches
 those paths even when listed in `allowedPaths`. Checkbox / `status: Done`
 closeout stays a separate docs PR after the phase.
-
-### Gate auto-recover (enforce)
-
-- **CI empty-checks race:** right after push, GitHub often reports zero
-  check-runs for a few seconds. The CI gate keeps polling until suites
-  register (or the monitor deadline) instead of freezing a red phase.
-- **Stale verification:** if the worktree tip advances after a verification
-  breach (late fix commit / CI fix agent), the engine re-verifies before
-  phase aggregation. On resume, a red-phase unmerged task is re-selected when
-  the tip no longer matches the failing verification digest.
 
 ## Agent skill
 

@@ -26,8 +26,12 @@ on:
   schedule:
     - cron: '*/10 * * * *'
 
+# Single repo-wide group: different event shapes (review, dispatch,
+# workflow_run, schedule) used to land in different per-key groups and race
+# each other on the same PR — observed as a double sdlc-run-launch emission.
+# Serializing all runs makes the claim/success status dedup sound.
 concurrency:
-  group: addi-merge-${{ github.repository }}-${{ github.event.client_payload.pr_number || github.event.inputs.pr_number || github.event.pull_request.number || github.event.workflow_run.head_branch || 'poll' }}
+  group: addi-merge-${{ github.repository }}
   cancel-in-progress: false
 
 permissions:
@@ -145,6 +149,7 @@ jobs:
         if: ${{ steps.prs.outputs.numbers != '' }}
         env:
           GH_TOKEN: ${{ steps.addi.outputs.token }}
+          APP_SLUG: ${{ steps.addi.outputs.app-slug }}
           PRS: ${{ steps.prs.outputs.numbers }}
           REPO: ${{ github.repository }}
           ALLOW_ANY_AUTHOR: ${{ vars.ADDI_MERGE_ANY_AUTHOR }}
@@ -170,6 +175,184 @@ jobs:
             esac
           }
 
+          # After a spec PR merges, emit repository_dispatch sdlc-run-launch
+          # exactly once per merge SHA (commit-status context is the marker).
+          # Non-spec PRs: one file-list call + grep, then return — no clone,
+          # no node, no POST.
+          maybe_emit_sdlc_run_launch() {
+            local PR="$1"
+            local files spec_paths merged_sha workdir emit_script result action
+            local status_count
+            files=$(gh api "repos/$REPO/pulls/$PR/files" --paginate \
+              --jq '.[] | select(.status != "removed") | .filename')
+            spec_paths=$(printf '%s\n' "$files" \
+              | grep -E '^specs/(.+/)?phase-[^/]+-spec\.md$' || true)
+            if [ -z "$spec_paths" ]; then
+              echo "No specs/**/phase-*-spec.md in PR #$PR; skip sdlc-run-launch."
+              return 0
+            fi
+
+            merged_sha=$(gh pr view "$PR" -R "$REPO" --json mergeCommit \
+              --jq '.mergeCommit.oid // empty')
+            if [ -z "$merged_sha" ]; then
+              echo "::warning::PR #$PR has no mergeCommit oid; skip sdlc-run-launch."
+              return 0
+            fi
+
+            # Dedup marker → planner input. Line-based grep is pagination-
+            # safe (a per-page `--jq … length` emits one count per page).
+            # Only state=success suppresses re-emission: a pending/failure
+            # claim from a died-mid-flight attempt must NOT permanently
+            # suppress a never-sent signal — re-entry retries it. The
+            # planner owns the noop decision (--emitted-sha).
+            emitted_flags=""
+            if gh api "repos/$REPO/commits/$merged_sha/statuses" --paginate \
+              --jq '.[] | select(.context == "sdlc-run-launch" and .state == "success") | .context' \
+              | grep -q .; then
+              emitted_flags="--emitted-sha $merged_sha"
+            fi
+
+            # SECURITY: extract the planner from trusted default-branch HEAD,
+            # never from the (now-deleted) PR head — same rule as the flip.
+            workdir=$(mktemp -d)
+            git clone --quiet --depth 1 --no-tags --filter=blob:none \
+              "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "$workdir"
+            emit_script="$(mktemp -d)/emit-sdlc-run-launch.mjs"
+            if ! git -C "$workdir" cat-file -e HEAD:team-setup/scripts/emit-sdlc-run-launch.mjs 2>/dev/null; then
+              echo "emit-sdlc-run-launch.mjs absent on default branch; skip."
+              rm -rf "$workdir"
+              return 0
+            fi
+            if ! git -C "$workdir" show HEAD:team-setup/scripts/emit-sdlc-run-launch.mjs > "$emit_script"; then
+              echo "::error::failed to extract emit-sdlc-run-launch.mjs from default-branch HEAD"
+              exit 1
+            fi
+            rm -rf "$workdir"
+
+            result=$(printf '%s\n' "$spec_paths" | node "$emit_script" \
+              --plan --merged-sha "$merged_sha" --pr-number "$PR" $emitted_flags)
+            echo "$result"
+            action=$(echo "$result" | jq -r '.action')
+            if [ "$action" != "dispatch" ]; then
+              echo "sdlc-run-launch plan is $action; skip POST."
+              return 0
+            fi
+
+            # Claim (pending) → dispatch → success. Pending/failure claims
+            # never suppress re-emission (success-only dedup above), so a
+            # dispatch that dies after the claim is retried by the normal
+            # MERGED/schedule re-entry — no operator status surgery needed.
+            # The narrow duplicate window (job dies between a successful
+            # dispatch and the success write) is tolerated: consumers must
+            # dedup launches by client_payload.mergedSha.
+            gh api --method POST "repos/$REPO/statuses/$merged_sha" \
+              -f state=pending \
+              -f context=sdlc-run-launch \
+              -f description="claiming sdlc-run-launch emission" >/dev/null
+            if ! echo "$result" | jq '{event_type, client_payload}' \
+              | gh api --method POST "repos/$REPO/dispatches" --input -; then
+              gh api --method POST "repos/$REPO/statuses/$merged_sha" \
+                -f state=failure \
+                -f context=sdlc-run-launch \
+                -f description="dispatch POST failed — re-entry will retry" >/dev/null
+              echo "::error::sdlc-run-launch dispatch failed on $merged_sha — re-entry retries automatically"
+              exit 1
+            fi
+            gh api --method POST "repos/$REPO/statuses/$merged_sha" \
+              -f state=success \
+              -f context=sdlc-run-launch \
+              -f description="repository_dispatch emitted" >/dev/null
+            echo "Emitted sdlc-run-launch for PR #$PR @ $merged_sha"
+            return 0
+          }
+
+          # On Approve of a PR that adds/changes Draft phase specs, push a
+          # Draft→Approved flip commit (as Addi, DCO-signed) before merge.
+          # Detection is one read-only file-list call plus grep: non-spec PRs
+          # trigger no clone, no node, and take the prior merge path unchanged.
+          # `select(.status != "removed")` keeps deleted/renamed-away specs out
+          # of the flip entirely.
+          maybe_flip_draft_specs() {
+            local PR="$1"
+            local files spec_paths result action message head_ref bot_login bot_id workdir
+            files=$(gh api "repos/$REPO/pulls/$PR/files" --paginate \
+              --jq '.[] | select(.status != "removed") | .filename')
+            # `(.+/)?` spans nested segments too (`.` matches `/` in ERE), so
+            # specs/a/b/phase-1-spec.md is included — same shape as isSpecPath.
+            spec_paths=$(printf '%s\n' "$files" \
+              | grep -E '^specs/(.+/)?phase-[^/]+-spec\.md$' || true)
+            if [ -z "$spec_paths" ]; then
+              echo "No specs/**/phase-*-spec.md in PR #$PR; skip status flip."
+              return 0
+            fi
+
+            head_ref=$(gh pr view "$PR" -R "$REPO" --json headRefName --jq '.headRefName')
+            workdir=$(mktemp -d)
+            git clone --quiet --no-tags --filter=blob:none \
+              "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "$workdir"
+
+            # SECURITY: the flip script is taken from the trusted default
+            # branch (the clone's HEAD), never from the PR head — a PR that
+            # modifies the script must not get its version executed in this
+            # push-credentialed job. Genuinely-absent script (default branch
+            # predates the feature) skips the flip; any other extraction
+            # error fails the job loudly instead of silently omitting flips.
+            flip_script="$(mktemp -d)/flip-spec-status.mjs"
+            if ! git -C "$workdir" cat-file -e HEAD:team-setup/scripts/flip-spec-status.mjs 2>/dev/null; then
+              echo "flip-spec-status.mjs absent on default branch; skip status flip."
+              rm -rf "$workdir"
+              return 0
+            fi
+            if ! git -C "$workdir" show HEAD:team-setup/scripts/flip-spec-status.mjs > "$flip_script"; then
+              echo "::error::failed to extract flip-spec-status.mjs from default-branch HEAD"
+              exit 1
+            fi
+
+            git -C "$workdir" fetch --quiet --no-tags origin "$head_ref"
+            git -C "$workdir" checkout --quiet --force -B "flip-pr-$PR" FETCH_HEAD
+
+            result=$(cd "$workdir" && printf '%s\n' "$spec_paths" \
+              | node "$flip_script" --write-stdin)
+            echo "$result"
+            action=$(echo "$result" | jq -r '.action')
+            if [ "$action" != "commit" ]; then
+              echo "Spec files present but nothing to flip ($action); continue."
+              rm -rf "$workdir"
+              return 0
+            fi
+
+            message=$(echo "$result" | jq -r '.message')
+            # `gh api user` 403s under installation tokens; derive identity
+            # from the app slug the mint step already knows.
+            bot_login="${APP_SLUG}[bot]"
+            bot_id=$(gh api "users/${APP_SLUG}%5Bbot%5D" --jq '.id')
+            (cd "$workdir" && git add -- $(echo "$result" | jq -r '.flipped[]'))
+            git -C "$workdir" -c "user.name=$bot_login" \
+              -c "user.email=${bot_id}+${bot_login}@users.noreply.github.com" \
+              commit -s -m "$message"
+            git -C "$workdir" push origin "HEAD:refs/heads/$head_ref"
+            flip_sha=$(git -C "$workdir" rev-parse HEAD)
+            rm -rf "$workdir"
+            echo "Pushed draft→Approved flip $flip_sha to $head_ref as $bot_login"
+
+            # Re-pin: the checks rollup and merge below must observe the
+            # post-flip SHA. Proceeding on a stale pre-flip head would merge
+            # content the human never saw flipped — hard-fail instead.
+            repinned=""
+            for _ in 1 2 3 4 5 6; do
+              if [ "$(gh pr view "$PR" -R "$REPO" --json headRefOid --jq '.headRefOid')" = "$flip_sha" ]; then
+                repinned="yes"
+                break
+              fi
+              sleep 5
+            done
+            if [ -z "$repinned" ]; then
+              echo "::error::PR #$PR head never advanced to flip commit $flip_sha; aborting before checks/merge."
+              exit 1
+            fi
+            return 0
+          }
+
           process_pr() {
             local PR="$1"
             echo "::group::PR #$PR"
@@ -184,6 +367,13 @@ jobs:
             mergeable=$(echo "$meta" | jq -r '.mergeable // empty')
             url=$(echo "$meta" | jq -r '.url')
 
+            # Already-merged: retry launch signal only (deduped by merge SHA).
+            if [ "$state" = "MERGED" ]; then
+              maybe_emit_sdlc_run_launch "$PR"
+              echo "PR already MERGED; launch signal checked."
+              echo "::endgroup::"
+              return 0
+            fi
             if [ "$state" != "OPEN" ]; then
               echo "PR not OPEN ($state); nothing to do."
               echo "::endgroup::"
@@ -221,6 +411,10 @@ jobs:
               echo "::endgroup::"
               return 0
             fi
+
+            # Flip Draft→Approved on phase specs before waiting on checks so
+            # the flip commit's checks are included in the rollup below.
+            maybe_flip_draft_specs "$PR"
 
             # Do NOT use `gh pr checks --watch` — this job can register as a
             # pending check and deadlock on itself.
@@ -287,6 +481,7 @@ jobs:
               uuid=$(echo "$resp" | jq -r '.details.uuid // empty')
               if [ "$status" = "merged" ]; then
                 echo "Stack already merged as Addi: $url"
+                maybe_emit_sdlc_run_launch "$PR"
                 echo "::endgroup::"
                 return 0
               fi
@@ -302,6 +497,7 @@ jobs:
                 pstatus=$(echo "$poll" | jq -r '.status // empty')
                 if [ "$pstatus" = "merged" ]; then
                   echo "Stack merged as Addi: $url"
+                  maybe_emit_sdlc_run_launch "$PR"
                   echo "::endgroup::"
                   return 0
                 fi
@@ -321,6 +517,7 @@ jobs:
 
             gh pr merge "$PR" -R "$REPO" --squash --delete-branch
             echo "Merged as Addi: $url"
+            maybe_emit_sdlc_run_launch "$PR"
             echo "::endgroup::"
             return 0
           }
