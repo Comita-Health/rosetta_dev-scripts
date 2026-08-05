@@ -255,7 +255,7 @@ export interface DeployRecord {
   recordedAt: string;
 }
 
-export type CriterionTier = 'test' | 'agent' | 'manual';
+export type CriterionTier = 'test' | 'agent' | 'manual' | 'docs';
 
 export type CriterionOutcome = 'pass' | 'fail' | 'human-required';
 
@@ -325,6 +325,8 @@ export interface CloseoutAggregate {
   specId: string;
   criteria: CloseoutCriterion[];
   taskGates: CloseoutTaskGate[];
+  /** Every task the spec declares, in spec order. */
+  taskIds: string[];
   /** Task IDs carrying a merge commit on the default branch. */
   mergedTaskIds: string[];
   /** Task IDs whose latest `phase` gate verdict passed. */

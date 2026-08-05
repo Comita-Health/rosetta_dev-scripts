@@ -101,6 +101,7 @@ const CLOSEOUT_AGGREGATE: CloseoutAggregate = {
   specId: SPEC.id,
   criteria: [],
   taskGates: [],
+  taskIds: ['T-01'],
   mergedTaskIds: ['T-01'],
   phasePassedTaskIds: ['T-01'],
   fullyCovered: true

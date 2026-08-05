@@ -119,7 +119,9 @@ export const applyCloseout = (
     const shouldTick = criterion.coverage === 'pass';
     if (shouldTick && !wasTicked) ticked.push(criterion);
     if (!shouldTick && wasTicked) unverifiedTicks.push(criterion);
-    out.push(`${box[1]}${shouldTick || wasTicked ? 'x' : ' '}${box[3]}${box[4]}`);
+    out.push(
+      `${box[1]}${shouldTick || wasTicked ? 'x' : ' '}${box[3]}${box[4]}`
+    );
   }
 
   const withStatus = aggregate.fullyCovered
@@ -219,7 +221,10 @@ export const closeoutBody = (input: CloseoutBodyInput): string => {
   if (passing.length === 0) {
     lines.push('None — no criterion in this spec has a passing verdict.', '');
   } else {
-    lines.push('| Criterion | Task | Gate | Evidence |', '| --- | --- | --- | --- |');
+    lines.push(
+      '| Criterion | Task | Gate | Evidence |',
+      '| --- | --- | --- | --- |'
+    );
     for (const criterion of passing) {
       lines.push(
         `| ${criterion.criterionId} ${criterion.criterion.replace(/\|/g, '\\|')} ` +
@@ -230,20 +235,52 @@ export const closeoutBody = (input: CloseoutBodyInput): string => {
     lines.push('');
   }
 
+  const unmerged = aggregate.taskIds.filter(
+    taskId => !aggregate.mergedTaskIds.includes(taskId)
+  );
+  const phaseUnproven = aggregate.taskIds.filter(
+    taskId => !aggregate.phasePassedTaskIds.includes(taskId)
+  );
+
   lines.push('## Remainder', '');
-  if (edit.remainder.length === 0) {
+  if (
+    edit.remainder.length === 0 &&
+    unmerged.length === 0 &&
+    phaseUnproven.length === 0
+  ) {
     lines.push('Nothing outstanding — full verdict coverage.', '');
   } else {
-    lines.push(
-      'Left unchecked, with the reason the run could not verify it:',
-      ''
-    );
-    for (const criterion of edit.remainder) {
+    if (edit.remainder.length > 0) {
       lines.push(
-        `- \`${criterion.criterionId}\` ${criterion.criterion} — ${coverageNote(criterion)}`
+        'Criteria left unchecked, with the reason the run could not verify each:',
+        ''
+      );
+      for (const criterion of edit.remainder) {
+        lines.push(
+          `- \`${criterion.criterionId}\` ${criterion.criterion} — ${coverageNote(criterion)}`
+        );
+      }
+      lines.push('');
+    }
+    // Phase-level gaps are why a spec with every criterion passing can still
+    // not be Done. Saying "nothing outstanding" next to "status unchanged"
+    // reads as a bug in the generator rather than as unfinished work.
+    if (unmerged.length > 0) {
+      lines.push(
+        `Tasks with no merge commit recorded: ${unmerged
+          .map(taskId => `\`${taskId}\``)
+          .join(', ')}.`,
+        ''
       );
     }
-    lines.push('');
+    if (phaseUnproven.length > 0) {
+      lines.push(
+        `Tasks with no passing phase gate: ${phaseUnproven
+          .map(taskId => `\`${taskId}\``)
+          .join(', ')}.`,
+        ''
+      );
+    }
   }
 
   if (edit.unverifiedTicks.length > 0) {

@@ -3,10 +3,11 @@ import { parseSpec } from './spec-parser';
 
 /**
  * Verification tiers recognized on an acceptance-criterion checkbox. The
- * runtime verifier ({@link parseCriterionTier}) only executes test/agent/manual,
- * but Approved specs on this repo also carry `docs:` criteria (closed by the
- * docs PR, not the machine), so the format lint must recognize the full set —
- * a lint that rejects a real Approved spec is worse than no lint.
+ * runtime verifier executes `test:` and `agent:`; `manual:` and `docs:` are
+ * closed by a human (the second by the closeout docs PR) and record as
+ * human-required. This list and `parseCriterionTier`'s pattern must stay in
+ * step — they drifted once over `docs:`, and intake accepted specs that then
+ * crashed verification.
  */
 export const RECOGNIZED_TIERS = ['test', 'agent', 'manual', 'docs'] as const;
 

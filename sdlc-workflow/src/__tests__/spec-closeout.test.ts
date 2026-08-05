@@ -110,16 +110,18 @@ const aggregateOf = (
       recordedAt: 'x'
     }
   ],
+  taskIds: ['T-01', 'T-02'],
   mergedTaskIds: ['T-01', 'T-02'],
   phasePassedTaskIds: ['T-01', 'T-02'],
   fullyCovered: false,
   ...over
 });
 
-const allPassing = (): CloseoutAggregate =>
+const allPassing = (over: Partial<CloseoutAggregate> = {}): CloseoutAggregate =>
   aggregateOf({
     criteria: CRITERIA.map(item => ({ ...item, coverage: 'pass' })),
-    fullyCovered: true
+    fullyCovered: true,
+    ...over
   });
 
 const criteriaLines = (markdown: string): string[] =>
@@ -351,6 +353,32 @@ describe('closeout PR identity and body', () => {
     );
     // A dropped criterion is the failure mode this section exists to prevent.
     expect(remainder.match(/^- `/gm)).toHaveLength(3);
+  });
+
+  it('names the phase-level gaps that withhold Done even with every criterion passing', () => {
+    // A real closeout hit this: all criteria green, status still withheld, and
+    // a Remainder that said "nothing outstanding" — which reads as a generator
+    // bug rather than as a task that never merged.
+    const aggregate = allPassing({
+      mergedTaskIds: ['T-01'],
+      phasePassedTaskIds: [],
+      fullyCovered: false
+    });
+    const body = closeoutBody({
+      specId: aggregate.specId,
+      runId: aggregate.runId,
+      specRelPath: 'specs/PRD-0099/phase-1-spec.md',
+      aggregate,
+      edit: applyCloseout(SPEC_MARKDOWN, aggregate)
+    });
+
+    const remainder = body.slice(body.indexOf('## Remainder'));
+    expect(remainder).not.toContain('Nothing outstanding');
+    expect(remainder).toContain('Tasks with no merge commit recorded: `T-02`.');
+    expect(remainder).toContain(
+      'Tasks with no passing phase gate: `T-01`, `T-02`.'
+    );
+    expect(body).toContain('left unchanged (coverage incomplete)');
   });
 
   it('says so plainly when there is nothing outstanding', () => {

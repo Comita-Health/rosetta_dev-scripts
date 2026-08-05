@@ -72,6 +72,7 @@ const AGGREGATE: CloseoutAggregate = {
       recordedAt: 'x'
     }
   ],
+  taskIds: ['T-01'],
   mergedTaskIds: ['T-01'],
   phasePassedTaskIds: ['T-01'],
   fullyCovered: true

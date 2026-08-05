@@ -54,7 +54,8 @@ const state = (over: Partial<RunState> = {}): RunState => ({
 });
 
 const criterion = (
-  over: Partial<CriterionVerdict> & Pick<CriterionVerdict, 'taskId' | 'criterion'>
+  over: Partial<CriterionVerdict> &
+    Pick<CriterionVerdict, 'taskId' | 'criterion'>
 ): CriterionVerdict => ({
   tier: 'test',
   outcome: 'pass',
@@ -180,9 +181,9 @@ describe('CloseoutAggregateService (SPEC-PRD-0023-P1 T-01)', () => {
     const result = aggregate(state());
 
     expect(result.criteria).toHaveLength(4);
-    expect(
-      result.criteria.every(item => item.coverage === 'no-verdict')
-    ).toBe(true);
+    expect(result.criteria.every(item => item.coverage === 'no-verdict')).toBe(
+      true
+    );
     // The tier still comes through, so the remainder can say *why* a
     // criterion is outstanding without a verdict to read it from.
     expect(result.criteria.map(item => item.tier)).toEqual([
@@ -190,6 +191,41 @@ describe('CloseoutAggregateService (SPEC-PRD-0023-P1 T-01)', () => {
       'agent',
       'manual',
       'test'
+    ]);
+  });
+
+  it('carries every declared task so the remainder can name phase-level gaps', () => {
+    const result = aggregate(state());
+
+    // Criteria alone cannot answer "which task never merged" for a task whose
+    // criteria all happen to pass.
+    expect(result.taskIds).toEqual(['T-01', 'T-02']);
+    expect(result.mergedTaskIds).toEqual([]);
+    expect(result.phasePassedTaskIds).toEqual([]);
+  });
+
+  it('reads a docs-tier criterion instead of throwing on it', () => {
+    // spec-lint accepts `docs:`; this used to reject it, so closing out a spec
+    // with a docs criterion failed outright.
+    const withDocs: SpecDocument = {
+      ...SPEC,
+      tasks: [
+        makeTask({
+          id: 'T-01',
+          acceptanceCriteria: ['docs: the README covers the contract']
+        })
+      ]
+    };
+    build(state());
+
+    const result = service.aggregate({
+      runsDir: '/runs',
+      runId: 'run-7',
+      spec: withDocs
+    });
+
+    expect(result.criteria).toEqual([
+      expect.objectContaining({ tier: 'docs', coverage: 'no-verdict' })
     ]);
   });
 
@@ -223,8 +259,18 @@ describe('CloseoutAggregateService (SPEC-PRD-0023-P1 T-01)', () => {
   it('reports full coverage only when every criterion, phase gate and merge is in', () => {
     const complete = state({
       taskResults: {
-        'T-01': { taskId: 'T-01', status: 'completed', mergedSha: 'a', recordedAt: 'x' },
-        'T-02': { taskId: 'T-02', status: 'completed', mergedSha: 'b', recordedAt: 'x' }
+        'T-01': {
+          taskId: 'T-01',
+          status: 'completed',
+          mergedSha: 'a',
+          recordedAt: 'x'
+        },
+        'T-02': {
+          taskId: 'T-02',
+          status: 'completed',
+          mergedSha: 'b',
+          recordedAt: 'x'
+        }
       },
       verdicts: [
         verdict({ taskId: 'T-01', gate: 'phase' }),
@@ -246,8 +292,18 @@ describe('CloseoutAggregateService (SPEC-PRD-0023-P1 T-01)', () => {
     const result = aggregate(
       state({
         taskResults: {
-          'T-01': { taskId: 'T-01', status: 'completed', mergedSha: 'a', recordedAt: 'x' },
-          'T-02': { taskId: 'T-02', status: 'completed', mergedSha: 'b', recordedAt: 'x' }
+          'T-01': {
+            taskId: 'T-01',
+            status: 'completed',
+            mergedSha: 'a',
+            recordedAt: 'x'
+          },
+          'T-02': {
+            taskId: 'T-02',
+            status: 'completed',
+            mergedSha: 'b',
+            recordedAt: 'x'
+          }
         },
         verdicts: [
           verdict({ taskId: 'T-01', gate: 'phase' }),
@@ -268,8 +324,18 @@ describe('CloseoutAggregateService (SPEC-PRD-0023-P1 T-01)', () => {
   it('reads the latest phase verdict, so a re-judged breach can clear', () => {
     const runState = state({
       taskResults: {
-        'T-01': { taskId: 'T-01', status: 'completed', mergedSha: 'a', recordedAt: 'x' },
-        'T-02': { taskId: 'T-02', status: 'completed', mergedSha: 'b', recordedAt: 'x' }
+        'T-01': {
+          taskId: 'T-01',
+          status: 'completed',
+          mergedSha: 'a',
+          recordedAt: 'x'
+        },
+        'T-02': {
+          taskId: 'T-02',
+          status: 'completed',
+          mergedSha: 'b',
+          recordedAt: 'x'
+        }
       },
       verdicts: [
         verdict({ taskId: 'T-01', gate: 'phase', outcome: 'breach' }),
@@ -289,7 +355,12 @@ describe('CloseoutAggregateService (SPEC-PRD-0023-P1 T-01)', () => {
     const result = aggregate(
       state({
         taskResults: {
-          'T-01': { taskId: 'T-01', status: 'completed', mergedSha: 'a', recordedAt: 'x' }
+          'T-01': {
+            taskId: 'T-01',
+            status: 'completed',
+            mergedSha: 'a',
+            recordedAt: 'x'
+          }
         },
         verdicts: [
           verdict({ taskId: 'T-01', gate: 'phase' }),

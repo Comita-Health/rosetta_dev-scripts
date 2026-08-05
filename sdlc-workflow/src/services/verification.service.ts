@@ -115,7 +115,12 @@ export class VerificationService implements IVerificationService {
       verdicts.push(await this.runAgentTier(input, criterion));
     }
 
-    for (const criterion of tiered.filter(item => item.tier === 'manual')) {
+    // `manual:` and `docs:` are both closed by a human — the second by the
+    // closeout docs PR — so neither is executable here and both record as
+    // human-required rather than as an absent verdict.
+    for (const criterion of tiered.filter(
+      item => item.tier === 'manual' || item.tier === 'docs'
+    )) {
       verdicts.push(this.criterionVerdict(input, criterion, 'human-required'));
     }
 

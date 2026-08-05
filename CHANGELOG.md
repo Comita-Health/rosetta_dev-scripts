@@ -13,7 +13,10 @@
   every criterion passes, every task merged, and every phase gate is green.
   Partial coverage leaves the existing status untouched and surfaces the gaps
   in a **Remainder** section rather than downgrading anything. The PR body
-  cites `(task, gate, evidence link)` per verified criterion. Boxes a human
+  cites `(task, gate, evidence link)` per verified criterion, and the Remainder
+  section names the phase-level shortfalls — tasks with no merge commit, tasks
+  with no passing phase gate — that withhold `Done` even when every criterion
+  passes. Boxes a human
   ticked by hand are **never unticked** — that tick is a record of hand
   verification — but they do not count toward `Done` either, so they are
   reported explicitly.
@@ -32,6 +35,14 @@
   verdicts instead of a pile of near-duplicates. `closeout --run-id --spec
 --repo` drives the same code by hand for specs that landed before the
   machinery existed.
+- **sdlc-workflow:** `docs:` is a real verification tier at runtime, not only in
+  the lint. `spec-lint` had accepted four tiers while `parseCriterionTier` knew
+  three, so an Approved spec carrying a `docs:` criterion passed intake and then
+  threw `SPEC_MALFORMED` in verification — which is why
+  `BUG-envelope-spec-integrity` T-04 merged with no criterion verdicts at all,
+  and why its closeout failed outright when it read the same spec back. `docs:`
+  now records as human-required alongside `manual:`, and a test pins the two
+  lists together.
 - **sdlc-workflow:** `specs/**` keeps exactly one writer. The privileged route
   (`SpecFileRepository.writeCloseout`) refuses absolute paths, refuses to
   escape the checkout, refuses anything outside a `specs/` tree, and refuses to

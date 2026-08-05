@@ -35,6 +35,18 @@ describe('privileged spec-write route is single-caller (T-06)', () => {
     ]);
   });
 
+  it('writes status: Done from exactly one place', () => {
+    // A second site could mark a spec Done from something other than the
+    // verdict set — which is the failure this whole phase exists to prevent.
+    const writers = sourceFiles(ROOT).filter(file =>
+      /^\s*\S+\s*=\s*`status: Done/m.test(readFileSync(file, 'utf-8'))
+    );
+
+    expect(writers.map(file => path.relative(ROOT, file))).toEqual([
+      path.join('utils', 'spec-closeout.ts')
+    ]);
+  });
+
   it('routes every spec write through the repository, never fs directly', () => {
     // A service reaching for writeFileSync on a spec path would bypass both the
     // specs/**-only check and this caller pin.

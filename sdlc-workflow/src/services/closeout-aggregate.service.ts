@@ -82,6 +82,7 @@ export class CloseoutAggregateService implements ICloseoutAggregateService {
       specId: input.spec.id,
       criteria,
       taskGates: this.taskGates(input.runId, state),
+      taskIds: input.spec.tasks.map(task => task.id),
       mergedTaskIds,
       phasePassedTaskIds,
       fullyCovered:

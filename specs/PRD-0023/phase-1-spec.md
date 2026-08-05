@@ -28,9 +28,9 @@ Build a read-only module that, given a run ID, walks all tasks and collects reco
 
 ### Acceptance criteria
 
-- [ ] test: given a run with mixed passing/failing/missing verdicts, the aggregator returns one record per (task, gate) with the evidence link populated when present
-- [ ] test: criteria with no recorded verdict are returned with an explicit no-verdict state rather than being omitted from the result
-- [ ] agent: querying the aggregator against a real enforce run's recorded verdicts reproduces the same pass/fail breakdown visible in the run's existing verdict log
+- [x] test: given a run with mixed passing/failing/missing verdicts, the aggregator returns one record per (task, gate) with the evidence link populated when present
+- [x] test: criteria with no recorded verdict are returned with an explicit no-verdict state rather than being omitted from the result
+- [x] agent: querying the aggregator against a real enforce run's recorded verdicts reproduces the same pass/fail breakdown visible in the run's existing verdict log
 
 ## Task T-02: Trigger and generate closeout PR on final task merge
 
@@ -42,11 +42,11 @@ Hook into the final-task-merge event of an enforce run. Derive all checkbox stat
 
 ### Acceptance criteria
 
-- [ ] test: merging a run's final task triggers closeout PR creation with no manual authoring step
-- [ ] test: each checkbox with a passing verdict is rendered checked and annotated with its (task, gate, evidence link) citation
-- [ ] test: criteria without a passing verdict remain unchecked and appear in a distinct Remainder section of the PR body
-- [ ] test: re-invoking closeout generation while an open closeout PR already exists for the run updates that same PR number instead of opening a new one
-- [ ] agent: interrupting the closeout job mid-run and re-running it against a real repo leaves exactly one open closeout PR reflecting the latest verdict state
+- [x] test: merging a run's final task triggers closeout PR creation with no manual authoring step
+- [x] test: each checkbox with a passing verdict is rendered checked and annotated with its (task, gate, evidence link) citation
+- [x] test: criteria without a passing verdict remain unchecked and appear in a distinct Remainder section of the PR body
+- [x] test: re-invoking closeout generation while an open closeout PR already exists for the run updates that same PR number instead of opening a new one
+- [x] agent: interrupting the closeout job mid-run and re-running it against a real repo leaves exactly one open closeout PR reflecting the latest verdict state
 
 ## Task T-03: Roll up spec status field from full verdict coverage
 
@@ -58,10 +58,10 @@ Extend the closeout generator to compute spec-level status as a pure function of
 
 ### Acceptance criteria
 
-- [ ] test: a spec with passing verdicts for every criterion and phase is written as status: Done in the closeout PR diff
-- [ ] test: a spec missing any criterion or phase verdict retains its prior status value unchanged in the closeout PR diff
-- [ ] test: outstanding criteria/phases for a partially-delivered spec are listed in the remainder section rather than dropped
-- [ ] agent: a full-repo search for status: Done write sites shows only the closeout PR generator's call site
+- [x] test: a spec with passing verdicts for every criterion and phase is written as status: Done in the closeout PR diff
+- [x] test: a spec missing any criterion or phase verdict retains its prior status value unchanged in the closeout PR diff
+- [x] test: outstanding criteria/phases for a partially-delivered spec are listed in the remainder section rather than dropped
+- [x] agent: a full-repo search for status: Done write sites shows only the closeout PR generator's call site
 
 ## Task T-04: Require closeout PR existence before digest reports phase complete
 
@@ -73,10 +73,10 @@ Change the phase-completion predicate consumed by the run digest so 'all tasks m
 
 ### Acceptance criteria
 
-- [ ] test: a phase with every task merged but no closeout PR is reported incomplete by the digest
-- [ ] test: a phase with an open, awaiting-Approve closeout PR is reported complete
-- [ ] test: a phase with a merged closeout PR is reported complete
-- [ ] agent: running the digest against a live repo where the closeout PR is still in review shows the phase as complete, not stuck
+- [x] test: a phase with every task merged but no closeout PR is reported incomplete by the digest
+- [x] test: a phase with an open, awaiting-Approve closeout PR is reported complete
+- [x] test: a phase with a merged closeout PR is reported complete
+- [x] agent: running the digest against a live repo where the closeout PR is still in review shows the phase as complete, not stuck
 
 ## Task T-05: Link the closeout PR into the run's Chronicle artifacts
 
@@ -88,9 +88,13 @@ Once T-04 detects a closeout PR exists for a phase, write its URL/reference into
 
 ### Acceptance criteria
 
-- [ ] test: once a closeout PR exists for a phase, the Chronicle artifact for that run links to it
-- [ ] test: a phase with no closeout PR yet has no closeout link populated in its Chronicle artifact
-- [ ] agent: opening the linked URL from a real run's Chronicle artifact navigates to the actual closeout PR
+- [x] test: once a closeout PR exists for a phase, the Chronicle artifact for that run links to it
+- [x] test: a phase with no closeout PR yet has no closeout link populated in its Chronicle artifact
+- [ ] agent: opening the linked URL from a real run's Chronicle artifact
+      navigates to the actual closeout PR. **Not verified in this wave** — no
+      enforce run posted a phase digest here, because the engine work landed by
+      hand. The link is covered by tests both ways (present and absent); the
+      live navigation belongs to the first real run.
 
 ## Task T-06: Pin regression coverage for envelope-gate hard-breach on specs/** edits
 
@@ -102,7 +106,14 @@ Coverage-only task: must not alter envelope-gate matching logic, since hard-brea
 
 ### Acceptance criteria
 
-- [ ] test: an agent-authored product diff touching any file under specs/** still hard-breaches the envelope gate exactly as before this phase's changes
-- [ ] test: the issue #40 regression test is present, unskipped, and required in the CI suite gating merges
-- [ ] test: a static check confirms the closeout PR generator's privileged spec-write route has exactly one caller in the codebase
-- [ ] agent: submitting a normal agent task diff that edits a spec file is rejected by the gate before it reaches review
+- [x] test: an agent-authored product diff touching any file under specs/** still hard-breaches the envelope gate exactly as before this phase's changes
+- [x] test: the issue #40 regression test is present, unskipped, and required in the CI suite gating merges
+- [x] test: a static check confirms the closeout PR generator's privileged spec-write route has exactly one caller in the codebase
+- [x] agent: submitting a normal agent task diff that edits a spec file is
+      rejected by the gate before it reaches review. Verified against run
+      `prd-0004-p0g-2026-08-03` T-03, whose diff touched
+      `specs/PRD-0004/phase-0g-spec.md`: the envelope gate breached with
+      `mid-run specs/** edits are forbidden`. Recorded deviation — the
+      reviewer gate is not skipped, it runs in the same pass and
+      independently breached on the same hard rule. Nothing merged; the
+      task only passed after the spec edit was removed.
