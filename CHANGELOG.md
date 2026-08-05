@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** the envelope gate's `maxDiffLines` budget now excludes
+  test files (`*.test.*`, `*.spec.*`, `__tests__/**`, `__mocks__/**` —
+  `isTestPath`) from the size count; they still count for `allowedPaths` /
+  `forbiddenSurfaces`. A thorough test suite is not a bigger blast radius
+  than a thin one, and counting it the same as production code was forcing
+  a choice between under-testing and inflating envelopes (caught live on
+  SPEC-BUG-retro-and-queued-plans-P1 T-02: 1187 total lines breached a
+  600-line budget, but only 626 were non-test). The reviewer prompt's
+  envelope section states the same exemption so the LLM reviewer's
+  independent size judgment matches the mechanical gate.
 - **sdlc-workflow:** gate verdicts are now linked to their eventual outcome
   so per-gate precision is computable from the Chronicle ledger
   (SPEC-BUG-reviewer-house-bar-P1 T-02). `record-merge --task` annotates

@@ -407,7 +407,10 @@ Handler / Service / Repository with InversifyJS (workspace rule):
   (`state.json`) before intake so forensics survive a mid-start crash.
 - `services/envelope-gate.service.ts` — diff vs blast-radius envelope,
   shadow-mode verdict (T-02); resolves `surfaces.json` at the judged ref,
-  never local disk (envelope-spec-integrity T-03).
+  never local disk (envelope-spec-integrity T-03). `maxDiffLines` exempts
+  test files (`*.test.*` / `*.spec.*` / `__tests__/**` / `__mocks__/**`,
+  `isTestPath`) from the size budget — they still count for `allowedPaths`
+  / `forbiddenSurfaces` (BUG-retro-and-queued-plans-P1 retro).
 - `services/pr-lifecycle.service.ts` — P3 T-02: push the task branch,
   find-or-create its PR with deterministic title/body (`utils/pr-content`).
 - `services/sandbox-deploy.service.ts` — task-branch build → sandbox via the
