@@ -28,6 +28,7 @@ export const WORKFLOW_TOKENS = {
   AggregatorService: Symbol.for('AggregatorService'),
   CiGateService: Symbol.for('CiGateService'),
   DigestService: Symbol.for('DigestService'),
+  RetroService: Symbol.for('RetroService'),
   ChronicleCommitService: Symbol.for('ChronicleCommitService'),
   GatePolicyQueryService: Symbol.for('GatePolicyQueryService'),
   RunHandler: Symbol.for('RunHandler'),

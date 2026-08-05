@@ -22,6 +22,8 @@ import type { IPullRequestRepository } from '../repositories/pull-request.reposi
 import type { IPrLifecycleService } from '../services/pr-lifecycle.service';
 import type { IReviewerGateService } from '../services/reviewer-gate.service';
 import type { IReviewerPublishService } from '../services/reviewer-publish.service';
+import { isBugSpec } from '../services/retro.service';
+import type { IRetroService } from '../services/retro.service';
 import type { ISandboxDeployService } from '../services/sandbox-deploy.service';
 import type {
   IVerificationService,
@@ -39,6 +41,7 @@ import {
   WorkflowError
 } from '../types';
 import { inputsDigest } from '../utils/digest';
+import { appendMonitorLine } from '../utils/monitor';
 import { categorizeTasks } from '../utils/run-summary';
 
 export interface RunTaskInput extends PoolInput {
@@ -174,6 +177,8 @@ export class RunHandler implements IRunHandler {
     private readonly _aggregator: IAggregatorService,
     @inject(WORKFLOW_TOKENS.DigestService)
     private readonly _digest: IDigestService,
+    @inject(WORKFLOW_TOKENS.RetroService)
+    private readonly _retro: IRetroService,
     @inject(WORKFLOW_TOKENS.ChronicleCommitService)
     private readonly _chronicle: IChronicleCommitService,
     @inject(WORKFLOW_TOKENS.GitRepository)
@@ -892,6 +897,7 @@ export class RunHandler implements IRunHandler {
     const digestKey = stepKey('phase-digest', 'phase', digest);
     if (state.steps[digestKey] !== undefined) {
       console.log(chalk.gray('  [cached] phase digest already posted'));
+      await this.maybeRetroStep(input, state, spec, digest);
       return;
     }
     const posted = await this._digest.post({
@@ -926,6 +932,79 @@ export class RunHandler implements IRunHandler {
         `  [phase] digest posted to queue (${posted.artifactPath}) — veto via [veto] tag`
       )
     );
+
+    // SPEC-BUG-retro-and-queued-plans-P1 T-01: same trigger as the digest
+    // above, restricted to BUG-* runs.
+    await this.maybeRetroStep(input, state, spec, digest);
+  }
+
+  /** SPEC-BUG-retro-and-queued-plans-P1 T-01: dispatch the retro only for `BUG-*` specs. */
+  private async maybeRetroStep(
+    input: RunTaskInput,
+    state: RunState,
+    spec: SpecDocument,
+    digest: string
+  ): Promise<void> {
+    if (isBugSpec(spec.id) && input.chronicleRepo !== undefined) {
+      await this.retroStep(input, state, spec, digest, input.chronicleRepo);
+    }
+  }
+
+  /** Step-cached retro dispatch; inference failure warns to `monitor.log` without blocking the run. */
+  private async retroStep(
+    input: RunTaskInput,
+    state: RunState,
+    spec: SpecDocument,
+    digest: string,
+    chronicleRepo: string
+  ): Promise<void> {
+    const retroKey = stepKey('retro', 'phase', digest);
+    if (state.steps[retroKey] !== undefined) {
+      console.log(chalk.gray('  [cached] bug-run retro already posted'));
+      return;
+    }
+
+    try {
+      const posted = await this._retro.post({
+        chronicleRepo,
+        runId: input.runId,
+        specId: spec.id,
+        context: spec.context ?? '',
+        verdicts: state.verdicts,
+        exceptions: state.exceptions
+      });
+      this._runStateRepo.recordStep(input.runsDir, state, retroKey, {
+        name: 'retro',
+        taskId: 'phase',
+        inputsDigest: digest,
+        detail: posted.artifactPath,
+        completedAt: new Date().toISOString()
+      });
+      console.log(
+        chalk.green(
+          `  [retro] bug-run retro posted to queue (${posted.artifactPath})`
+        )
+      );
+    } catch (err) {
+      const detail =
+        err instanceof WorkflowError
+          ? [err.message, ...err.details].join(': ')
+          : err instanceof Error
+            ? err.message
+            : String(err);
+      const monitorPath =
+        input.monitorPath ??
+        path.join(input.runsDir, input.runId, 'monitor.log');
+      appendMonitorLine(
+        monitorPath,
+        `[retro] WARNING: bug-run retro inference failed — run completed without it: ${detail.slice(0, 500)}`
+      );
+      console.log(
+        chalk.yellow(
+          `  [retro] WARNING: retro inference failed: ${detail.slice(0, 300)}`
+        )
+      );
+    }
   }
 
   async checkVeto(input: CheckVetoInput): Promise<CheckVetoResult> {

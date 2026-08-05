@@ -81,6 +81,13 @@ export interface SpecDocument {
   status: SpecStatus;
   envelope: Envelope;
   tasks: SpecTask[];
+  /**
+   * SPEC-BUG-retro-and-queued-plans-P1 T-01: prose from the spec's
+   * "## Context" section, when the source Markdown has one. It is the raw
+   * material for the post-merge retro inference call on `BUG-*` runs.
+   * Optional so older callers and hand-built fixtures need no change.
+   */
+  context?: string;
 }
 
 export type TaskRunStatus = 'completed' | 'failed' | 'blocked';
@@ -292,7 +299,8 @@ export type ArtifactSchema =
   | 'sdlc.digest.v1'
   | 'sdlc.merge.v1'
   | 'sdlc.revert.v1'
-  | 'sdlc.outcome.v1';
+  | 'sdlc.outcome.v1'
+  | 'sdlc.retro.v1';
 
 export interface ChronicleArtifact {
   schema: ArtifactSchema;

@@ -346,6 +346,15 @@ trailers. Verdict artifacts carry gate identity, inputs digest, outcome,
 and resolvable evidence refs, and read back through
 `GatePolicyQueryService` so future gate policy can learn from track record.
 
+For a `SPEC-BUG-*` run, the same phase boundary also dispatches one retro
+inference call over the spec's Context section and the run's full
+verdict/exception history — "what would have caught this earlier, and
+which stage should own that check" (SPEC-BUG-retro-and-queued-plans-P1
+T-01). Recommendations commit as one `sdlc.retro.v1` artifact and link
+from a `[retro]`-tagged queue Inbox item. Idempotent across resume;
+non-`BUG-*` runs unaffected; a model failure degrades
+loud-but-nonblocking with a `[retro] WARNING` in `monitor.log`.
+
 **Verdict outcomes (BUG-reviewer-house-bar-P1 T-02):** `record-merge --task`
 and `check-veto`'s revert path each annotate the affected task's gate
 verdicts with a compact `sdlc.outcome.v1` artifact — `outcome: stood` when
@@ -436,6 +445,10 @@ Handler / Service / Repository with InversifyJS (workspace rule):
 - `services/digest.service.ts` — phase-boundary digest to the PRD-0007
   personal queue; append-only. Veto is a separate `check-veto` command
   that reads the item back (T-07 / P3 T-05).
+- `services/retro.service.ts` — `SPEC-BUG-*` phase-boundary retro: one
+  inference call over the spec Context + verdict/exception history,
+  committed as `sdlc.retro.v1` and linked from a `[retro]` queue item;
+  append-only, same idempotency contract as the digest (T-01).
 - `services/chronicle-commit.service.ts` — versioned run artifacts +
   merged-SHA / veto-revert recording (`sdlc.merge.v1`, `sdlc.revert.v1`),
   committed per ADR-0007 (T-08 / P3 T-05); also annotates the affected
@@ -456,11 +469,12 @@ Handler / Service / Repository with InversifyJS (workspace rule):
   appends (`queue`), Chronicle ledger artifacts + ADR-0007 commits
   (`chronicle-artifact`), GitHub check-run status (`ci-status`).
 - `utils/` — pure functions: PRD parser, JSON-schema validator, spec renderer,
-  ADR-0008 format validator, spec parser (round-trip of the renderer), spec
-  format lint (`spec-lint`, the hook/CI-safe pre-intake guard), glob
-  matcher, criterion-tier parser, inputs digest (`digest`), the optional
-  review-checklist markdown parser (`review-checklist`), and the
-  implementation / reviewer / verifier agent prompt builders.
+  ADR-0008 format validator, spec parser (round-trip of the renderer, now
+  including the Context section), spec format lint (`spec-lint`, the
+  hook/CI-safe pre-intake guard), glob matcher, criterion-tier parser,
+  inputs digest (`digest`), a `monitor.log` line appender (`monitor`), the
+  optional review-checklist markdown parser (`review-checklist`), and the
+  implementation / reviewer / verifier / retro agent prompt builders.
 
 ## Testing
 
