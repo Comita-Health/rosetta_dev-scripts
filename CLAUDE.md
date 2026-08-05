@@ -1,8 +1,11 @@
 # rosetta_dev-scripts
 
-Rosetta workspace tooling and scaffolding. The `team-setup` CLI bootstraps and maintains the Rosetta
-multi-repo workspace and lays down standardized **Claude Code + Cursor Agent/CLI** configuration for
-the whole team.
+Rosetta workspace tooling and scaffolding. Two packages:
+
+- **`team-setup/`** — the CLI that bootstraps and maintains the Rosetta multi-repo workspace and
+  lays down standardized **Claude Code + Cursor Agent/CLI** configuration for the whole team.
+- **`sdlc-workflow/`** — the automated SDLC engine (PRD-0011): PRD → spec → gated, auto-merged,
+  sandbox-deployed delivery. See [`sdlc-workflow` below](#sdlc-workflow-engine).
 
 Before architectural or product decisions, read the project constitution in
 `rosetta_docs/foundations/` (founding context, principles, glossary, settled decisions).
@@ -13,7 +16,8 @@ Before architectural or product decisions, read the project constitution in
 # Install all workspace dependencies (from the repo root)
 bun install
 
-# All CLI/build/test commands run from team-setup/
+# team-setup CLI/build/test commands run from team-setup/
+# (see the sdlc-workflow section for that package's commands)
 cd team-setup
 
 # Run the team-setup CLI in dev mode
@@ -35,6 +39,43 @@ bun run dev -- tracks           # List tracks
 bun run dev -- shell-alias      # Print the gotor alias
 bun run dev -- update-config    # Refresh Claude + Cursor config from templates
 ```
+
+## sdlc-workflow engine
+
+The automated SDLC engine. All of its commands run from `sdlc-workflow/`:
+
+```bash
+cd sdlc-workflow
+
+bun run dev -- --help                                    # command list
+bun run dev -- prd-lint  --prd PRD-0011                  # validate a PRD parses
+bun run dev -- spec-lint --spec ../specs/PRD-0011/phase-2-spec.md
+bun run dev -- decompose --prd PRD-0011 --repo <target>   # PRD -> Draft spec
+bun run dev -- run --spec <spec> --repo <target> \        # execute an Approved spec
+  --supervise --detach --heartbeat 30
+bun run dev -- status   --run-id <id>                     # where a run stands
+bun run dev -- closeout --run-id <id> --spec <spec> --repo <target>
+
+bun run typecheck && bun run test                         # the merge bar
+```
+
+Notes that are easy to get wrong:
+
+- **`--spec` is relative to the current directory, not `--repo`.** Running from
+  `sdlc-workflow/`, a spec in the target repo is `../specs/...`.
+- **`run` refuses a spec that is not `status: Approved`.** That refusal is the single
+  human authorization point in the pipeline — do not work around it.
+- **Never hand-edit files under `specs/**` to tick criteria.** Checkbox and `status:`
+  state has exactly one writer: the `closeout` command, which derives it from recorded
+  verdicts. An agent diff touching a spec path is a hard envelope breach.
+- Long runs go **detached under supervision** (`--supervise --detach`); do not block an
+  agent turn polling them. See the `sdlc-run-supervise` skill.
+
+Reference documentation — subsystem diagrams, the gate model, `state.json` and `.sdlc/`
+schemas, the run lifecycle, and the measured performance baseline — lives in
+[`rosetta_docs/architecture/sdlc/`](https://github.com/Rosetta-Foundation/rosetta_docs/tree/main/architecture/sdlc).
+Engine behaviour notes and operator guidance live in
+[`sdlc-workflow/README.md`](./sdlc-workflow/README.md) and `sdlc-workflow/docs/`.
 
 ## Workspace Layout
 
@@ -60,6 +101,13 @@ When making any of the following changes, update `README.md` in the same commit:
 
 The directory structure in `README.md` must mirror `team-setup/src/config/shared.json` and
 `tracks/default.json`.
+
+Engine changes have a second target: a new `sdlc-workflow` command or a change to gate,
+contract, or state semantics updates `sdlc-workflow/README.md` in the same commit, and the
+matching reference doc in
+[`rosetta_docs/architecture/sdlc/`](https://github.com/Rosetta-Foundation/rosetta_docs/tree/main/architecture/sdlc)
+in a paired PR. A schema documented in two places that disagree is worse than one
+documented nowhere.
 
 ## Git Workflow
 

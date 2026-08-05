@@ -23,7 +23,7 @@ PRD-0011 (Full-Loop SDLC Automation):
   the T-03 live CI monitor — checks are polled to terminal and failures
   dispatch a fix agent (at most 3 attempts, persisted across resume)
   before the post-cycle verdict reaches the aggregator; and T-04 gate
-  enforcement — all four gates green auto-merges the task PR (merge SHA
+  enforcement — every gate green auto-merges the task PR (merge SHA
   recorded in run state and the `sdlc.merge.v1` artifact, attributed to
   `machine-gates`), any red gate blocks with a `merge-blocked`
   escalation, and `--shadow` restores the record-only calibration mode;
@@ -245,32 +245,6 @@ owned (SPEC-PRD-0021-P1):
   printed "detached" and exited 0 for a run that died a second later. It now
   watches for up to 8s and stops early on evidence either way — the child's
   own `supervise.exit` record, or a dead pid.
-
-### Spec-format lint and the single-writer rule (#40)
-
-The spec file is the one artifact humans and the machine must agree on
-byte-for-byte, so two guards protect it:
-
-- **`spec-lint --spec <path>`** validates an ADR-0008 spec's format with no
-  LLM call and no `--repo` — safe from a pre-commit hook or CI. It reports
-  named error classes across three layers: front-matter / structure parse
-  (`SPEC_MALFORMED`), envelope schema and inline-array integrity
-  (`SPEC_INVALID` / `SPEC_MALFORMED`), and checkbox integrity — every
-  acceptance criterion present and carrying a recognized verification tier
-  (`test:` | `agent:` | `manual:` | `docs:`). Its reason for existing is the
-  Prettier incident: a formatter (or hand-edit) can reshape the inline
-  envelope array into a YAML block sequence that the tolerant parser
-  silently mis-joins into one garbage glob — the envelope then guards
-  nothing. spec-lint names that reshape _before_ intake trips over it. Exit
-  is non-zero with the offending field/criterion named on any finding.
-- **Single-writer rule.** Acceptance-checkbox and `status:` state under
-  `specs/**` has exactly one writer: the engine's phase closeout (a separate
-  docs PR after the product tasks merge — PRD-0023). A product-task diff
-  that edits its own spec file — flipping its own checkboxes — hard-breaches
-  the envelope gate **even when `allowedPaths` would cover the spec path**
-  (`services/envelope-gate.service.ts`, `isSpecTreePath`). Agents never tick
-  their own criteria; the machine records checkbox state from gate verdicts
-  at closeout.
 
 ### Engine branches and target-repo hooks (#41)
 
