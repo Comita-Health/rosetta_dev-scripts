@@ -73,12 +73,12 @@ gap as a mid-run breach.
 
 ### Acceptance criteria
 
-- [ ] test: a glob matching nothing in the repo tree and carrying no
+- [x] test: a glob matching nothing in the repo tree and carrying no
       new-path justification fails synthesis with the glob named in the
       error.
-- [ ] test: new-file intents pass grounding when justified; existing-path
+- [x] test: new-file intents pass grounding when justified; existing-path
       globs pass unchanged.
-- [ ] test: a task note referencing a path outside the envelope surfaces a
+- [x] test: a task note referencing a path outside the envelope surfaces a
       warning in the synthesis output.
 
 ## Task T-02: `forbiddenSurfaces` fail closed at synthesis (#36)
@@ -95,11 +95,11 @@ synthesis time where labels vanish before any human sees the spec.
 
 ### Acceptance criteria
 
-- [ ] test: an unresolvable surface label aborts synthesis with the label
+- [x] test: an unresolvable surface label aborts synthesis with the label
       and the repo's known labels in the error; nothing is dropped.
-- [ ] test: a spec whose labels all resolve synthesizes byte-identically to
+- [x] test: a spec whose labels all resolve synthesizes byte-identically to
       current behavior.
-- [ ] test: regression — a healthcare-shaped label (arbitrary consumer
+- [x] test: regression — a healthcare-shaped label (arbitrary consumer
       label unknown to the engine) round-trips PRD → spec → intake without
       loss.
 
@@ -117,11 +117,11 @@ intake/gate error, not a fallback to local disk.
 
 ### Acceptance criteria
 
-- [ ] test: a locally modified (uncommitted) `surfaces.json` does not
+- [x] test: a locally modified (uncommitted) `surfaces.json` does not
       influence a gate verdict; the PR-tip blob does.
-- [ ] test: contract missing from the judged tree → named error verdict,
+- [x] test: contract missing from the judged tree → named error verdict,
       not local-file fallback.
-- [ ] agent: audit call sites reading `.sdlc/` at evaluation time and align
+- [x] agent: audit call sites reading `.sdlc/` at evaluation time and align
       them to the same tree-resolution rule (documented in README).
 
 ## Task T-04: Spec self-ticking pinned and the spec format linted (#40)
