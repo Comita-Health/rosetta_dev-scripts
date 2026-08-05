@@ -1,4 +1,6 @@
 import 'reflect-metadata';
+import { mkdtempSync, readFileSync, rmSync } from 'fs';
+import os from 'os';
 import path from 'path';
 import { Container } from 'inversify';
 import { IRunHandler, RunHandler } from '../handlers/run.handler';
@@ -13,6 +15,7 @@ import type { IChronicleCommitService } from '../services/chronicle-commit.servi
 import type { ICiGateService } from '../services/ci-gate.service';
 import type { IDigestService } from '../services/digest.service';
 import type { IEnvelopeGateService } from '../services/envelope-gate.service';
+import type { IRetroService } from '../services/retro.service';
 import type { IPullRequestRepository } from '../repositories/pull-request.repository';
 import type { IPrLifecycleService } from '../services/pr-lifecycle.service';
 import type {
@@ -36,6 +39,14 @@ const SPEC: SpecDocument = {
   status: 'Approved',
   envelope: makeEnvelope(),
   tasks: [makeTask()]
+};
+
+// BUG-* fixture (T-01): the id convention that gates the post-merge retro.
+const BUG_SPEC: SpecDocument = {
+  ...SPEC,
+  id: 'SPEC-BUG-test-P1',
+  prdId: 'BUG-test',
+  context: 'Symptom: it broke. Repro: do the thing. Root cause: a gap.'
 };
 
 const makeState = (): RunState => ({
@@ -85,6 +96,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
   let ciEvaluate: jest.Mock;
   let aggregate: jest.Mock;
   let digestPost: jest.Mock;
+  let retroPost: jest.Mock;
   let chronicleRecord: jest.Mock;
   let recordMerge: jest.Mock;
   let evidenceSave: jest.Mock;
@@ -200,6 +212,11 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
       artifactPath: 'chronicles/sdlc/run-1/digest-T-01.json',
       queueAppended: true
     });
+    retroPost = jest.fn().mockResolvedValue({
+      retro: { schema: 'sdlc.retro.v1' },
+      artifactPath: 'chronicles/sdlc/run-1/retro.json',
+      queueAppended: true
+    });
     chronicleRecord = jest.fn().mockResolvedValue({ artifactPaths: ['a'] });
     recordMerge = jest
       .fn()
@@ -308,6 +325,9 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
     container
       .bind<IDigestService>(WORKFLOW_TOKENS.DigestService)
       .toConstantValue({ post: digestPost });
+    container
+      .bind<IRetroService>(WORKFLOW_TOKENS.RetroService)
+      .toConstantValue({ post: retroPost });
     container
       .bind<IChronicleCommitService>(WORKFLOW_TOKENS.ChronicleCommitService)
       .toConstantValue({ record: chronicleRecord, recordMerge, recordRevert });
@@ -1123,6 +1143,107 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
           expect.objectContaining({ code: 'RUN_NOT_FOUND' })
         );
       });
+    });
+  });
+
+  describe('SPEC-BUG-retro-and-queued-plans-P1 T-01 bug-run retro', () => {
+    const greenGates = () => {
+      evaluate.mockResolvedValue(verdictOf('envelope', 'pass'));
+      review.mockResolvedValue(verdictOf('reviewer', 'pass'));
+      verify.mockResolvedValue({
+        verdict: verdictOf('verification', 'pass'),
+        criteria: criterionVerdicts
+      });
+      ciEvaluate.mockResolvedValue(verdictOf('ci', 'pass'));
+      aggregate.mockReturnValue({
+        verdict: verdictOf('phase', 'pass'),
+        exceptions: []
+      });
+    };
+
+    const bugPool = (): PoolOutcome => ({
+      kind: 'executed',
+      spec: BUG_SPEC,
+      state,
+      outcomes: [taskOutcome()]
+    });
+
+    it('produces exactly one sdlc.retro.v1 artifact with stage-attributed recommendations, idempotent across resume', async () => {
+      greenGates();
+      specRead.mockReturnValue(BUG_SPEC);
+      executeReady.mockImplementation(async () => bugPool());
+
+      await handler.runTask({ ...INPUT, chronicleRepo: '/chronicle' });
+
+      expect(retroPost).toHaveBeenCalledTimes(1);
+      expect(retroPost).toHaveBeenCalledWith(
+        expect.objectContaining({
+          chronicleRepo: '/chronicle',
+          runId: 'run-1',
+          specId: BUG_SPEC.id,
+          context: BUG_SPEC.context,
+          verdicts: state.verdicts,
+          exceptions: state.exceptions
+        })
+      );
+      expect(
+        Object.values(state.steps).some(step => step.name === 'retro')
+      ).toBe(true);
+
+      executeReady.mockResolvedValue({
+        kind: 'no-ready-task',
+        spec: BUG_SPEC,
+        state,
+        outcomes: []
+      });
+      await handler.runTask({ ...INPUT, chronicleRepo: '/chronicle' });
+      expect(retroPost).toHaveBeenCalledTimes(1);
+    });
+
+    it('non-bug runs produce no retro artifact and no behavior change', async () => {
+      greenGates();
+
+      const result = await handler.runTask({
+        ...INPUT,
+        chronicleRepo: '/chronicle'
+      });
+
+      expect(retroPost).not.toHaveBeenCalled();
+      expect(result.outcome).toBe('executed');
+      expect(
+        digestPost.mock.calls.some(([arg]) => arg.taskId === 'phase')
+      ).toBe(true);
+    });
+
+    it('a retro inference failure degrades loud-but-nonblocking: the run completes and monitor.log warns', async () => {
+      const tmpRoot = mkdtempSync(path.join(os.tmpdir(), 'sdlc-retro-'));
+      const monitorPath = path.join(tmpRoot, 'monitor.log');
+      try {
+        greenGates();
+        specRead.mockReturnValue(BUG_SPEC);
+        executeReady.mockImplementation(async () => bugPool());
+        retroPost.mockRejectedValue(
+          new WorkflowError('model unavailable', 'INFERENCE_FAILED', [
+            'timeout'
+          ])
+        );
+
+        const result = await handler.runTask({
+          ...INPUT,
+          chronicleRepo: '/chronicle',
+          monitorPath
+        });
+
+        expect(result.outcome).toBe('executed');
+        const monitor = readFileSync(monitorPath, 'utf8');
+        expect(monitor).toContain('[retro] WARNING');
+        expect(monitor).toContain('model unavailable');
+        expect(
+          Object.values(state.steps).some(step => step.name === 'retro')
+        ).toBe(false);
+      } finally {
+        rmSync(tmpRoot, { recursive: true, force: true });
+      }
     });
   });
 

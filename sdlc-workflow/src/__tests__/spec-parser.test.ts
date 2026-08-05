@@ -36,6 +36,7 @@ describe('parseSpec', () => {
     expect(doc.phase).toBe(1);
     expect(doc.status).toBe('Draft');
     expect(doc.envelope).toEqual(makeEnvelope());
+    expect(doc.context).toBe('Some context.');
     expect(doc.tasks).toHaveLength(2);
     expect(doc.tasks[0]).toMatchObject({
       id: 'T-01',
@@ -272,6 +273,24 @@ describe('parseSpec', () => {
     expect(() => parseSpec(markdown)).toThrow(
       expect.objectContaining({ code: 'SPEC_MALFORMED' })
     );
+  });
+
+  // SPEC-BUG-retro-and-queued-plans-P1 T-01: the post-merge retro reads the
+  // Context section back off the spec — a multi-paragraph round trip and a
+  // missing-section fallback both need to hold.
+  it('parses a multi-paragraph Context section, and leaves it undefined without one', () => {
+    const withContext = renderFixture().replace(
+      'Some context.',
+      'Symptom: it broke.\n\nRepro: do the thing.\n\nRoot cause: a gap.'
+    );
+    expect(parseSpec(withContext).context).toBe(
+      'Symptom: it broke.\n\nRepro: do the thing.\n\nRoot cause: a gap.'
+    );
+
+    const noContext = renderFixture()
+      .replace('## Context\n\nSome context.', '')
+      .replace(/\n{3,}/g, '\n\n');
+    expect(parseSpec(noContext).context).toBeUndefined();
   });
 });
 

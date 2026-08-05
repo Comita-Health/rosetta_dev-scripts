@@ -102,6 +102,7 @@ import {
 } from './services/spec-synthesis.service';
 import { CiGateService, ICiGateService } from './services/ci-gate.service';
 import { DigestService, IDigestService } from './services/digest.service';
+import { RetroService, IRetroService } from './services/retro.service';
 import {
   ChronicleCommitService,
   IChronicleCommitService
@@ -236,6 +237,7 @@ container
   .to(CiStatusRepository);
 container.bind<ICiGateService>(WORKFLOW_TOKENS.CiGateService).to(CiGateService);
 container.bind<IDigestService>(WORKFLOW_TOKENS.DigestService).to(DigestService);
+container.bind<IRetroService>(WORKFLOW_TOKENS.RetroService).to(RetroService);
 container
   .bind<IChronicleCommitService>(WORKFLOW_TOKENS.ChronicleCommitService)
   .to(ChronicleCommitService);

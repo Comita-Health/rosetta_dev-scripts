@@ -254,12 +254,19 @@ export const parseSpec = (markdown: string): SpecDocument => {
     throw new WorkflowError('Spec contains no tasks', 'SPEC_MALFORMED');
   }
 
+  // SPEC-BUG-retro-and-queued-plans-P1 T-01: the retro's raw material —
+  // absent (rather than empty) when the source Markdown has no Context
+  // section, so callers can tell "no context" apart from "not this shape".
+  const contextMatch = markdown.match(/^## Context\n\n([\s\S]*?)\n\n## /m);
+  const context = contextMatch !== null ? contextMatch[1].trim() : undefined;
+
   return {
     id: fields.id,
     prdId: fields.prd,
     phase,
     status: fields.status as SpecStatus,
     envelope,
-    tasks
+    tasks,
+    ...(context !== undefined ? { context } : {})
   };
 };
