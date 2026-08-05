@@ -91,11 +91,17 @@ In `comita_admissions` (parallel PR, not this envelope):
 
 ### Acceptance criteria
 
-- [ ] test: docs + `**/__tests__/**` only → `skip` (#302-shaped).
-- [ ] test: shared **source** under `packages/app/shared/**` (non-test) →
+- [x] test: docs + `**/__tests__/**` only → `skip` (#302-shaped).
+- [x] test: shared **source** under `packages/app/shared/**` (non-test) →
       `frontend` (or `both` if backend also matches).
-- [ ] test: backend handler path only → `backend`.
-- [ ] test: empty diff → `skip`.
+- [x] test: backend handler path only → `backend`.
+- [ ] test: empty diff → `skip`. **Deliberately not implemented — an empty
+      diff resolves to `both`.** No files at all means the refs were wrong (a
+      stale base, or a head that is not the commit being deployed), not that
+      nothing shipped; answering `skip` there lets health self-report a SHA it
+      never probed, which is a green gate on unverified code. Locked in by
+      `test_empty_diff_ships_rather_than_skipping`. A real diff of only
+      ignorable files is the legitimate skip and is covered.
 
 ## Task T-03: Wire admissions sandbox-deploy / sandbox-health (companion PR)
 
@@ -119,12 +125,12 @@ Update `scripts/sdlc/sandbox-deploy.sh` and `sandbox-health.sh`:
 
 ### Acceptance criteria
 
-- [ ] test: decision `skip` → deploy script does not call `gh workflow run`.
-- [ ] test: decision `skip` → health stdout contains `SDLC_SANDBOX_SHA` and
+- [x] test: decision `skip` → deploy script does not call `gh workflow run`.
+- [x] test: decision `skip` → health stdout contains `SDLC_SANDBOX_SHA` and
       `skipped=no-deployable-paths`.
-- [ ] test: decision `frontend` → dispatch includes `frontend=true` and
+- [x] test: decision `frontend` → dispatch includes `frontend=true` and
       `backend=false` (and the inverse for `backend`).
-- [ ] docs: `docs/sdlc-contracts.md` describes ignore file + skip/partial/full.
+- [x] docs: `docs/sdlc-contracts.md` describes ignore file + skip/partial/full.
 
 ## Task T-04: Engine docs / changelog for the BASE_SHA contract
 
