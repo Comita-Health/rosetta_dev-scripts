@@ -135,13 +135,44 @@ export interface GateVerdict {
   inputsDigest?: string;
   /** Evidence artifact IDs backing this verdict (T-04/T-08). */
   evidenceIds?: string[];
+  /** Per-item findings against `.sdlc/review-checklist.md` (T-01), when present. */
+  checklistFindings?: ChecklistFinding[];
   recordedAt: string; // ISO timestamp
+}
+
+/**
+ * One item of the repo-owned `.sdlc/review-checklist.md` contract
+ * (SPEC-BUG-reviewer-house-bar-P1 T-01). `mandatory` items are a hard bar:
+ * a failed mandatory item overrides an otherwise-concurring verdict.
+ */
+export interface ReviewChecklistItem {
+  text: string;
+  mandatory: boolean;
+}
+
+/** The parsed `.sdlc/review-checklist.md` contract. Never empty when present. */
+export interface ReviewChecklist {
+  items: ReviewChecklistItem[];
+}
+
+/**
+ * The reviewer's per-item verdict against one `ReviewChecklistItem`.
+ * `itemIndex` (1-based, matching prompt order) is the join key back to
+ * `ReviewChecklist.items` — more stable than matching echoed text.
+ */
+export interface ChecklistFinding {
+  itemIndex: number;
+  item: string;
+  outcome: 'pass' | 'fail';
+  rationale?: string;
 }
 
 /** Reviewer-agent output contract (SPEC-PRD-0011-P2 T-05). */
 export interface ReviewerAssessment {
   decision: 'concur' | 'disagree';
   reasons: string[];
+  /** Present only when the prompt included a repo checklist (T-01). */
+  checklistFindings?: ChecklistFinding[];
 }
 
 export type ExceptionTrigger =
@@ -268,6 +299,7 @@ export type ArtifactSchema =
   | 'sdlc.digest.v1'
   | 'sdlc.merge.v1'
   | 'sdlc.revert.v1'
+  | 'sdlc.outcome.v1'
   | 'sdlc.retro.v1';
 
 export interface ChronicleArtifact {
@@ -287,6 +319,28 @@ export interface VerdictArtifactPayload {
   reasons: string[];
   evidenceRefs: string[]; // resolvable evidence artifact IDs
   taskId: string;
+}
+
+/**
+ * BUG-reviewer-house-bar-P1 T-02: what eventually happened to a recorded gate
+ * verdict, so per-gate precision (how often a concur preceded a veto/rework,
+ * how often a breach was overridden) is computable from the ledger.
+ * `reworked` is reserved for a future rework-detection trigger; this task
+ * wires only `vetoed` (queue-veto revert) and `stood` (human-approved merge).
+ */
+export type VerdictOutcome = 'vetoed' | 'reworked' | 'stood';
+
+/**
+ * Payload of an `sdlc.outcome.v1` artifact — links one gate verdict (by
+ * task + gate + its inputs digest) to its eventual outcome. One artifact
+ * per (runId, taskId, gate); re-recording the same outcome overwrites the
+ * same file rather than appending a duplicate.
+ */
+export interface OutcomeArtifactPayload {
+  taskId: string;
+  gate: string;
+  verdictInputsDigest: string;
+  outcome: VerdictOutcome;
 }
 
 export interface DiffStat {

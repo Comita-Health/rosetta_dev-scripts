@@ -12,6 +12,7 @@ export const WORKFLOW_TOKENS = {
   AgentRunnerRepository: Symbol.for('AgentRunnerRepository'),
   RunStateRepository: Symbol.for('RunStateRepository'),
   SurfaceMapRepository: Symbol.for('SurfaceMapRepository'),
+  ReviewChecklistRepository: Symbol.for('ReviewChecklistRepository'),
   ContractRepository: Symbol.for('ContractRepository'),
   ShellCommandRepository: Symbol.for('ShellCommandRepository'),
   EvidenceRepository: Symbol.for('EvidenceRepository'),

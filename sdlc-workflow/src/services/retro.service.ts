@@ -46,6 +46,18 @@ export interface RetroOutcome {
 
 /** SPEC-BUG-retro-and-queued-plans-P1 T-01: one retro inference call per completed `BUG-*` run. */
 export interface IRetroService {
+  /**
+   * Runs inference over the run's Context/verdicts/exceptions, commits the
+   * resulting `sdlc.retro.v1` artifact, and appends a queue item for the
+   * recommendations.
+   *
+   * @remarks
+   * Does not catch inference or Chronicle-commit failures — `post` throws
+   * and the caller (the run handler, post-merge) owns the loud-but-
+   * nonblocking contract: catch here, log/escalate, and let the run's
+   * completion proceed regardless. Never call this expecting a settled
+   * `Promise` on inference failure.
+   */
   post(input: RetroInput): Promise<RetroOutcome>;
 }
 

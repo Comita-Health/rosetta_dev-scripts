@@ -257,7 +257,15 @@ export const parseSpec = (markdown: string): SpecDocument => {
   // SPEC-BUG-retro-and-queued-plans-P1 T-01: the retro's raw material —
   // absent (rather than empty) when the source Markdown has no Context
   // section, so callers can tell "no context" apart from "not this shape".
-  const contextMatch = markdown.match(/^## Context\n\n([\s\S]*?)\n\n## /m);
+  // The closing lookahead accepts either a following top-level heading or
+  // true end-of-document: a Context section with no trailing `## ` (e.g.
+  // the last section in the file) must still capture its full prose
+  // instead of silently truncating at the first line break or resolving
+  // to `undefined`. `(?![\s\S])` — not `$` — asserts real end-of-string
+  // here, since `$` under the `/m` flag matches at every line boundary.
+  const contextMatch = markdown.match(
+    /^## Context\n\n([\s\S]*?)(?=\n\n## |\n*(?![\s\S]))/m
+  );
   const context = contextMatch !== null ? contextMatch[1].trim() : undefined;
 
   return {

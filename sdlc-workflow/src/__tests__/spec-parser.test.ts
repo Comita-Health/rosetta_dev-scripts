@@ -292,6 +292,21 @@ describe('parseSpec', () => {
       .replace(/\n{3,}/g, '\n\n');
     expect(parseSpec(noContext).context).toBeUndefined();
   });
+
+  // A Context section with no following `## ` heading (e.g. it is the last
+  // section in the document) must still capture its prose rather than
+  // resolving to `undefined`, since that would silently feed an empty
+  // context into the retro prompt for a real run.
+  it('parses a Context section that is the last section in the document', () => {
+    const withoutOriginalContext = renderFixture().replace(
+      '## Context\n\nSome context.\n\n',
+      ''
+    );
+    const contextIsLast = `${withoutOriginalContext}\n\n## Context\n\nTrailing context, last section in the doc.`;
+    expect(parseSpec(contextIsLast).context).toBe(
+      'Trailing context, last section in the doc.'
+    );
+  });
 });
 
 describe('SpecDocRepository', () => {
