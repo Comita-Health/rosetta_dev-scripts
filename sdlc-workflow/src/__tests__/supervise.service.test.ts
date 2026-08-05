@@ -8,6 +8,10 @@ import type { IRunHandler, RunTaskResult } from '../handlers/run.handler';
 import type { ISpecDocRepository } from '../repositories/spec-doc.repository';
 import type { IRunStateRepository } from '../repositories/run-state.repository';
 import type { IProcessDetachRepository } from '../repositories/process-detach.repository';
+import type {
+  IRunQueueRepository,
+  QueuedLaunchRecord
+} from '../repositories/run-queue.repository';
 import type { IHeartbeatWatchService } from '../services/heartbeat-watch.service';
 import {
   SuperviseExitRepository,
@@ -45,6 +49,9 @@ describe('SuperviseService', () => {
   let spawnDetached: jest.Mock;
   let isAlive: jest.Mock;
   let note: jest.Mock;
+  let readAtRef: jest.Mock;
+  let queuePeek: jest.Mock;
+  let queueRemove: jest.Mock;
   let supervise: ISuperviseService;
   let runsDir: string;
   let wakeDir: string;
@@ -94,6 +101,9 @@ describe('SuperviseService', () => {
     spawnDetached = jest.fn().mockReturnValue({ pid: 4242 });
     isAlive = jest.fn().mockReturnValue(true);
     note = jest.fn();
+    readAtRef = jest.fn().mockReturnValue(baseSpec);
+    queuePeek = jest.fn().mockReturnValue(null);
+    queueRemove = jest.fn();
     exitRepo = new SuperviseExitRepository();
 
     const container = new Container();
@@ -104,7 +114,7 @@ describe('SuperviseService', () => {
       .bind<ISpecDocRepository>(WORKFLOW_TOKENS.SpecDocRepository)
       .toConstantValue({
         read,
-        readAtRef: jest.fn().mockReturnValue(baseSpec)
+        readAtRef
       } as unknown as ISpecDocRepository);
     container.bind(WORKFLOW_TOKENS.GitRepository).toConstantValue({
       fetch: jest.fn(),
@@ -142,6 +152,14 @@ describe('SuperviseService', () => {
     container
       .bind<IWakeInboxRepository>(WORKFLOW_TOKENS.WakeInboxRepository)
       .to(WakeInboxRepository);
+    container
+      .bind<IRunQueueRepository>(WORKFLOW_TOKENS.RunQueueRepository)
+      .toConstantValue({
+        enqueue: jest.fn(),
+        list: jest.fn().mockReturnValue([]),
+        peek: queuePeek,
+        remove: queueRemove
+      });
     container
       .bind<ISuperviseService>(WORKFLOW_TOKENS.SuperviseService)
       .to(SuperviseService);
@@ -522,6 +540,248 @@ describe('SuperviseService', () => {
 
     expect(result.kind).toBe('failed');
     expect(result.detail).toBe('');
+  });
+
+  describe('durable launch queue consumption (T-02)', () => {
+    const mergedBoth = {
+      taskResults: {
+        'T-01': {
+          taskId: 'T-01',
+          status: 'completed',
+          mergedSha: 'a',
+          recordedAt: 't'
+        },
+        'T-02': {
+          taskId: 'T-02',
+          status: 'completed',
+          mergedSha: 'b',
+          recordedAt: 't'
+        }
+      }
+    } as unknown as RunState;
+
+    const queuedRecord = (
+      repoPath: string,
+      specPath: string
+    ): QueuedLaunchRecord => ({
+      specPath,
+      repoPath,
+      runsDir: '',
+      argv: [
+        'node',
+        'src/index.ts',
+        'run',
+        '--spec',
+        specPath,
+        '--repo',
+        repoPath,
+        '--supervise',
+        '--detach'
+      ],
+      execArgv: [],
+      execPath: process.execPath,
+      cwd: repoPath,
+      queuedAt: 't'
+    });
+
+    it('launches the head queued record detached when its spec is Approved, then dequeues it', async () => {
+      runTask.mockResolvedValueOnce(wave('executed'));
+      load.mockReturnValueOnce(mergedBoth);
+
+      const record = queuedRecord('/queued/repo', '/queued/repo/specs/spec.md');
+      record.runsDir = runsDir;
+      queuePeek.mockReturnValue({ seq: 7, record });
+      readAtRef.mockReturnValue({ ...baseSpec, status: 'Approved' });
+
+      const result = await supervise.run(input());
+
+      expect(result.kind).toBe('completed');
+      const queueCall = spawnDetached.mock.calls.find(call =>
+        (call[0].args as string[]).includes('/queued/repo/specs/spec.md')
+      );
+      expect(queueCall).toBeDefined();
+      expect(queueRemove).toHaveBeenCalledWith(runsDir, 7);
+      const notes = note.mock.calls.map(call => String(call[1]));
+      expect(notes.some(line => line.includes('[queue] launched'))).toBe(true);
+    });
+
+    // T-02 reviewer finding: the record is the contract precisely so a
+    // relaunch replays what was captured at enqueue time, not whatever
+    // interpreter happens to be running the enforcing process right now.
+    // A record whose execPath/execArgv deliberately differ from this test
+    // process's own would have let the pre-fix code (which read
+    // process.execPath/process.execArgv directly) pass unnoticed.
+    it('spawns the queued launch with the record\'s own execPath/execArgv, not the enforcing process\'s', async () => {
+      runTask.mockResolvedValueOnce(wave('executed'));
+      load.mockReturnValueOnce(mergedBoth);
+
+      const record = queuedRecord('/queued/repo', '/queued/repo/specs/spec.md');
+      record.runsDir = runsDir;
+      record.execPath = '/opt/some-other-node/bin/node';
+      record.execArgv = ['--max-old-space-size=4096'];
+      queuePeek.mockReturnValue({ seq: 7, record });
+      readAtRef.mockReturnValue({ ...baseSpec, status: 'Approved' });
+
+      await supervise.run(input());
+
+      const queueCall = spawnDetached.mock.calls.find(call =>
+        (call[0].args as string[]).includes('/queued/repo/specs/spec.md')
+      );
+      expect(queueCall).toBeDefined();
+      expect(queueCall?.[0].command).toBe('/opt/some-other-node/bin/node');
+      expect(queueCall?.[0].args.slice(0, 1)).toEqual([
+        '--max-old-space-size=4096'
+      ]);
+    });
+
+    it('leaves the head queued record queued, with a visible monitor line, when its spec is not Approved', async () => {
+      runTask.mockResolvedValueOnce(wave('executed'));
+      load.mockReturnValueOnce(mergedBoth);
+
+      const record = queuedRecord('/queued/repo', '/queued/repo/specs/draft.md');
+      record.runsDir = runsDir;
+      queuePeek.mockReturnValue({ seq: 8, record });
+      readAtRef.mockImplementation((repoPath: string) =>
+        repoPath === '/queued/repo'
+          ? { ...baseSpec, status: 'Draft' }
+          : baseSpec
+      );
+
+      const result = await supervise.run(input());
+
+      expect(result.kind).toBe('completed');
+      expect(queueRemove).not.toHaveBeenCalled();
+      const queueCall = spawnDetached.mock.calls.find(call =>
+        (call[0].args as string[]).includes('/queued/repo/specs/draft.md')
+      );
+      expect(queueCall).toBeUndefined();
+      const notes = note.mock.calls.map(call => String(call[1]));
+      expect(
+        notes.some(line => line.includes('not yet Approved') && line.includes('/queued/repo/specs/draft.md'))
+      ).toBe(true);
+    });
+
+    it('escalates via a durable wake and retains the record when the queued launch fails to start', async () => {
+      runTask.mockResolvedValueOnce(wave('executed'));
+      load.mockReturnValueOnce(mergedBoth);
+
+      const record = queuedRecord('/queued/repo', '/queued/repo/specs/spec.md');
+      record.runsDir = runsDir;
+      queuePeek.mockReturnValue({ seq: 9, record });
+      readAtRef.mockReturnValue({ ...baseSpec, status: 'Approved' });
+      isAlive.mockReturnValue(false);
+
+      const result = await supervise.run(input());
+
+      // The run itself still completed — only the *next* launch failed.
+      expect(result.kind).toBe('completed');
+      expect(queueRemove).not.toHaveBeenCalled();
+
+      const wakes = pendingWakes();
+      const queueWakeName = wakes.find(name => name.includes('queue-launch'));
+      expect(queueWakeName).toBeDefined();
+      const payload = JSON.parse(
+        readFileSync(path.join(wakeDir, 'pending', queueWakeName as string), 'utf-8')
+      ) as { kind: string; data: { specPath: string } };
+      expect(payload.kind).toBe('sdlc_queue_launch');
+      expect(payload.data.specPath).toBe('/queued/repo/specs/spec.md');
+
+      const notes = note.mock.calls.map(call => String(call[1]));
+      expect(
+        notes.some(
+          line => line.includes('[queue] FAILED') && line.includes('retained for retry')
+        )
+      ).toBe(true);
+    });
+
+    it('falls back to the working-tree spec when the queued record lives outside its repo checkout', async () => {
+      runTask.mockResolvedValueOnce(wave('executed'));
+      load.mockReturnValueOnce(mergedBoth);
+
+      // specPath is not under repoPath — isQueuedSpecApproved must fall back
+      // to a direct working-tree read rather than the origin-ref path.
+      const record = queuedRecord('/queued/repo', '/elsewhere/spec.md');
+      record.runsDir = runsDir;
+      queuePeek.mockReturnValue({ seq: 11, record });
+      read.mockReturnValue({ ...baseSpec, status: 'Approved' });
+
+      const result = await supervise.run(input());
+
+      expect(result.kind).toBe('completed');
+      expect(queueRemove).toHaveBeenCalledWith(runsDir, 11);
+    });
+
+    it('fails closed (stays queued) when checking the queued spec throws', async () => {
+      runTask.mockResolvedValueOnce(wave('executed'));
+      load.mockReturnValueOnce(mergedBoth);
+
+      const record = queuedRecord('/queued/repo', '/queued/repo/specs/spec.md');
+      record.runsDir = runsDir;
+      queuePeek.mockReturnValue({ seq: 12, record });
+      readAtRef.mockImplementation(() => {
+        throw new Error('git show failed');
+      });
+
+      const result = await supervise.run(input());
+
+      expect(result.kind).toBe('completed');
+      expect(queueRemove).not.toHaveBeenCalled();
+      expect(spawnDetached).not.toHaveBeenCalled();
+    });
+
+    it('escalates (rather than throwing) when the detached spawn call itself throws', async () => {
+      runTask.mockResolvedValueOnce(wave('executed'));
+      load.mockReturnValueOnce(mergedBoth);
+
+      const record = queuedRecord('/queued/repo', '/queued/repo/specs/spec.md');
+      record.runsDir = runsDir;
+      queuePeek.mockReturnValue({ seq: 13, record });
+      readAtRef.mockReturnValue({ ...baseSpec, status: 'Approved' });
+      spawnDetached.mockImplementationOnce(() => {
+        throw new Error('spawn EAGAIN');
+      });
+
+      const result = await supervise.run(input());
+
+      expect(result.kind).toBe('completed');
+      expect(queueRemove).not.toHaveBeenCalled();
+
+      const wakes = pendingWakes();
+      const queueWakeName = wakes.find(name => name.includes('queue-launch'));
+      const payload = JSON.parse(
+        readFileSync(path.join(wakeDir, 'pending', queueWakeName as string), 'utf-8')
+      ) as { data: { detail: string } };
+      expect(payload.data.detail).toContain('spawn EAGAIN');
+    });
+
+    it('does nothing when the queue is empty', async () => {
+      runTask.mockResolvedValueOnce(wave('executed'));
+      load.mockReturnValueOnce(mergedBoth);
+      queuePeek.mockReturnValue(null);
+
+      const result = await supervise.run(input());
+
+      expect(result.kind).toBe('completed');
+      expect(queueRemove).not.toHaveBeenCalled();
+    });
+
+    it('never consumes the queue for a shadow run reaching a human gate', async () => {
+      runTask.mockResolvedValue(wave('executed'));
+      load.mockReturnValue({
+        taskResults: {
+          'T-01': { taskId: 'T-01', status: 'completed', recordedAt: 't' }
+        }
+      } as unknown as RunState);
+      queuePeek.mockReturnValue({
+        seq: 1,
+        record: queuedRecord('/queued/repo', '/queued/repo/specs/spec.md')
+      });
+
+      const result = await supervise.run(input({ shadow: true }));
+
+      expect(result.kind).toBe('stopped');
+      expect(spawnDetached).not.toHaveBeenCalled();
+    });
   });
 
   it('stops when no ready task remains and work is incomplete', async () => {

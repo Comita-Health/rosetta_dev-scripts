@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** `queue-run --spec <path> --repo <path> …` writes a
+  durable FIFO launch record (`<runsDir>/queue/<n>.json`, deduped by spec
+  path) capturing the same argv surface as the continuity daemon's
+  `launch.json` (SPEC-BUG-retro-and-queued-plans-P1 T-02). When a supervised
+  enforce run completes with every task merged, the supervise loop pops the
+  queue head and — the same relaunch mechanics `--detach` already uses —
+  launches it detached once its spec reads `Approved` on `origin/<default>`;
+  an unapproved head stays queued with a visible `monitor.log` line, and a
+  failed launch is never a silent drop — it stays queued for retry and
+  raises a durable `sdlc_queue_launch` wake. The relaunch replays the
+  record's own `execPath`/`execArgv` (not the enforcing process's), so a
+  queued relaunch stays correct even under a differently-invoked daemon.
+  `status --queue` lists queued entries. This is the interim consumer; the
+  PRD-0020 daemon later owns the same queue via its watch registry against
+  this unchanged record format.
 - **sdlc-workflow:** the envelope gate's `maxDiffLines` budget now excludes
   test files (`*.test.*`, `*.spec.*`, `__tests__/**`, `__mocks__/**` —
   `isTestPath`) from the size count; they still count for `allowedPaths` /

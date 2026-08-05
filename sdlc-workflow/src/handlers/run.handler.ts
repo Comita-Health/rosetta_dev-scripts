@@ -4,6 +4,7 @@ import path from 'path';
 import type { IEvidenceRepository } from '../repositories/evidence.repository';
 import type { IGitRepository } from '../repositories/git.repository';
 import type { IQueueRepository } from '../repositories/queue.repository';
+import type { IRunQueueRepository } from '../repositories/run-queue.repository';
 import type { IRunStateRepository } from '../repositories/run-state.repository';
 import type { ISpecDocRepository } from '../repositories/spec-doc.repository';
 import type { IAggregatorService } from '../services/aggregator.service';
@@ -42,6 +43,7 @@ import {
 } from '../types';
 import { inputsDigest } from '../utils/digest';
 import { appendMonitorLine } from '../utils/monitor';
+import { buildQueuedRunArgv } from '../utils/queue-argv';
 import { categorizeTasks } from '../utils/run-summary';
 
 export interface RunTaskInput extends PoolInput {
@@ -119,6 +121,26 @@ export interface StatusCliInput {
   runId: string;
 }
 
+/** T-02: `queue-run` CLI input — the same launch surface as `run`, minus
+ * the flags (`--shadow`, `--supervise`, `--detach`) the queued launch
+ * always applies itself (`--supervise --detach`, enforcing). */
+export interface QueueRunCliInput {
+  specPath: string;
+  repoPath: string;
+  runsDir: string;
+  runId?: string;
+  chronicleRepo?: string;
+  maxParallel?: number;
+  heartbeatSeconds?: number;
+  maxWaves?: number;
+  monitorPath?: string;
+  operator?: string;
+}
+
+export interface QueueStatusCliInput {
+  runsDir: string;
+}
+
 export interface CheckVetoInput {
   runsDir: string;
   runId: string;
@@ -147,6 +169,10 @@ export interface IRunHandler {
    * SHA. No veto → nothing changes. The run itself never blocks on this.
    */
   checkVeto(input: CheckVetoInput): Promise<CheckVetoResult>;
+  /** T-02: write a durable FIFO launch record, deduped by spec path. */
+  queueRun(input: QueueRunCliInput): void;
+  /** T-02: list queued launch records (`status --queue`). */
+  listQueue(input: QueueStatusCliInput): void;
 }
 
 @injectable()
@@ -187,6 +213,8 @@ export class RunHandler implements IRunHandler {
     private readonly _evidenceRepo: IEvidenceRepository,
     @inject(WORKFLOW_TOKENS.QueueRepository)
     private readonly _queueRepo: IQueueRepository,
+    @inject(WORKFLOW_TOKENS.RunQueueRepository)
+    private readonly _runQueueRepo: IRunQueueRepository,
     @inject(WORKFLOW_TOKENS.EscalationService)
     private readonly _escalation: IEscalationService,
     @inject(WORKFLOW_TOKENS.RunStateRepository)
@@ -1244,6 +1272,75 @@ export class RunHandler implements IRunHandler {
           )
         );
       }
+    }
+  }
+
+  /**
+   * T-02: write (or dedup) a durable FIFO launch record under
+   * `<runsDir>/queue/<n>.json`. The stored argv replays `run --supervise
+   * --detach` for this spec — the same relaunch mechanics the continuity
+   * daemon already uses — so the completing supervise loop (or, later, the
+   * PRD-0020 daemon) can launch it with nothing else on hand.
+   */
+  queueRun(input: QueueRunCliInput): void {
+    const specPath = path.resolve(input.specPath);
+    const repoPath = path.resolve(input.repoPath);
+    const argv = buildQueuedRunArgv({
+      scriptEntry: process.argv[1] ?? 'src/index.ts',
+      specPath,
+      repoPath,
+      runsDir: input.runsDir,
+      runId: input.runId,
+      chronicleRepo: input.chronicleRepo,
+      maxParallel: input.maxParallel,
+      heartbeatSeconds: input.heartbeatSeconds,
+      maxWaves: input.maxWaves,
+      monitorPath: input.monitorPath,
+      operator: input.operator
+    });
+
+    const result = this._runQueueRepo.enqueue(input.runsDir, {
+      specPath,
+      repoPath,
+      runsDir: input.runsDir,
+      runId: input.runId,
+      argv,
+      execArgv: [...process.execArgv],
+      execPath: process.execPath,
+      cwd: process.cwd()
+    });
+
+    if (result.deduped) {
+      console.log(
+        chalk.yellow(`  [queue] already queued (dedup by spec path): ${specPath}`)
+      );
+      console.log(`  record: ${result.path}`);
+      return;
+    }
+    console.log(chalk.green(`✓ queued run #${result.seq} for ${specPath}`));
+    console.log(`  repo:   ${repoPath}`);
+    console.log(`  record: ${result.path}`);
+    console.log(
+      chalk.gray(
+        '  Launched when the current supervised run completes and this spec is Approved.'
+      )
+    );
+  }
+
+  /** T-02: `status --queue` — list queued launch records, oldest first. */
+  listQueue(input: QueueStatusCliInput): void {
+    const entries = this._runQueueRepo.list(input.runsDir);
+    console.log(chalk.bold(`\nQueued runs (${entries.length})`));
+    if (entries.length === 0) {
+      console.log('  (empty)');
+      return;
+    }
+    for (const { seq, record } of entries) {
+      console.log(
+        `  #${seq} ${record.specPath} → ${record.repoPath}` +
+          (record.runId !== undefined ? ` (run-id: ${record.runId})` : '') +
+          chalk.gray(` queued ${record.queuedAt}`)
+      );
     }
   }
 

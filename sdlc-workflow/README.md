@@ -93,6 +93,13 @@ bun run dev -- status --run-id <run-id>
 # Lint an ADR-0008 spec before intake (front-matter parse, envelope schema,
 # checkbox integrity) — no LLM call, no --repo; hook/CI safe (#40)
 bun run dev -- spec-lint --spec ../specs/BUG-envelope-spec-integrity/phase-1-spec.md
+
+# Queue a spec to launch automatically when the current supervised run
+# finishes and this spec is Approved (SPEC-BUG-retro-and-queued-plans-P1 T-02)
+bun run dev -- queue-run --spec ../specs/PRD-0011/phase-4-spec.md --repo ..
+
+# List queued launch records (FIFO, oldest first)
+bun run dev -- status --queue
 ```
 
 `decompose` grounds the synthesized envelope in the target repo tree (#35):
@@ -229,6 +236,32 @@ those remain the continuity layer's job (`supervise.pid` liveness +
 heartbeat staleness in `sdlc-continuity-daemon.sh`). Startup-window death
 (child dies before the first wave) is still caught by the detach parent's
 post-spawn grace probe (PR #83/#84).
+
+### Durable launch queue (SPEC-BUG-retro-and-queued-plans-P1 T-02)
+
+Planning is parallel but hand-off was manual: approving spec B while spec
+A's supervised run is still active used to strand B — nothing launched it
+when A finished. `queue-run --spec <path> --repo <path> …` closes that gap
+with a durable FIFO record, `<runsDir>/queue/<n>.json`, capturing the same
+argv surface as the continuity daemon's `launch.json` (`argv`, `execArgv`,
+`execPath`, `cwd`) so a later launch needs nothing else on hand. A second
+`queue-run` for the same spec path is a no-op (dedup by resolved path);
+`status --queue` lists every queued record, oldest first.
+
+The completing supervise loop is the interim consumer: once an **enforce**
+run (never `--shadow`) merges every task, it peeks the queue head and —
+the same `buildSuperviseChildArgv` + process-detach mechanics `--detach`
+already uses — launches it detached, but only once that record's own spec
+reads `status: Approved` from `origin/<default>` (a working-tree fallback
+covers a spec outside the queued repo checkout). An unapproved head stays
+queued with a visible `[queue] … not yet Approved` `monitor.log` line, so
+it is retried at the next enforce completion rather than dropped. A launch
+that fails to start (spawn error, or the child dies before it survives the
+same startup grace window `--detach` uses) is never a silent drop either:
+the record stays queued for retry and a durable `sdlc_queue_launch` wake
+surfaces the failure. This is the interim consumer only — PRD-0020's event
+daemon later owns the same queue via its watch registry against this
+unchanged record format.
 
 ## Repo-owned `.sdlc/` contracts
 
@@ -470,14 +503,18 @@ Handler / Service / Repository with InversifyJS (workspace rule):
   (`contract`), contract command execution
   (`shell-command`), evidence artifacts (`evidence`), PRD-0007 queue
   appends (`queue`), Chronicle ledger artifacts + ADR-0007 commits
-  (`chronicle-artifact`), GitHub check-run status (`ci-status`).
+  (`chronicle-artifact`), GitHub check-run status (`ci-status`), and the
+  `queue-run` durable launch queue — FIFO `<runsDir>/queue/<n>.json`
+  records deduped by spec path (`run-queue`, T-02).
 - `utils/` — pure functions: PRD parser, JSON-schema validator, spec renderer,
   ADR-0008 format validator, spec parser (round-trip of the renderer, now
   including the Context section), spec format lint (`spec-lint`, the
   hook/CI-safe pre-intake guard), glob matcher, criterion-tier parser,
-  inputs digest (`digest`), a `monitor.log` line appender (`monitor`), the
-  optional review-checklist markdown parser (`review-checklist`), and the
-  implementation / reviewer / verifier / retro agent prompt builders.
+  inputs digest (`digest`), a `monitor.log` line appender (`monitor`),
+  queued-run argv construction (`queue-argv`, mirrors `supervise-argv` for
+  the launch queue), the optional review-checklist markdown parser
+  (`review-checklist`), and the implementation / reviewer / verifier /
+  retro agent prompt builders.
 
 ## Testing
 

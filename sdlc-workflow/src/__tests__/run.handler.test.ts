@@ -7,6 +7,10 @@ import { IRunHandler, RunHandler } from '../handlers/run.handler';
 import type { IEvidenceRepository } from '../repositories/evidence.repository';
 import type { IGitRepository } from '../repositories/git.repository';
 import type { IQueueRepository } from '../repositories/queue.repository';
+import {
+  RunQueueRepository,
+  type IRunQueueRepository
+} from '../repositories/run-queue.repository';
 import type { IRunStateRepository } from '../repositories/run-state.repository';
 import type { ISpecDocRepository } from '../repositories/spec-doc.repository';
 import type { IEscalationService } from '../services/escalation.service';
@@ -301,6 +305,9 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
     container
       .bind<IQueueRepository>(WORKFLOW_TOKENS.QueueRepository)
       .toConstantValue({ appendItem: jest.fn(), itemTags });
+    container
+      .bind<IRunQueueRepository>(WORKFLOW_TOKENS.RunQueueRepository)
+      .to(RunQueueRepository);
     container
       .bind<IEscalationService>(WORKFLOW_TOKENS.EscalationService)
       .toConstantValue({ post: escalationPost });
@@ -1558,5 +1565,115 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
     });
 
     expect(removeWorktreeAsync).not.toHaveBeenCalled();
+  });
+
+  describe('queueRun / listQueue (T-02 durable launch queue)', () => {
+    let queueRunsDir: string;
+
+    beforeEach(() => {
+      queueRunsDir = mkdtempSync(path.join(os.tmpdir(), 'sdlc-queue-run-'));
+    });
+
+    afterEach(() => {
+      rmSync(queueRunsDir, { recursive: true, force: true });
+    });
+
+    it('writes a well-formed FIFO record capturing the run argv surface', () => {
+      handler.queueRun({
+        specPath: '/specs/a.md',
+        repoPath: '/repo-a',
+        runsDir: queueRunsDir,
+        chronicleRepo: '/chronicle',
+        maxParallel: 2,
+        heartbeatSeconds: 15,
+        operator: 'octocat'
+      });
+
+      const file = path.join(queueRunsDir, 'queue', '1.json');
+      const record = JSON.parse(readFileSync(file, 'utf-8'));
+      expect(record.specPath).toBe(path.resolve('/specs/a.md'));
+      expect(record.repoPath).toBe(path.resolve('/repo-a'));
+      expect(record.argv).toEqual(
+        expect.arrayContaining([
+          'run',
+          '--spec',
+          path.resolve('/specs/a.md'),
+          '--repo',
+          path.resolve('/repo-a'),
+          '--chronicle-repo',
+          '/chronicle',
+          '--max-parallel',
+          '2',
+          '--heartbeat',
+          '15',
+          '--operator',
+          'octocat',
+          '--supervise',
+          '--detach'
+        ])
+      );
+      expect(Array.isArray(record.execArgv)).toBe(true);
+      expect(typeof record.execPath).toBe('string');
+      expect(typeof record.cwd).toBe('string');
+      expect(typeof record.queuedAt).toBe('string');
+    });
+
+    it('dedups a second queue-run for the same spec path', () => {
+      handler.queueRun({
+        specPath: '/specs/a.md',
+        repoPath: '/repo-a',
+        runsDir: queueRunsDir
+      });
+      handler.queueRun({
+        specPath: '/specs/a.md',
+        repoPath: '/repo-a',
+        runsDir: queueRunsDir
+      });
+      handler.queueRun({
+        specPath: '/specs/b.md',
+        repoPath: '/repo-b',
+        runsDir: queueRunsDir
+      });
+
+      const entries = new RunQueueRepository().list(queueRunsDir);
+      expect(entries.map(entry => entry.record.specPath)).toEqual([
+        path.resolve('/specs/a.md'),
+        path.resolve('/specs/b.md')
+      ]);
+    });
+
+    it('status --queue lists queued entries oldest first', () => {
+      handler.queueRun({
+        specPath: '/specs/a.md',
+        repoPath: '/repo-a',
+        runsDir: queueRunsDir
+      });
+      handler.queueRun({
+        specPath: '/specs/b.md',
+        repoPath: '/repo-b',
+        runsDir: queueRunsDir
+      });
+
+      handler.listQueue({ runsDir: queueRunsDir });
+
+      const output = (console.log as jest.Mock).mock.calls
+        .map(call => String(call[0]))
+        .join('\n');
+      expect(output).toContain('Queued runs (2)');
+      expect(output).toContain(path.resolve('/specs/a.md'));
+      expect(output).toContain(path.resolve('/specs/b.md'));
+      expect(output.indexOf(path.resolve('/specs/a.md'))).toBeLessThan(
+        output.indexOf(path.resolve('/specs/b.md'))
+      );
+    });
+
+    it('status --queue reports an empty queue', () => {
+      handler.listQueue({ runsDir: queueRunsDir });
+      const output = (console.log as jest.Mock).mock.calls
+        .map(call => String(call[0]))
+        .join('\n');
+      expect(output).toContain('Queued runs (0)');
+      expect(output).toContain('(empty)');
+    });
   });
 });

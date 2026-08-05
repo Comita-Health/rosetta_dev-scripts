@@ -52,6 +52,10 @@ import {
   IPullRequestRepository
 } from './repositories/pull-request.repository';
 import {
+  RunQueueRepository,
+  IRunQueueRepository
+} from './repositories/run-queue.repository';
+import {
   RunStateRepository,
   IRunStateRepository
 } from './repositories/run-state.repository';
@@ -278,6 +282,9 @@ container
 container
   .bind<ISuperviseExitRepository>(WORKFLOW_TOKENS.SuperviseExitRepository)
   .to(SuperviseExitRepository);
+container
+  .bind<IRunQueueRepository>(WORKFLOW_TOKENS.RunQueueRepository)
+  .to(RunQueueRepository);
 container.bind<IRunHandler>(WORKFLOW_TOKENS.RunHandler).to(RunHandler);
 container
   .bind<ISuperviseService>(WORKFLOW_TOKENS.SuperviseService)
@@ -558,6 +565,86 @@ yargs(hideBin(process.argv))
     }
   )
   .command(
+    'queue-run',
+    'Write a durable launch record for a spec, launched detached when the current supervised run completes and the spec is Approved (T-02)',
+    y =>
+      y
+        .option('spec', {
+          type: 'string',
+          demandOption: true,
+          describe: 'Path to the spec to launch when its turn comes'
+        })
+        .option('repo', {
+          type: 'string',
+          demandOption: true,
+          describe: 'Path to the target repo the queued run will execute in'
+        })
+        .option('run-id', {
+          type: 'string',
+          describe: 'Stable run identifier for the queued launch'
+        })
+        .option('runs-dir', {
+          type: 'string',
+          default: path.join(os.homedir(), '.rosetta', 'sdlc-runs'),
+          describe: 'Directory holding run state and the launch queue'
+        })
+        .option('chronicle-repo', {
+          type: 'string',
+          describe: 'Personal Chronicle ledger repo for the queued run'
+        })
+        .option('max-parallel', {
+          type: 'number',
+          default: 3,
+          describe: 'Concurrent implementation agents for the queued run'
+        })
+        .option('heartbeat', {
+          type: 'number',
+          default: 30,
+          describe: 'Heartbeat interval (seconds) for the queued run'
+        })
+        .option('max-waves', {
+          type: 'number',
+          default: 20,
+          describe: 'Max wave iterations for the queued run'
+        })
+        .option('monitor', {
+          type: 'string',
+          describe: 'Monitor log path override for the queued run'
+        })
+        .option('operator', {
+          type: 'string',
+          describe:
+            'GitHub login assigned on needs-human escalation issues for the queued run'
+        }),
+    argv => {
+      const handler = container.get<IRunHandler>(WORKFLOW_TOKENS.RunHandler);
+      try {
+        handler.queueRun({
+          specPath: argv.spec,
+          repoPath: argv.repo,
+          runId: argv['run-id'],
+          runsDir: argv['runs-dir'],
+          chronicleRepo: argv['chronicle-repo'],
+          maxParallel: argv['max-parallel'],
+          heartbeatSeconds: argv.heartbeat,
+          maxWaves: argv['max-waves'],
+          monitorPath: argv.monitor,
+          operator: argv.operator
+        });
+      } catch (err) {
+        if (err instanceof WorkflowError) {
+          console.error(chalk.red(`\n✗ ${err.code}: ${err.message}`));
+          for (const detail of err.details) {
+            console.error(chalk.red(`  - ${detail}`));
+          }
+        } else {
+          console.error(chalk.red(`\n✗ ${err}`));
+        }
+        process.exit(1);
+      }
+    }
+  )
+  .command(
     'record-merge',
     'Record a human-approved merge in the run Chronicle artifact (T-08)',
     y =>
@@ -665,22 +752,39 @@ yargs(hideBin(process.argv))
   )
   .command(
     'status',
-    'Show a run: task results, cached step graph, verdicts, exceptions (T-09)',
+    'Show a run: task results, cached step graph, verdicts, exceptions (T-09); or list the launch queue with --queue (T-02)',
     y =>
       y
         .option('run-id', {
           type: 'string',
-          demandOption: true,
           describe: 'Run identifier to inspect'
         })
         .option('runs-dir', {
           type: 'string',
           default: path.join(os.homedir(), '.rosetta', 'sdlc-runs'),
           describe: 'Directory holding run state'
+        })
+        .option('queue', {
+          type: 'boolean',
+          default: false,
+          describe: 'List queued launch records instead of a run (T-02)'
         }),
     argv => {
       const handler = container.get<IRunHandler>(WORKFLOW_TOKENS.RunHandler);
       try {
+        if (argv.queue === true) {
+          handler.listQueue({ runsDir: argv['runs-dir'] });
+          return;
+        }
+        if (argv['run-id'] === undefined) {
+          console.error(
+            chalk.red(
+              '\n✗ status requires --run-id (or --queue to list the launch queue)'
+            )
+          );
+          process.exit(1);
+          return;
+        }
         handler.showStatus({
           runsDir: argv['runs-dir'],
           runId: argv['run-id']

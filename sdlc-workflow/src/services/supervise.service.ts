@@ -11,6 +11,10 @@ import path from 'path';
 import chalk from 'chalk';
 import type { IGitRepository } from '../repositories/git.repository';
 import type { IProcessDetachRepository } from '../repositories/process-detach.repository';
+import type {
+  IRunQueueRepository,
+  QueuedLaunchRecord
+} from '../repositories/run-queue.repository';
 import type { IRunStateRepository } from '../repositories/run-state.repository';
 import type { ISpecDocRepository } from '../repositories/spec-doc.repository';
 import type {
@@ -127,7 +131,9 @@ export class SuperviseService implements ISuperviseService {
     @inject(WORKFLOW_TOKENS.SuperviseExitRepository)
     private readonly _exitRepo: ISuperviseExitRepository,
     @inject(WORKFLOW_TOKENS.WakeInboxRepository)
-    private readonly _wakeRepo: IWakeInboxRepository
+    private readonly _wakeRepo: IWakeInboxRepository,
+    @inject(WORKFLOW_TOKENS.RunQueueRepository)
+    private readonly _runQueueRepo: IRunQueueRepository
   ) {}
 
   async run(input: SuperviseInput): Promise<SuperviseResult> {
@@ -287,6 +293,13 @@ export class SuperviseService implements ISuperviseService {
             `[supervise] ALL TASKS MERGED after wave ${waves}`
           );
           console.log(chalk.green('\n[supervise] all tasks merged — done'));
+          // T-02: a completing *enforce* run is the interim consumer of the
+          // durable launch queue — pop the head record when its spec has
+          // landed as Approved; shadow calibration runs never merge for
+          // real, so they must never advance someone else's queue.
+          if (input.shadow !== true) {
+            await this.consumeQueue(input, monitorPath);
+          }
           return finish({
             kind: 'completed',
             waves,
@@ -461,5 +474,156 @@ export class SuperviseService implements ISuperviseService {
       this._specDocRepo.readAtRef(input.repoPath, ref, relPath) ??
       this._specDocRepo.read(input.specPath)
     );
+  }
+
+  /**
+   * T-02: pop the head of the durable launch queue when its spec is
+   * Approved on `origin/<default>`; leave it queued (with a visible
+   * monitor line) otherwise. A failed launch is never a silent drop — it
+   * stays queued for retry and surfaces as a wake escalation.
+   */
+  private async consumeQueue(
+    input: SuperviseInput,
+    monitorPath: string
+  ): Promise<void> {
+    const head = this._runQueueRepo.peek(input.runsDir);
+    if (head === null) {
+      return;
+    }
+    const { seq, record } = head;
+
+    if (!this.isQueuedSpecApproved(record)) {
+      this._hbWatch.note(
+        monitorPath,
+        `[queue] head record not yet Approved — staying queued: ${record.specPath}`
+      );
+      return;
+    }
+
+    this._hbWatch.note(
+      monitorPath,
+      `[queue] launching queued run for ${record.specPath}`
+    );
+
+    try {
+      const launch = await this.launchQueuedRecord(record);
+      if (launch.alive) {
+        this._runQueueRepo.remove(input.runsDir, seq);
+        this._hbWatch.note(
+          monitorPath,
+          `[queue] launched pid=${launch.pid} runId=${launch.runId} — dequeued ${record.specPath}`
+        );
+        return;
+      }
+      this.escalateQueueLaunchFailure(
+        input,
+        record,
+        monitorPath,
+        launch.detail.length > 0
+          ? launch.detail
+          : 'detached child exited during startup'
+      );
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      this.escalateQueueLaunchFailure(input, record, monitorPath, detail);
+    }
+  }
+
+  /**
+   * Approved on `origin/<default>` (or the working-tree file when the
+   * queued spec lives outside the queued repo checkout). Any read failure
+   * fails closed — leave queued; an unreadable spec is not a launch signal.
+   */
+  private isQueuedSpecApproved(record: QueuedLaunchRecord): boolean {
+    try {
+      const relPath = path.relative(record.repoPath, record.specPath);
+      if (relPath.startsWith('..') || path.isAbsolute(relPath)) {
+        return this._specDocRepo.read(record.specPath).status === 'Approved';
+      }
+      this._gitRepo.fetch(record.repoPath);
+      const ref = `origin/${this._gitRepo.defaultBranch(record.repoPath)}`;
+      const spec = this._specDocRepo.readAtRef(record.repoPath, ref, relPath);
+      return spec?.status === 'Approved';
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Launch a queued record detached — the same mechanics `detach()` uses
+   * for an operator-triggered detach: replay the record's `run` argv
+   * through `buildSuperviseChildArgv`, spawn via the process-detach
+   * repository, and confirm the child survives the startup grace window.
+   */
+  private async launchQueuedRecord(
+    record: QueuedLaunchRecord
+  ): Promise<{ pid: number; alive: boolean; runId: string; detail: string }> {
+    const runId = record.runId ?? this.deriveQueuedRunId(record.specPath);
+    const runDir = path.join(record.runsDir, runId);
+    mkdirSync(runDir, { recursive: true });
+    const logPath = path.join(runDir, 'supervise.log');
+    const monitorPath = path.join(runDir, 'monitor.log');
+
+    const childArgv = buildSuperviseChildArgv(record.argv);
+    // Replay the record's captured interpreter, not this (enforcing)
+    // process's own — the record is the contract precisely so a relaunch
+    // long after enqueue, or from a differently-invoked daemon, still runs
+    // under the Node binary/flags the operator actually queued (T-02
+    // reviewer finding: using process.execPath/execArgv here silently
+    // discarded the persisted fields).
+    const { pid } = this._detachRepo.spawnDetached({
+      command: record.execPath,
+      args: [...record.execArgv, ...childArgv],
+      cwd: record.cwd,
+      logPath,
+      env: {
+        ...process.env,
+        SDLC_SUPERVISE_MONITOR: monitorPath
+      }
+    });
+    writeFileSync(path.join(runDir, 'supervise.pid'), `${pid}\n`);
+
+    await sleep(DETACH_STARTUP_GRACE_MS);
+    const alive = this._detachRepo.isAlive(pid);
+    return {
+      pid,
+      alive,
+      runId,
+      detail: alive ? '' : tailFile(logPath, DETACH_FAILURE_LOG_LINES)
+    };
+  }
+
+  private deriveQueuedRunId(specPath: string): string {
+    return `${path
+      .basename(specPath)
+      .replace(/\.md$/, '')}-${new Date().toISOString().slice(0, 10)}`;
+  }
+
+  /**
+   * Fail-loud T-02 for the queue: a failed launch is never a silent drop.
+   * The caller leaves the record queued for retry; this only surfaces a
+   * durable wake so the operator sees it instead of it vanishing.
+   */
+  private escalateQueueLaunchFailure(
+    input: SuperviseInput,
+    record: QueuedLaunchRecord,
+    monitorPath: string,
+    detail: string
+  ): void {
+    this._hbWatch.note(
+      monitorPath,
+      `[queue] FAILED to launch queued run for ${record.specPath}: ${detail.slice(0, 300)} — retained for retry`
+    );
+    this._wakeRepo.emit({
+      kind: 'sdlc_queue_launch',
+      dedupeKey: `queue-launch-${record.specPath}`,
+      prompt: `SDLC queue-run launch failed for ${record.specPath}: ${detail.slice(0, 500)}. The record is retained in the queue for retry — investigate, then relaunch by hand (run --spec ${record.specPath} --repo ${record.repoPath} --supervise --detach) if needed.`,
+      data: {
+        specPath: record.specPath,
+        repoPath: record.repoPath,
+        detail: detail.slice(0, 500)
+      },
+      wakeDir: input.wakeDir
+    });
   }
 }
