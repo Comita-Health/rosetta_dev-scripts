@@ -22,6 +22,8 @@ import {
 import type { IAggregatorService } from '../services/aggregator.service';
 import type { IChronicleCommitService } from '../services/chronicle-commit.service';
 import type { ICiGateService } from '../services/ci-gate.service';
+import type { ICloseoutAggregateService } from '../services/closeout-aggregate.service';
+import type { ICloseoutService } from '../services/closeout.service';
 import type { IDigestService } from '../services/digest.service';
 import type { IEnvelopeGateService } from '../services/envelope-gate.service';
 import type { IRetroService } from '../services/retro.service';
@@ -41,7 +43,13 @@ import type {
   VerificationInput
 } from '../services/verification.service';
 import { WORKFLOW_TOKENS } from '../tokens';
-import { GateVerdict, RunState, SpecDocument, WorkflowError } from '../types';
+import {
+  CloseoutAggregate,
+  GateVerdict,
+  RunState,
+  SpecDocument,
+  WorkflowError
+} from '../types';
 import { makeEnvelope, makeTask } from './fixtures';
 
 const SPEC: SpecDocument = {
@@ -80,11 +88,22 @@ const makeState = (): RunState => ({
 });
 
 const INPUT = {
-  specPath: '/specs/spec.md',
+  specPath: '/repo/specs/PRD-0099/phase-2-spec.md',
   repoPath: '/repo',
   runId: 'run-1',
   runsDir: '/runs',
   maxParallel: 3
+};
+
+/** SPEC-PRD-0023-P1: the aggregation the closeout step is handed. */
+const CLOSEOUT_AGGREGATE: CloseoutAggregate = {
+  runId: 'run-1',
+  specId: SPEC.id,
+  criteria: [],
+  taskGates: [],
+  mergedTaskIds: ['T-01'],
+  phasePassedTaskIds: ['T-01'],
+  fullyCovered: true
 };
 
 const verdictOf = (
@@ -137,6 +156,8 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
   let specRead: jest.Mock;
   let escalationPost: jest.Mock;
   let remediate: jest.Mock;
+  let closeoutAggregate: jest.Mock;
+  let closeoutGenerate: jest.Mock;
 
   const taskOutcome = (
     overrides: Partial<ExecutorOutcome> = {}
@@ -241,6 +262,14 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
       .mockResolvedValue('chronicles/sdlc/run-1/merge.json');
     setContext = jest.fn();
     evidenceSave = jest.fn().mockReturnValue('/evidence/x.txt');
+    closeoutAggregate = jest.fn().mockReturnValue(CLOSEOUT_AGGREGATE);
+    closeoutGenerate = jest.fn().mockResolvedValue({
+      kind: 'created',
+      pr: { url: 'https://github.com/o/r/pull/9', number: 9 },
+      statusWritten: 'Done',
+      tickedCount: 1,
+      remainderCount: 0
+    });
 
     // Persistence mocks mirror the real repository's in-memory mutation so
     // resume behaviour (step cache, verdict filtering) can be exercised.
@@ -324,7 +353,9 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
         create: prCreate,
         merge: prMerge,
         mergeCommitOid,
-        comment: jest.fn()
+        comment: jest.fn(),
+        latestForBranch: jest.fn().mockReturnValue(null),
+        updateBody: jest.fn()
       });
     container
       .bind<IQueueRepository>(WORKFLOW_TOKENS.QueueRepository)
@@ -377,6 +408,8 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
         fetch: gitFetch,
         resolveSha: jest.fn().mockReturnValue('main-sha'),
         treeSha,
+        worktreeForBranch: jest.fn(),
+        refExists: jest.fn().mockReturnValue(false),
         defaultBranch: jest.fn().mockReturnValue('main'),
         fileAtRef: jest.fn(),
         pathDiffersFromRef: jest.fn(),
@@ -430,6 +463,12 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
     container
       .bind<IGateRemediationService>(WORKFLOW_TOKENS.GateRemediationService)
       .toConstantValue({ remediate });
+    container
+      .bind<ICloseoutAggregateService>(WORKFLOW_TOKENS.CloseoutAggregateService)
+      .toConstantValue({ aggregate: closeoutAggregate });
+    container
+      .bind<ICloseoutService>(WORKFLOW_TOKENS.CloseoutService)
+      .toConstantValue({ generate: closeoutGenerate });
     // The real executor: retry policy is behavior under test here, not a
     // collaborator to stub out. Backoff is zeroed per call via input.
     container
@@ -1378,6 +1417,121 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
       expect(
         digestPost.mock.calls.filter(([arg]) => arg.taskId === 'phase')
       ).toHaveLength(0);
+    });
+
+    // SPEC-PRD-0023-P1 T-02 / T-05: the final task merging is what triggers
+    // closeout, and the digest that follows links the PR it produced.
+    describe('closeout on final task merge (SPEC-PRD-0023-P1)', () => {
+      it('derives the closeout PR from the run verdicts with no authoring step', async () => {
+        greenGates();
+
+        await handler.runTask({ ...INPUT, chronicleRepo: '/chronicle' });
+
+        expect(closeoutAggregate).toHaveBeenCalledWith({
+          runsDir: '/runs',
+          runId: 'run-1',
+          spec: SPEC
+        });
+        expect(closeoutGenerate).toHaveBeenCalledWith({
+          repoPath: '/repo',
+          runsDir: '/runs',
+          runId: 'run-1',
+          spec: SPEC,
+          specRelPath: 'specs/PRD-0099/phase-2-spec.md',
+          aggregate: CLOSEOUT_AGGREGATE
+        });
+      });
+
+      it('links the closeout PR into the phase digest', async () => {
+        greenGates();
+
+        await handler.runTask({ ...INPUT, chronicleRepo: '/chronicle' });
+
+        const phasePost = digestPost.mock.calls.find(
+          ([arg]) => arg.taskId === 'phase'
+        );
+        expect(phasePost?.[0].closeoutPrUrl).toBe(
+          'https://github.com/o/r/pull/9'
+        );
+      });
+
+      it('re-runs the generator on resume so a late closeout still lands', async () => {
+        greenGates();
+
+        await handler.runTask({ ...INPUT, chronicleRepo: '/chronicle' });
+        await handler.runTask({ ...INPUT, chronicleRepo: '/chronicle' });
+
+        // Unlike the deploy and digest, closeout is not step-cached: the
+        // verdict set it derives from keeps moving until the phase is done.
+        expect(closeoutGenerate).toHaveBeenCalledTimes(2);
+      });
+
+      it('posts the digest with the link once a later closeout succeeds', async () => {
+        greenGates();
+        closeoutGenerate.mockResolvedValueOnce({
+          kind: 'unchanged',
+          tickedCount: 0,
+          remainderCount: 1,
+          detail: 'no closeout PR exists yet'
+        });
+
+        await handler.runTask({ ...INPUT, chronicleRepo: '/chronicle' });
+        const first = digestPost.mock.calls.filter(
+          ([arg]) => arg.taskId === 'phase'
+        );
+        expect(first).toHaveLength(1);
+        expect(first[0][0].closeoutPrUrl).toBeUndefined();
+
+        await handler.runTask({ ...INPUT, chronicleRepo: '/chronicle' });
+
+        const posts = digestPost.mock.calls.filter(
+          ([arg]) => arg.taskId === 'phase'
+        );
+        expect(posts).toHaveLength(2);
+        expect(posts[1][0].closeoutPrUrl).toBe('https://github.com/o/r/pull/9');
+      });
+
+      it('does not block the run when closeout generation throws', async () => {
+        greenGates();
+        closeoutGenerate.mockRejectedValue(
+          new WorkflowError('gh pr create failed', 'GH_FAILED', ['403'])
+        );
+
+        const result = await handler.runTask({
+          ...INPUT,
+          chronicleRepo: '/chronicle'
+        });
+
+        expect(result.outcome).toBe('executed');
+        const phasePost = digestPost.mock.calls.find(
+          ([arg]) => arg.taskId === 'phase'
+        );
+        expect(phasePost?.[0].closeoutPrUrl).toBeUndefined();
+      });
+
+      it('never closes out a shadow run', async () => {
+        greenGates();
+
+        await handler.runTask({
+          ...INPUT,
+          chronicleRepo: '/chronicle',
+          shadow: true
+        });
+
+        expect(closeoutGenerate).not.toHaveBeenCalled();
+      });
+
+      it('refuses a spec outside the repo instead of guessing a path', async () => {
+        greenGates();
+
+        await handler.runTask({
+          ...INPUT,
+          specPath: '/elsewhere/spec.md',
+          chronicleRepo: '/chronicle'
+        });
+
+        expect(closeoutGenerate).not.toHaveBeenCalled();
+      });
     });
 
     describe('checkVeto', () => {

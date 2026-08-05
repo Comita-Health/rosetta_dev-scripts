@@ -2,6 +2,44 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** phase closeout is now **derived, not authored**
+  (SPEC-PRD-0023-P1). Five specs had landed with their work merged and their
+  acceptance criteria still unticked — `PRD-0011/phase-1-spec.md` sat at 1 of
+  15 — because closing out a spec was a manual writing job that nobody's
+  definition of "done" required. When the last task of a phase merges, the
+  engine now reads the run's recorded verdicts (`closeout-aggregate.service`)
+  and opens a closeout PR whose entire diff is computed from them: a criterion
+  with a passing verdict is ticked, and `status: Done` is written only when
+  every criterion passes, every task merged, and every phase gate is green.
+  Partial coverage leaves the existing status untouched and surfaces the gaps
+  in a **Remainder** section rather than downgrading anything. The PR body
+  cites `(task, gate, evidence link)` per verified criterion. Boxes a human
+  ticked by hand are **never unticked** — that tick is a record of hand
+  verification — but they do not count toward `Done` either, so they are
+  reported explicitly.
+- **sdlc-workflow:** a phase is no longer complete just because its tasks
+  merged — `phaseComplete` also requires a closeout PR that is open or merged,
+  queried live rather than cached (`utils/run-completion.ts`). A closed-unmerged
+  PR, or a `gh` call that fails outright, both read as incomplete: claiming a
+  phase is done on the strength of a network error is worse than making the
+  operator look. The phase Chronicle artifact carries the closeout PR URL
+  (`closeoutPr`), and the digest's cache key includes whether that link was
+  available, so a closeout that only succeeds on a later attempt still gets
+  published.
+- **sdlc-workflow:** closeout PRs are identified by their branch
+  (`sdlc/closeout/<spec-id>`), not their title, and are updated in place. An
+  interrupted closeout re-run leaves exactly one PR reflecting the latest
+  verdicts instead of a pile of near-duplicates. `closeout --run-id --spec
+--repo` drives the same code by hand for specs that landed before the
+  machinery existed.
+- **sdlc-workflow:** `specs/**` keeps exactly one writer. The privileged route
+  (`SpecFileRepository.writeCloseout`) refuses absolute paths, refuses to
+  escape the checkout, refuses anything outside a `specs/` tree, and refuses to
+  create a spec that is not already there — closeout amends an Approved
+  document, it never authors one. Static pins in `spec-write-policy.test.ts`
+  fail the suite if a second call site appears, if a spec write bypasses the
+  repository, or if the issue #40 envelope-breach regression test is skipped or
+  dropped from the suite CI gates merges on.
 - **sdlc-workflow:** the CI gate no longer treats "GitHub has not registered
   a check run yet" as a verdict. A postmortem over 23 runs found **every**
   CI block in the corpus — 16 of 59 verdicts — read `no check runs` or
@@ -88,7 +126,7 @@
   Chronicle commit — are retried through that executor with their attempt
   trail recorded on the step (`steps[<key>].recovery`), so a flaky step is
   visible after the fact rather than only in a log the operator no longer has
-  (T-04). Only a *thrown* sandbox error retries; an unhealthy deploy is a
+  (T-04). Only a _thrown_ sandbox error retries; an unhealthy deploy is a
   verdict. Recovered steps land in the step cache like any other, so a resume
   reuses them with zero hand-edits and no duplicate PR, deploy or ledger
   commit. Gates themselves are deliberately not retried in this phase.
@@ -101,7 +139,7 @@
   inherits them can decide it is re-entrant and exit without doing the work, a
   silent no-op indistinguishable from "nothing to change", after which every
   gate judges an unmodified branch. Deliberately a denylist rather than a
-  `CURSOR_*` wildcard, since the engine dispatches *with* `CURSOR_AGENT_BIN`
+  `CURSOR_*` wildcard, since the engine dispatches _with_ `CURSOR_AGENT_BIN`
   and `CURSOR_MODEL`.
 - **sdlc-workflow:** a detached launch is now verified rather than assumed.
   The parent sampled child liveness exactly once at 1.5s, and on a loaded
@@ -345,7 +383,7 @@
   default to targeting a forked repo's upstream parent, not `origin` — on
   `Comita-Health/rosetta_dev-scripts` (forked from
   `Rosetta-Foundation/rosetta_dev-scripts`) this produced `GraphQL: Resource
-  not accessible by integration (createPullRequest)`, indistinguishable
+not accessible by integration (createPullRequest)`, indistinguishable
   from Addi genuinely lacking `pull_requests: write`, which it does not.
   Confirmed live: REST `POST /pulls` and a raw GraphQL `createPullRequest`
   both pass the permission check on the same token; only `gh pr create`'s
@@ -370,7 +408,7 @@
   even slightly from that microformat produced no error, just a PRD that
   quietly decomposed into worse (or, for empty goals, eventually-erroring)
   output with no indication why. Sweeping this against every real PRD in
-  `rosetta_docs/product/` surfaced that even the *authoritative*
+  `rosetta_docs/product/` surfaced that even the _authoritative_
   `TEMPLATE.md` and the engine's own founding `PRD-0011` don't match the old
   strict Rollout regex (template puts the title outside the bold span;
   PRD-0011 prefixes phases with a status emoji) — proof the old contract was
@@ -383,7 +421,7 @@
   descriptions (a separate, previously-silent bug: the old lazy-match
   lookahead terminated at the end of a phase's first line, truncating or
   dropping any phase whose description wrapped). Added `sdlc-workflow
-  prd-lint --prd <id> --docs-dir <dir>` — validates a PRD parses cleanly with
+prd-lint --prd <id> --docs-dir <dir>` — validates a PRD parses cleanly with
   no LLM call and no `--repo`, for fast feedback right after drafting, before
   `decompose` ever runs.
 - **sdlc-workflow:** sandbox deploy and test-tier verification now run
@@ -439,9 +477,9 @@
 - **team-setup:** gold-standard **Addi PR automation** —
   `docs/addi-pr-automation-standard.md` + hardened
   `addi-merge-on-approve.yml` (repository_dispatch / workflow_run / schedule)
-  + `addi-merge-webhook` bridge; `pr-approve-watch` demoted to triage when GHA
-  is enabled. Comita and Rosetta each use their own Addi App Client ID + PEM
-  under the same Action variable names.
+  - `addi-merge-webhook` bridge; `pr-approve-watch` demoted to triage when GHA
+    is enabled. Comita and Rosetta each use their own Addi App Client ID + PEM
+    under the same Action variable names.
 - **team-setup:** add `addi-authorship` rule — agent PRs/issues must be created
   as the workspace GitHub App (Addi); verify `viewer.login` before create; never
   fall back to human `gh` on 403; recreate accidental human-authored PRs as Addi.

@@ -49,5 +49,8 @@ export const WORKFLOW_TOKENS = {
   // SPEC-BUG-retro-and-queued-plans T-02
   RunQueueRepository: Symbol.for('RunQueueRepository'),
   // SPEC-PRD-0022-P1 T-01
-  DeployRecordRepository: Symbol.for('DeployRecordRepository')
+  DeployRecordRepository: Symbol.for('DeployRecordRepository'),
+  // SPEC-PRD-0023-P1 T-01 / T-02
+  CloseoutAggregateService: Symbol.for('CloseoutAggregateService'),
+  CloseoutService: Symbol.for('CloseoutService')
 } as const;

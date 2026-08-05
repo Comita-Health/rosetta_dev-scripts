@@ -34,6 +34,8 @@ describe('HeartbeatService (#39)', () => {
         fetch: jest.fn(),
         resolveSha: jest.fn(),
         treeSha: jest.fn(),
+        worktreeForBranch: jest.fn(),
+        refExists: jest.fn().mockReturnValue(false),
         defaultBranch: jest.fn(),
         fileAtRef: jest.fn(),
         pathDiffersFromRef: jest.fn(),

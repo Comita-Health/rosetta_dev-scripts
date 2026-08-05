@@ -11,6 +11,7 @@ import path from 'path';
 import chalk from 'chalk';
 import type { IGitRepository } from '../repositories/git.repository';
 import type { IProcessDetachRepository } from '../repositories/process-detach.repository';
+import type { IPullRequestRepository } from '../repositories/pull-request.repository';
 import type {
   IRunQueueRepository,
   QueuedLaunchRecord
@@ -36,8 +37,10 @@ import { WORKFLOW_TOKENS } from '../tokens';
 import {
   allTasksMerged,
   hasMergeBlockedHalt,
-  hasUnmergedCompletedTasks
+  hasUnmergedCompletedTasks,
+  phaseComplete
 } from '../utils/run-completion';
+import { closeoutBranch } from '../utils/spec-closeout';
 import { buildSuperviseChildArgv } from '../utils/supervise-argv';
 import {
   exitRecordFromError,
@@ -188,7 +191,9 @@ export class SuperviseService implements ISuperviseService {
     @inject(WORKFLOW_TOKENS.RunQueueRepository)
     private readonly _runQueueRepo: IRunQueueRepository,
     @inject(WORKFLOW_TOKENS.RunLockRepository)
-    private readonly _runLockRepo: IRunLockRepository
+    private readonly _runLockRepo: IRunLockRepository,
+    @inject(WORKFLOW_TOKENS.PullRequestRepository)
+    private readonly _prRepo: IPullRequestRepository
   ) {}
 
   async run(input: SuperviseInput): Promise<SuperviseResult> {
@@ -400,7 +405,7 @@ export class SuperviseService implements ISuperviseService {
         const spec = this.readSpecForSupervise(input);
         const state = this._runStateRepo.load(input.runsDir, input.runId);
 
-        if (allTasksMerged(spec, state)) {
+        if (this.phaseIsComplete(input, spec, state, monitorPath)) {
           this._hbWatch.note(
             monitorPath,
             `[supervise] ALL TASKS MERGED after wave ${waves}`
@@ -634,10 +639,64 @@ export class SuperviseService implements ISuperviseService {
     }
     const spec = this.readSpecForSupervise(input);
     const state = this._runStateRepo.load(input.runsDir, input.runId);
-    if (allTasksMerged(spec, state)) {
+    if (this.phaseIsComplete(input, spec, state)) {
       return 'completed';
     }
     return 'stopped';
+  }
+
+  /**
+   * SPEC-PRD-0023-P1 T-04: "all tasks merged" is necessary but not
+   * sufficient — the phase's closeout PR must also exist and be merged or
+   * open awaiting Approve.
+   *
+   * @remarks
+   * Queried live on every call, never cached: a closeout PR that someone
+   * closes must stop counting. Shadow runs are exempt — they never merge for
+   * real, so they never produce a closeout to wait for. A `gh` failure here
+   * reports incomplete (fail closed) with a monitor line naming why, because
+   * the alternative is claiming a phase is done on the strength of a network
+   * error.
+   */
+  private phaseIsComplete(
+    input: SuperviseInput,
+    spec: SpecDocument,
+    state: ReturnType<IRunStateRepository['load']>,
+    monitorPath?: string
+  ): boolean {
+    if (!allTasksMerged(spec, state)) {
+      return false;
+    }
+    if (input.shadow === true) {
+      return true;
+    }
+    const branch = closeoutBranch(spec.id);
+    let pr: { state: 'OPEN' | 'MERGED' | 'CLOSED' } | null = null;
+    try {
+      pr = this._prRepo.latestForBranch(input.repoPath, branch);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      this.noteIfWatched(
+        monitorPath,
+        `[supervise] cannot resolve closeout PR for ${spec.id} (${branch}) — ` +
+          `phase reported incomplete: ${detail.slice(0, 200)}`
+      );
+      return false;
+    }
+    const complete = phaseComplete(spec, state, pr);
+    if (!complete) {
+      this.noteIfWatched(
+        monitorPath,
+        `[supervise] every task merged but the closeout PR for ${spec.id} is ` +
+          `${pr === null ? 'missing' : pr.state.toLowerCase()} — phase incomplete (${branch})`
+      );
+    }
+    return complete;
+  }
+
+  private noteIfWatched(monitorPath: string | undefined, line: string): void {
+    if (monitorPath === undefined) return;
+    this._hbWatch.note(monitorPath, line);
   }
 
   /**

@@ -10,6 +10,8 @@ import type { ISpecDocRepository } from '../repositories/spec-doc.repository';
 import type { IAggregatorService } from '../services/aggregator.service';
 import type { IChronicleCommitService } from '../services/chronicle-commit.service';
 import type { ICiGateService } from '../services/ci-gate.service';
+import type { ICloseoutAggregateService } from '../services/closeout-aggregate.service';
+import type { ICloseoutService } from '../services/closeout.service';
 import type { IDigestService } from '../services/digest.service';
 import type { IEnvelopeGateService } from '../services/envelope-gate.service';
 import type { IEscalationService } from '../services/escalation.service';
@@ -169,11 +171,32 @@ interface MonitorTarget {
   monitorPath?: string;
 }
 
+/**
+ * What generating a closeout PR needs (SPEC-PRD-0023-P1 T-02). Narrower than
+ * `RunTaskInput` so the `closeout` CLI can drive the same path as the phase
+ * boundary — a retroactive closeout is the same operation, not a second
+ * implementation of it.
+ */
+interface CloseoutTarget extends MonitorTarget {
+  repoPath: string;
+  specPath: string;
+  /** Shadow runs never merge, so they never close out. */
+  shadow?: boolean;
+}
+
 export interface CheckVetoInput {
   runsDir: string;
   runId: string;
   repoPath: string;
   chronicleRepo: string;
+}
+
+/** SPEC-PRD-0023-P1: `closeout` CLI input — one spec, one run's verdicts. */
+export interface CloseoutCliInput {
+  runsDir: string;
+  runId: string;
+  repoPath: string;
+  specPath: string;
 }
 
 export interface CheckVetoResult {
@@ -197,6 +220,17 @@ export interface IRunHandler {
    * SHA. No veto → nothing changes. The run itself never blocks on this.
    */
   checkVeto(input: CheckVetoInput): Promise<CheckVetoResult>;
+  /**
+   * SPEC-PRD-0023-P1 T-02: generate (or refresh) a spec's closeout PR from a
+   * run's recorded verdicts, outside the phase boundary.
+   *
+   * @remarks
+   * Same code path the phase boundary takes, exposed so an interrupted
+   * closeout can be re-driven and so specs that landed before this machinery
+   * existed can be closed out from their runs. Idempotent by branch: repeated
+   * invocations update one PR.
+   */
+  closeout(input: CloseoutCliInput): Promise<void>;
   /** T-02: write a durable FIFO launch record, deduped by spec path. */
   queueRun(input: QueueRunCliInput): void;
   /** T-02: list queued launch records (`status --queue`). */
@@ -254,7 +288,11 @@ export class RunHandler implements IRunHandler {
     @inject(WORKFLOW_TOKENS.GateRemediationService)
     private readonly _remediation: IGateRemediationService,
     @inject(WORKFLOW_TOKENS.RetryExecutorService)
-    private readonly _retry: IRetryExecutorService
+    private readonly _retry: IRetryExecutorService,
+    @inject(WORKFLOW_TOKENS.CloseoutAggregateService)
+    private readonly _closeoutAggregate: ICloseoutAggregateService,
+    @inject(WORKFLOW_TOKENS.CloseoutService)
+    private readonly _closeout: ICloseoutService
   ) {}
 
   async runTask(input: RunTaskInput): Promise<RunTaskResult> {
@@ -1198,6 +1236,11 @@ export class RunHandler implements IRunHandler {
       );
     }
 
+    // SPEC-PRD-0023-P1 T-02: the final task of the phase has merged, so the
+    // closeout PR is derived and opened (or refreshed) before the digest —
+    // which then links it (T-05).
+    const closeoutPrUrl = await this.closeoutStep(input, spec);
+
     // Post the phase digest with the merged SHAs and verdict evidence.
     if (input.chronicleRepo === undefined) {
       console.log(
@@ -1205,7 +1248,17 @@ export class RunHandler implements IRunHandler {
       );
       return;
     }
-    const digestKey = stepKey('phase-digest', 'phase', digest);
+    // T-05: whether a closeout PR exists is part of the digest's inputs, so a
+    // phase digest posted before the closeout landed is re-posted once the
+    // link exists instead of staying cached without it. Re-posting writes the
+    // same artifact path and the queue dedupes the item, so this costs a file
+    // rewrite, not a duplicate.
+    const digestInputs = inputsDigest({
+      step: 'phase-digest',
+      mergedShas,
+      closeout: closeoutPrUrl ?? null
+    });
+    const digestKey = stepKey('phase-digest', 'phase', digestInputs);
     if (state.steps[digestKey] !== undefined) {
       console.log(chalk.gray('  [cached] phase digest already posted'));
       await this.maybeRetroStep(input, state, spec, digest);
@@ -1229,12 +1282,13 @@ export class RunHandler implements IRunHandler {
       },
       verdicts: state.verdicts,
       exceptions: state.exceptions,
-      merges: merges as Array<{ taskId: string; mergedSha: string }>
+      merges: merges as Array<{ taskId: string; mergedSha: string }>,
+      ...(closeoutPrUrl !== undefined ? { closeoutPrUrl } : {})
     });
     this._runStateRepo.recordStep(input.runsDir, state, digestKey, {
       name: 'phase-digest',
       taskId: 'phase',
-      inputsDigest: digest,
+      inputsDigest: digestInputs,
       detail: posted.artifactPath,
       completedAt: new Date().toISOString()
     });
@@ -1247,6 +1301,120 @@ export class RunHandler implements IRunHandler {
     // SPEC-BUG-retro-and-queued-plans-P1 T-01: same trigger as the digest
     // above, restricted to BUG-* runs.
     await this.maybeRetroStep(input, state, spec, digest);
+  }
+
+  /**
+   * SPEC-PRD-0023-P1 T-02 / T-03: derive and publish the phase's closeout PR
+   * once every task has merged. Returns the PR URL when one exists, which is
+   * what the digest links (T-05).
+   *
+   * @remarks
+   * Not step-cached, deliberately. The generator is idempotent by branch — it
+   * updates the same PR number rather than opening a second one — and the
+   * verdict set it derives from keeps changing while the phase finishes, so
+   * caching would freeze the closeout at whatever the first invocation
+   * happened to see. Shadow runs are skipped: they never merge for real, so
+   * there is nothing to close out.
+   *
+   * Failure is never fatal to the run. A closeout that cannot be generated
+   * (spec not on the default branch, `gh` refusing, verdicts unreadable)
+   * leaves a loud monitor line and no link — and because
+   * {@link phaseComplete} requires the PR, the phase then reports incomplete
+   * instead of quietly claiming otherwise.
+   */
+  private async closeoutStep(
+    input: CloseoutTarget,
+    spec: SpecDocument
+  ): Promise<string | undefined> {
+    if (input.shadow === true) {
+      console.log(
+        chalk.gray('  [skip] shadow run — no closeout PR (nothing merged)')
+      );
+      return undefined;
+    }
+
+    const specRelPath = path.relative(input.repoPath, input.specPath);
+    if (specRelPath.startsWith('..') || path.isAbsolute(specRelPath)) {
+      this.noteMonitor(
+        input,
+        `[closeout] spec ${input.specPath} is outside ${input.repoPath} — closeout skipped`
+      );
+      return undefined;
+    }
+
+    try {
+      const aggregate = this._closeoutAggregate.aggregate({
+        runsDir: input.runsDir,
+        runId: input.runId,
+        spec
+      });
+      const outcome = await this._closeout.generate({
+        repoPath: input.repoPath,
+        runsDir: input.runsDir,
+        runId: input.runId,
+        spec,
+        specRelPath: specRelPath.split(path.sep).join('/'),
+        aggregate
+      });
+
+      if (outcome.pr === undefined) {
+        this.noteMonitor(
+          input,
+          `[closeout] no closeout PR for ${spec.id} (${outcome.kind}): ${outcome.detail ?? 'no detail'}`
+        );
+        console.log(
+          chalk.yellow(
+            `  [closeout] ${outcome.kind} — ${outcome.detail ?? 'no closeout PR'}`
+          )
+        );
+        return undefined;
+      }
+
+      const status =
+        outcome.statusWritten === undefined
+          ? 'status unchanged'
+          : `status: ${outcome.statusWritten}`;
+      console.log(
+        chalk.green(
+          `  [closeout] ${outcome.kind} ${outcome.pr.url} — ` +
+            `${outcome.tickedCount} criteria ticked, ${outcome.remainderCount} remaining, ${status}`
+        )
+      );
+      this.noteMonitor(
+        input,
+        `[closeout] ${outcome.kind} ${outcome.pr.url} for ${spec.id} (${status})`
+      );
+      return outcome.pr.url;
+    } catch (err) {
+      const detail =
+        err instanceof WorkflowError
+          ? [err.message, ...err.details].join(': ')
+          : err instanceof Error
+            ? err.message
+            : String(err);
+      this.noteMonitor(
+        input,
+        `[closeout] WARNING: closeout generation failed for ${spec.id} — the phase will report incomplete: ${detail.slice(0, 500)}`
+      );
+      console.log(
+        chalk.red(`  [closeout] failed: ${detail.slice(0, 300)}`)
+      );
+      return undefined;
+    }
+  }
+
+  async closeout(input: CloseoutCliInput): Promise<void> {
+    const spec = this._specDocRepo.read(input.specPath);
+    const url = await this.closeoutStep(input, spec);
+    if (url === undefined) {
+      console.log(
+        chalk.yellow(
+          `  No closeout PR for ${spec.id} — see the monitor log for why.`
+        )
+      );
+      return;
+    }
+    console.log(chalk.green(`  Closeout PR for ${spec.id}: ${url}`));
   }
 
   /** SPEC-BUG-retro-and-queued-plans-P1 T-01: dispatch the retro only for `BUG-*` specs. */

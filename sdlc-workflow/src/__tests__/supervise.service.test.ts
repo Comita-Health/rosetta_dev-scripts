@@ -8,6 +8,7 @@ import type { IRunHandler, RunTaskResult } from '../handlers/run.handler';
 import type { ISpecDocRepository } from '../repositories/spec-doc.repository';
 import type { IRunStateRepository } from '../repositories/run-state.repository';
 import type { IProcessDetachRepository } from '../repositories/process-detach.repository';
+import type { IPullRequestRepository } from '../repositories/pull-request.repository';
 import type {
   IRunQueueRepository,
   QueuedLaunchRecord
@@ -58,6 +59,7 @@ describe('SuperviseService', () => {
   let queueRemove: jest.Mock;
   let recordMergeBlockedRetry: jest.Mock;
   let invalidateSteps: jest.Mock;
+  let latestForBranch: jest.Mock;
   let supervise: ISuperviseService;
   let runsDir: string;
   let wakeDir: string;
@@ -117,6 +119,13 @@ describe('SuperviseService', () => {
         return state.mergeBlockedRetries;
       });
     invalidateSteps = jest.fn().mockReturnValue([]);
+    // SPEC-PRD-0023-P1 T-04: an open closeout PR is the default, so existing
+    // completion assertions describe a phase that closed out normally.
+    latestForBranch = jest.fn().mockReturnValue({
+      url: 'https://github.com/o/r/pull/7',
+      number: 7,
+      state: 'OPEN'
+    });
     exitRepo = new SuperviseExitRepository();
 
     const container = new Container();
@@ -142,6 +151,8 @@ describe('SuperviseService', () => {
       push: jest.fn(),
       resolveSha: jest.fn(),
       treeSha: jest.fn(),
+      worktreeForBranch: jest.fn(),
+      refExists: jest.fn().mockReturnValue(false),
       revertMerge: jest.fn(),
       stageAll: jest.fn(),
       commit: jest.fn(),
@@ -181,6 +192,17 @@ describe('SuperviseService', () => {
     container
       .bind<IRunLockRepository>(WORKFLOW_TOKENS.RunLockRepository)
       .to(RunLockRepository);
+    container
+      .bind<IPullRequestRepository>(WORKFLOW_TOKENS.PullRequestRepository)
+      .toConstantValue({
+        findByBranch: jest.fn(),
+        create: jest.fn(),
+        merge: jest.fn(),
+        mergeCommitOid: jest.fn(),
+        comment: jest.fn(),
+        latestForBranch,
+        updateBody: jest.fn()
+      });
     container
       .bind<ISuperviseService>(WORKFLOW_TOKENS.SuperviseService)
       .to(SuperviseService);
@@ -527,6 +549,131 @@ describe('SuperviseService', () => {
     expect(result.kind).toBe('completed');
     expect(result.waves).toBe(2);
     expect(runTask).toHaveBeenCalledTimes(2);
+  });
+
+  // SPEC-PRD-0023-P1 T-04: a phase is complete when its tasks merged *and* its
+  // closeout PR exists. Merged-with-no-closeout is the debt that let five
+  // specs land while still reading as Approved.
+  describe('closeout-gated phase completion (T-04)', () => {
+    const merged = {
+      taskResults: {
+        'T-01': {
+          taskId: 'T-01',
+          status: 'completed',
+          mergedSha: 'a',
+          recordedAt: 't'
+        },
+        'T-02': {
+          taskId: 'T-02',
+          status: 'completed',
+          mergedSha: 'b',
+          recordedAt: 't'
+        }
+      }
+    } as unknown as RunState;
+
+    it('does not report completion while the closeout PR is missing', async () => {
+      latestForBranch.mockReturnValue(null);
+      runTask
+        .mockResolvedValueOnce(wave('executed'))
+        .mockResolvedValueOnce(wave('no-ready-task'));
+      load.mockReturnValue(merged);
+
+      const result = await supervise.run(input());
+
+      expect(result.kind).toBe('stopped');
+      expect(result.detail).toBe('no-ready-task');
+      expect(latestForBranch).toHaveBeenCalledWith(
+        '/repo',
+        'sdlc/closeout/SPEC-X'
+      );
+      expect(note.mock.calls.map(call => call[1]).join('\n')).toContain(
+        'closeout PR for SPEC-X is missing'
+      );
+    });
+
+    it('reports completion with an open closeout PR awaiting Approve', async () => {
+      latestForBranch.mockReturnValue({
+        url: 'https://github.com/o/r/pull/7',
+        number: 7,
+        state: 'OPEN'
+      });
+      runTask.mockResolvedValue(wave('executed'));
+      load.mockReturnValue(merged);
+
+      expect((await supervise.run(input())).kind).toBe('completed');
+    });
+
+    it('reports completion with a merged closeout PR', async () => {
+      latestForBranch.mockReturnValue({
+        url: 'https://github.com/o/r/pull/7',
+        number: 7,
+        state: 'MERGED'
+      });
+      runTask.mockResolvedValue(wave('executed'));
+      load.mockReturnValue(merged);
+
+      expect((await supervise.run(input())).kind).toBe('completed');
+    });
+
+    it('refuses completion when the closeout PR was closed unmerged', async () => {
+      latestForBranch.mockReturnValue({
+        url: 'https://github.com/o/r/pull/7',
+        number: 7,
+        state: 'CLOSED'
+      });
+      runTask
+        .mockResolvedValueOnce(wave('executed'))
+        .mockResolvedValueOnce(wave('no-ready-task'));
+      load.mockReturnValue(merged);
+
+      const result = await supervise.run(input());
+
+      expect(result.kind).toBe('stopped');
+      expect(note.mock.calls.map(call => call[1]).join('\n')).toContain(
+        'closeout PR for SPEC-X is closed'
+      );
+    });
+
+    it('fails closed when the closeout PR cannot be resolved', async () => {
+      latestForBranch.mockImplementation(() => {
+        throw new Error('gh pr list failed: network unreachable');
+      });
+      runTask
+        .mockResolvedValueOnce(wave('executed'))
+        .mockResolvedValueOnce(wave('no-ready-task'));
+      load.mockReturnValue(merged);
+
+      const result = await supervise.run(input());
+
+      // Claiming a phase is done on the strength of a network error is worse
+      // than making the operator look.
+      expect(result.kind).toBe('stopped');
+      expect(note.mock.calls.map(call => call[1]).join('\n')).toContain(
+        'cannot resolve closeout PR for SPEC-X'
+      );
+    });
+
+    it('never asks for a closeout PR on a shadow run', async () => {
+      runTask.mockResolvedValue(wave('executed'));
+      load.mockReturnValue(merged);
+
+      const result = await supervise.run(input({ shadow: true }));
+
+      expect(result.kind).toBe('completed');
+      expect(latestForBranch).not.toHaveBeenCalled();
+    });
+
+    it('gates the single-wave path on the closeout PR too', async () => {
+      latestForBranch.mockReturnValue(null);
+      runTask.mockResolvedValue(wave('executed'));
+      load.mockReturnValue(merged);
+
+      const result = await supervise.run(input({ supervise: false }));
+
+      expect(result.kind).toBe('stopped');
+      expect(latestForBranch).toHaveBeenCalled();
+    });
   });
 
   it('stops at shadow human gate when tasks are completed but unmerged', async () => {

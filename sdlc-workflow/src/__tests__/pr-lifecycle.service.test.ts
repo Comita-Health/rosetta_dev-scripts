@@ -56,6 +56,8 @@ describe('PrLifecycleService (P3 T-02)', () => {
         fetch: jest.fn(),
         resolveSha: jest.fn(),
         treeSha: jest.fn(),
+        worktreeForBranch: jest.fn(),
+        refExists: jest.fn().mockReturnValue(false),
         defaultBranch: jest.fn(),
         fileAtRef: jest.fn(),
         pathDiffersFromRef: jest.fn(),
@@ -72,7 +74,9 @@ describe('PrLifecycleService (P3 T-02)', () => {
         create,
         merge: jest.fn(),
         mergeCommitOid: jest.fn().mockReturnValue(null),
-        comment: jest.fn()
+        comment: jest.fn(),
+        latestForBranch: jest.fn().mockReturnValue(null),
+        updateBody: jest.fn()
       });
     container
       .bind<IPrLifecycleService>(WORKFLOW_TOKENS.PrLifecycleService)

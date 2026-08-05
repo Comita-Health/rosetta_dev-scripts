@@ -20,6 +20,12 @@ export interface DigestInput {
    * commit so the veto decision can be made from the item alone.
    */
   merges?: Array<{ taskId: string; mergedSha: string }>;
+  /**
+   * SPEC-PRD-0023-P1 T-05: URL of the phase's closeout PR, when one exists.
+   * Additive metadata only — absent leaves the artifact exactly as before, so
+   * "no link" reads as "no closeout PR yet" rather than as a schema change.
+   */
+  closeoutPrUrl?: string;
 }
 
 /** The digest document posted at a phase boundary (T-07). */
@@ -38,6 +44,8 @@ export interface SdlcDigest {
   }>;
   exceptions: ExceptionEntry[];
   merges?: Array<{ taskId: string; mergedSha: string }>;
+  /** SPEC-PRD-0023-P1 T-05: the phase's closeout PR, when it exists. */
+  closeoutPr?: string;
   postedAt: string;
 }
 
@@ -94,6 +102,9 @@ export class DigestService implements IDigestService {
       })),
       exceptions: input.exceptions,
       ...(input.merges !== undefined ? { merges: input.merges } : {}),
+      ...(input.closeoutPrUrl !== undefined
+        ? { closeoutPr: input.closeoutPrUrl }
+        : {}),
       postedAt: new Date().toISOString()
     };
 

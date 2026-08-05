@@ -275,6 +275,64 @@ export interface CriterionVerdict {
 }
 
 /**
+ * How well one acceptance criterion is covered by the run's recorded
+ * verdicts (SPEC-PRD-0023-P1 T-01). `no-verdict` is a first-class value, not
+ * an absence: closeout derives checkbox state for *every* criterion, so a
+ * criterion the run never judged has to be distinguishable from one it
+ * judged and failed, and omitting it would silently read as "unchanged".
+ */
+export type CriterionCoverage = CriterionOutcome | 'no-verdict';
+
+/** One acceptance criterion joined to whatever verdict the run recorded for it. */
+export interface CloseoutCriterion {
+  /** `<taskId>#<index>` — criteria have no IDs of their own in ADR-0008. */
+  criterionId: string;
+  taskId: string;
+  /** The gate that judges criteria. Always `verification` today. */
+  gate: string;
+  /** 1-based position within the task's acceptance criteria. */
+  index: number;
+  /** Raw criterion text, tier prefix included. */
+  criterion: string;
+  tier: CriterionTier;
+  coverage: CriterionCoverage;
+  /** Resolvable evidence link, when the verdict carried evidence. */
+  evidenceLink?: string;
+}
+
+/** One (task, gate) verdict, flattened with its evidence links resolved. */
+export interface CloseoutTaskGate {
+  taskId: string;
+  gate: string;
+  outcome: GateOutcome;
+  evidenceLinks: string[];
+  recordedAt: string;
+}
+
+/**
+ * The read-only closeout view of a run (SPEC-PRD-0023-P1 T-01): every
+ * criterion with its coverage, every (task, gate) verdict, and whether the
+ * evidence is complete enough to write `status: Done`.
+ *
+ * @remarks
+ * `fullyCovered` is the *only* input to the spec status roll-up (T-03), and
+ * it is deliberately strict: a criterion the run never judged, a task with no
+ * green phase gate, or an unmerged task all keep it false. Partial coverage
+ * never downgrades a spec — it just leaves the remainder visible.
+ */
+export interface CloseoutAggregate {
+  runId: string;
+  specId: string;
+  criteria: CloseoutCriterion[];
+  taskGates: CloseoutTaskGate[];
+  /** Task IDs carrying a merge commit on the default branch. */
+  mergedTaskIds: string[];
+  /** Task IDs whose latest `phase` gate verdict passed. */
+  phasePassedTaskIds: string[];
+  fullyCovered: boolean;
+}
+
+/**
  * One completed step in the T-09 resumable step graph. The key it is stored
  * under is `<name>:<taskId>:<inputsDigest>` — a step re-executes only when
  * its inputs change or it never completed. Kill-resume at any boundary is

@@ -12,5 +12,8 @@ describe('CLI (T-01)', () => {
     expect(output).toContain('human gate');
     expect(output).toContain('supervise');
     expect(output).toContain('detach');
+    // SPEC-PRD-0023-P1: closeout is drivable by hand for interrupted jobs and
+    // for specs that landed before the machinery existed.
+    expect(output).toContain('closeout');
   });
 });

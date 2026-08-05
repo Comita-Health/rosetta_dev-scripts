@@ -265,4 +265,70 @@ describe('GitRepository', () => {
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('ENOENT'));
     });
   });
+
+  // SPEC-PRD-0023-P1 T-02: a closeout branch is long-lived — the second run of
+  // a phase must land on top of the first closeout commit, not beside it.
+  describe('worktreeForBranch (closeout branches)', () => {
+    it('starts from the remote branch when one already exists', () => {
+      execMock.mockReturnValue('');
+
+      repo.worktreeForBranch(
+        '/repo',
+        '/nonexistent/wt',
+        'sdlc/closeout/SPEC-X',
+        'base-sha'
+      );
+
+      const [verify, add] = execMock.mock.calls.map(([command]) => command);
+      expect(verify).toContain('rev-parse --verify');
+      expect(verify).toContain('origin/sdlc/closeout/SPEC-X');
+      expect(add).toContain('worktree add -B "sdlc/closeout/SPEC-X"');
+      expect(add).toContain('origin/sdlc/closeout/SPEC-X');
+    });
+
+    it('falls back to the base sha the first time the branch is created', () => {
+      execMock.mockImplementationOnce(() => {
+        throw new Error('fatal: needed a single revision');
+      });
+
+      repo.worktreeForBranch(
+        '/repo',
+        '/nonexistent/wt',
+        'sdlc/closeout/SPEC-X',
+        'base-sha'
+      );
+
+      const add = execMock.mock.calls[1][0];
+      expect(add).toContain('"base-sha"');
+      expect(add).not.toContain('origin/sdlc/closeout/SPEC-X"');
+    });
+
+    it('reuses an existing worktree directory without invoking git', () => {
+      repo.worktreeForBranch(
+        '/repo',
+        os.tmpdir(),
+        'sdlc/closeout/SPEC-X',
+        'base-sha'
+      );
+
+      expect(execMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('refExists', () => {
+    it('reports true for a ref that resolves to a commit', () => {
+      execMock.mockReturnValue('abc123\n');
+
+      expect(repo.refExists('/repo', 'origin/main')).toBe(true);
+      expect(execMock.mock.calls[0][0]).toContain('origin/main^{commit}');
+    });
+
+    it('reports false rather than throwing for an unknown ref', () => {
+      execMock.mockImplementation(() => {
+        throw new Error('fatal: bad revision');
+      });
+
+      expect(repo.refExists('/repo', 'origin/nope')).toBe(false);
+    });
+  });
 });

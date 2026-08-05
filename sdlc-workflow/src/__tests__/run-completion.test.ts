@@ -1,7 +1,9 @@
 import {
   allTasksMerged,
+  closeoutSatisfies,
   hasMergeBlockedHalt,
-  hasUnmergedCompletedTasks
+  hasUnmergedCompletedTasks,
+  phaseComplete
 } from '../utils/run-completion';
 import type { RunState, SpecDocument, StepResult } from '../types';
 
@@ -72,6 +74,56 @@ describe('run-completion', () => {
       )
     ).toBe(true);
     expect(allTasksMerged(spec(['T-01']), state({ 'T-01': '' }))).toBe(false);
+  });
+
+  // SPEC-PRD-0023-P1 T-04: merged code with no derived closeout is exactly the
+  // debt this phase exists to stop, so "all merged" stopped being sufficient.
+  it('phaseComplete reports a fully merged phase with no closeout PR as incomplete', () => {
+    expect(
+      phaseComplete(
+        spec(['T-01', 'T-02']),
+        state({ 'T-01': 'aaa', 'T-02': 'bbb' }),
+        null
+      )
+    ).toBe(false);
+  });
+
+  it('phaseComplete accepts an open closeout PR awaiting Approve', () => {
+    expect(
+      phaseComplete(
+        spec(['T-01', 'T-02']),
+        state({ 'T-01': 'aaa', 'T-02': 'bbb' }),
+        { state: 'OPEN' }
+      )
+    ).toBe(true);
+  });
+
+  it('phaseComplete accepts a merged closeout PR', () => {
+    expect(
+      phaseComplete(spec(['T-01']), state({ 'T-01': 'aaa' }), {
+        state: 'MERGED'
+      })
+    ).toBe(true);
+  });
+
+  it('phaseComplete rejects a closeout PR someone closed unmerged', () => {
+    expect(
+      phaseComplete(spec(['T-01']), state({ 'T-01': 'aaa' }), {
+        state: 'CLOSED'
+      })
+    ).toBe(false);
+    expect(closeoutSatisfies('CLOSED')).toBe(false);
+    expect(closeoutSatisfies('OPEN')).toBe(true);
+    expect(closeoutSatisfies('MERGED')).toBe(true);
+  });
+
+  it('phaseComplete still requires the merges, closeout PR or not', () => {
+    expect(
+      phaseComplete(spec(['T-01', 'T-02']), state({ 'T-01': 'aaa' }), {
+        state: 'MERGED'
+      })
+    ).toBe(false);
+    expect(phaseComplete(spec(['T-01']), null, { state: 'MERGED' })).toBe(false);
   });
 
   it('hasUnmergedCompletedTasks detects shadow human-gate state', () => {

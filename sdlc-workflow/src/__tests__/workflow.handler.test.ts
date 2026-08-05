@@ -62,7 +62,7 @@ describe('WorkflowHandler', () => {
       .toConstantValue({ getPrd });
     container
       .bind<ISpecFileRepository>(WORKFLOW_TOKENS.SpecFileRepository)
-      .toConstantValue({ writeSpec });
+      .toConstantValue({ writeSpec, writeCloseout: jest.fn() });
     container
       .bind<IDecomposeService>(WORKFLOW_TOKENS.DecomposeService)
       .toConstantValue({ decompose });

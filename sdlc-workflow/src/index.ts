@@ -144,6 +144,14 @@ import {
   IDeployRecordRepository
 } from './repositories/deploy-record.repository';
 import {
+  CloseoutAggregateService,
+  ICloseoutAggregateService
+} from './services/closeout-aggregate.service';
+import {
+  CloseoutService,
+  ICloseoutService
+} from './services/closeout.service';
+import {
   HeartbeatService,
   IHeartbeatService
 } from './services/heartbeat.service';
@@ -298,6 +306,12 @@ container
 container
   .bind<IDeployRecordRepository>(WORKFLOW_TOKENS.DeployRecordRepository)
   .to(DeployRecordRepository);
+container
+  .bind<ICloseoutAggregateService>(WORKFLOW_TOKENS.CloseoutAggregateService)
+  .to(CloseoutAggregateService);
+container
+  .bind<ICloseoutService>(WORKFLOW_TOKENS.CloseoutService)
+  .to(CloseoutService);
 container
   .bind<IHeartbeatService>(WORKFLOW_TOKENS.HeartbeatService)
   .to(HeartbeatService);
@@ -764,6 +778,53 @@ yargs(hideBin(process.argv))
           runId: argv['run-id'],
           repoPath: argv.repo,
           chronicleRepo: argv['chronicle-repo']
+        });
+      } catch (err) {
+        if (err instanceof WorkflowError) {
+          console.error(chalk.red(`\n✗ ${err.code}: ${err.message}`));
+          for (const detail of err.details) {
+            console.error(chalk.red(`  - ${detail}`));
+          }
+        } else {
+          console.error(chalk.red(`\n✗ ${err}`));
+        }
+        process.exit(1);
+      }
+    }
+  )
+  .command(
+    'closeout',
+    "Generate or refresh a spec's closeout PR from a run's recorded verdicts — checkboxes and status: Done are derived, never authored (SPEC-PRD-0023-P1)",
+    y =>
+      y
+        .option('run-id', {
+          type: 'string',
+          demandOption: true,
+          describe: 'Run whose recorded verdicts the closeout derives from'
+        })
+        .option('spec', {
+          type: 'string',
+          demandOption: true,
+          describe: 'Path to the spec to close out (inside --repo)'
+        })
+        .option('repo', {
+          type: 'string',
+          demandOption: true,
+          describe: 'Path to the repo owning the spec'
+        })
+        .option('runs-dir', {
+          type: 'string',
+          default: path.join(os.homedir(), '.rosetta', 'sdlc-runs'),
+          describe: 'Directory holding run state'
+        }),
+    async argv => {
+      const handler = container.get<IRunHandler>(WORKFLOW_TOKENS.RunHandler);
+      try {
+        await handler.closeout({
+          runsDir: argv['runs-dir'],
+          runId: argv['run-id'],
+          repoPath: argv.repo,
+          specPath: argv.spec
         });
       } catch (err) {
         if (err instanceof WorkflowError) {

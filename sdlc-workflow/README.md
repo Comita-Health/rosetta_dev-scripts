@@ -87,6 +87,13 @@ bun run dev -- record-merge --run-id <run-id> --sha <merged-sha> \
 bun run dev -- check-veto --run-id <run-id> --repo .. \
   --chronicle-repo ../../rosetta_chronicle_roustalski
 
+# Generate or refresh a spec's closeout PR from a run's recorded verdicts —
+# checkboxes and status: Done are derived, never authored (SPEC-PRD-0023-P1).
+# The phase boundary does this automatically; run it by hand to close out a
+# spec that landed before the machinery existed, or after an interruption.
+bun run dev -- closeout --run-id <run-id> \
+  --spec specs/PRD-0023/phase-1-spec.md --repo ..
+
 # Inspect a run: task results, cached step graph, verdicts, exceptions (T-09)
 bun run dev -- status --run-id <run-id>
 
@@ -311,6 +318,52 @@ Its reason for existing is the Prettier incident: `prettier --write` on a
 sequence that the tolerant parser silently mis-joins into one garbage glob,
 after which the envelope guards nothing. `spec-lint` names that reshape
 before intake silently accepts it.
+
+### Closeout: checkboxes derived from verdicts (SPEC-PRD-0023-P1)
+
+The single-writer rule above says agents never tick their own criteria. This is
+the writer that does. When the last task of a phase merges, the phase boundary
+generates a **closeout PR** whose entire diff is derived from `state.json`:
+
+1. `closeout-aggregate.service` reads the run's recorded verdicts and returns
+   one record per spec criterion — `pass`, `fail`, `human-required`, or an
+   explicit `no-verdict` for criteria the run never judged. Nothing is omitted,
+   because a missing entry and an unverified criterion must not look alike.
+2. `spec-closeout.ts` applies that map to the spec markdown on the default
+   branch: a criterion with a passing verdict is ticked, everything else is
+   left alone, and `status: Done` is written **only** when every criterion
+   passes, every task merged, and every phase gate is green. Partial coverage
+   never downgrades or placeholders the existing status.
+3. `closeout.service` commits through `SpecFileRepository.writeCloseout` — the
+   one route allowed to overwrite a spec — onto the stable branch
+   `sdlc/closeout/<spec-id>`, then opens or **updates in place** the PR for
+   that branch. Identity is the branch, not the title, so an interrupted job
+   re-run leaves exactly one PR reflecting the latest verdicts.
+
+The PR body is generated too: a table of verified criteria citing
+`(task, gate, evidence link)`, a **Remainder** section naming every criterion
+the run could not verify and why, and — when the spec arrives with boxes a
+human ticked by hand — a section listing them. Closeout **never unticks**: a
+hand tick is a human's record of hand verification. It does not count toward
+`status: Done` either, so it appears in both lists.
+
+Two consequences elsewhere:
+
+- **A phase is not complete until its closeout PR exists.** `phaseComplete`
+  requires all tasks merged _and_ a closeout PR that is open or merged, queried
+  live (`utils/run-completion.ts`). "All tasks merged" was what let five specs
+  land while still reading `status: Approved`. A closed-unmerged closeout PR, or
+  a `gh` failure that leaves the answer unknown, both read as incomplete —
+  claiming a phase is done on the strength of a network error is worse than
+  making the operator look.
+- **The phase Chronicle artifact links the closeout PR** (`closeoutPr` in the
+  digest payload), so the docs PR is reachable from the memory record. The
+  digest step's cache key includes whether that link was available, so a
+  closeout that only succeeds on a later attempt still gets published.
+
+`closeout --run-id <id> --spec <path> --repo <path>` runs the same code by hand
+for a spec that landed before this existed. Shadow runs never close out — they
+record verdicts without merging, so there is nothing to document.
 
 ### Progress heartbeat (#39)
 

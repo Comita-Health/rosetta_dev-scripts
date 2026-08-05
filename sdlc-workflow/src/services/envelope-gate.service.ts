@@ -7,16 +7,7 @@ import {
 import { WORKFLOW_TOKENS } from '../tokens';
 import { Envelope, GateVerdict } from '../types';
 import { matchesAnyGlob } from '../utils/glob-match';
-
-/** Mid-run edits under specs/ are forbidden even when listed in allowedPaths. */
-const SPEC_TREE_GLOBS = ['specs/**', '**/specs/**'] as const;
-
-/**
- * True when a repo-relative path is under a `specs/` tree (ADR-0008 docs).
- * Product-task diffs must not flip AC checkboxes or change `status:` here.
- */
-export const isSpecTreePath = (filePath: string): boolean =>
-  matchesAnyGlob([...SPEC_TREE_GLOBS], filePath);
+import { isSpecTreePath } from '../utils/spec-path';
 
 /** Common JS/TS test-file conventions, kept generic (no repo-specific runner assumed). */
 const TEST_PATH_GLOBS = [

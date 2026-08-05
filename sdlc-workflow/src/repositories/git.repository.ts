@@ -26,6 +26,26 @@ export interface IGitRepository {
     branch: string,
     baseSha: string
   ): void;
+  /**
+   * Create (or reuse) a worktree on a branch that may already exist on
+   * origin — the closeout branch (SPEC-PRD-0023-P1 T-02).
+   *
+   * @remarks
+   * {@link IGitRepository.addWorktree} always creates a *new* branch, which is
+   * right for task branches and wrong here: a regenerated closeout has to land
+   * on the same branch as the PR it is updating, and re-creating that branch
+   * from the default tip would push a non-fast-forward. When `origin/<branch>`
+   * exists this starts from it; otherwise from `baseSha`. Safe only for
+   * branches the engine is the sole writer of.
+   */
+  worktreeForBranch(
+    repoPath: string,
+    worktreePath: string,
+    branch: string,
+    baseSha: string
+  ): void;
+  /** True when a ref resolves in this repo (no network). */
+  refExists(repoPath: string, ref: string): boolean;
   /** Numstat diff between two refs (added + deleted lines per file). */
   diffStat(repoPath: string, baseRef: string, headRef: string): DiffStat;
   /** Full unified diff text between two refs. */
@@ -126,6 +146,29 @@ export class GitRepository implements IGitRepository {
       return;
     }
     git(repoPath, `worktree add -b "${branch}" "${worktreePath}" "${baseSha}"`);
+  }
+
+  worktreeForBranch(
+    repoPath: string,
+    worktreePath: string,
+    branch: string,
+    baseSha: string
+  ): void {
+    if (existsSync(worktreePath)) {
+      return;
+    }
+    const remote = `origin/${branch}`;
+    const start = this.refExists(repoPath, remote) ? remote : baseSha;
+    git(repoPath, `worktree add -B "${branch}" "${worktreePath}" "${start}"`);
+  }
+
+  refExists(repoPath: string, ref: string): boolean {
+    try {
+      git(repoPath, `rev-parse --verify --quiet "${ref}^{commit}"`);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   diffText(repoPath: string, baseRef: string, headRef: string): string {
