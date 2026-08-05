@@ -33,12 +33,16 @@ describe('HeartbeatService (#39)', () => {
         push: jest.fn(),
         fetch: jest.fn(),
         resolveSha: jest.fn(),
+        treeSha: jest.fn(),
+        worktreeForBranch: jest.fn(),
+        refExists: jest.fn().mockReturnValue(false),
         defaultBranch: jest.fn(),
-        fileAtRef: jest.fn().mockReturnValue(null),
-        pathDiffersFromRef: jest.fn().mockReturnValue(false),
+        fileAtRef: jest.fn(),
+        pathDiffersFromRef: jest.fn(),
         revertMerge: jest.fn(),
         stageAll: jest.fn(),
         commit: jest.fn(),
+        listFiles: jest.fn().mockReturnValue([]),
         removeWorktreeAsync: jest.fn()
       });
     container

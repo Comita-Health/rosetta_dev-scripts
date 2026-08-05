@@ -100,6 +100,30 @@ describe('AgentRunnerRepository', () => {
     });
   });
 
+  // SPEC-PRD-0021-P1 T-05. Every gate after a silent no-op judges an
+  // unmodified branch, so this is checked at the dispatch site and not only
+  // on the helper that computes the environment.
+  it('dispatches without the orchestrator nested-agent flags', async () => {
+    process.env.CURSOR_AGENT = '1';
+    process.env.CURSOR_ASKPASS_SOCKET = '/tmp/parent.sock';
+    process.env.CURSOR_AGENT_BIN = 'cursor-agent';
+    try {
+      spawnResult(0, 'ok');
+      await repo.run('/wt', 'p');
+
+      const [, , options] = spawnMock.mock.calls[0];
+      expect(options.env.CURSOR_AGENT).toBeUndefined();
+      expect(options.env.CURSOR_ASKPASS_SOCKET).toBeUndefined();
+      // The dispatch still needs to know which binary to run.
+      expect(options.env.CURSOR_AGENT_BIN).toBe('cursor-agent');
+      expect(options.env.PATH).toBe(process.env.PATH);
+    } finally {
+      delete process.env.CURSOR_AGENT;
+      delete process.env.CURSOR_ASKPASS_SOCKET;
+      delete process.env.CURSOR_AGENT_BIN;
+    }
+  });
+
   it('does not block the event loop: two agents run concurrently', async () => {
     // Neither child closes until both have been spawned — impossible with
     // the old spawnSync implementation, required by the P3 T-01 pool.

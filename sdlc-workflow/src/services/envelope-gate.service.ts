@@ -1,19 +1,32 @@
 import { inject, injectable } from 'inversify';
 import type { IGitRepository } from '../repositories/git.repository';
-import type { ISurfaceMapRepository } from '../repositories/surface-map.repository';
+import {
+  SURFACES_CONTRACT_PATH,
+  type ISurfaceMapRepository
+} from '../repositories/surface-map.repository';
 import { WORKFLOW_TOKENS } from '../tokens';
 import { Envelope, GateVerdict } from '../types';
 import { matchesAnyGlob } from '../utils/glob-match';
+import { isSpecTreePath } from '../utils/spec-path';
 
-/** Mid-run edits under specs/ are forbidden even when listed in allowedPaths. */
-const SPEC_TREE_GLOBS = ['specs/**', '**/specs/**'] as const;
+/** Common JS/TS test-file conventions, kept generic (no repo-specific runner assumed). */
+const TEST_PATH_GLOBS = [
+  '**/*.test.*',
+  '**/*.spec.*',
+  '**/__tests__/**',
+  '**/__mocks__/**'
+] as const;
 
 /**
- * True when a repo-relative path is under a `specs/` tree (ADR-0008 docs).
- * Product-task diffs must not flip AC checkboxes or change `status:` here.
+ * True when a repo-relative path is a test file by common JS/TS convention.
+ * `maxDiffLines` exempts these (BUG-retro-and-queued-plans-P1 retro): a
+ * thorough, well-tested change is not a bigger blast radius than a thin one,
+ * and penalizing test bulk the same as production code perversely
+ * discourages coverage. `allowedPaths` / `forbiddenSurfaces` still apply to
+ * test files unchanged — only the size budget exempts them.
  */
-export const isSpecTreePath = (filePath: string): boolean =>
-  matchesAnyGlob([...SPEC_TREE_GLOBS], filePath);
+export const isTestPath = (filePath: string): boolean =>
+  matchesAnyGlob([...TEST_PATH_GLOBS], filePath);
 
 export interface EnvelopeGateInput {
   repoPath: string;
@@ -31,6 +44,18 @@ export interface EnvelopeGateInput {
  * Always breaches on any path under a specs/ tree (repo-root or nested), even
  * if that path is listed in allowedPaths — checkbox / Done closeout is a
  * separate docs PR after the phase, not a product-task diff.
+ *
+ * Contract resolution (SPEC-BUG-envelope-spec-integrity-P1 T-03): the
+ * surface map is read from the git tree under judgment (`headRef` — the
+ * task PR tip, or the merged integration tip for phase-level checks),
+ * never from the operator's local checkout. A contract missing at that
+ * tree is a named breach reason, not a local-file fallback.
+ *
+ * `maxDiffLines` budgets non-test lines only (BUG-retro-and-queued-plans-P1
+ * retro): test files ({@link isTestPath}) still count for `allowedPaths` /
+ * `forbiddenSurfaces`, but their line count is excluded from the size
+ * budget so thorough test coverage never forces a task to either under-test
+ * or breach on size alone.
  */
 export interface IEnvelopeGateService {
   evaluate(input: EnvelopeGateInput): Promise<GateVerdict>;
@@ -51,7 +76,13 @@ export class EnvelopeGateService implements IEnvelopeGateService {
       input.baseRef,
       input.headRef
     );
-    const surfaceMap = this._surfaceRepo.load(input.repoPath);
+    // T-03 (SPEC-BUG-envelope-spec-integrity-P1): the contract is read from
+    // the tree under judgment — the headRef blob — never the operator's
+    // working copy, so a locally edited surfaces.json cannot sway a verdict.
+    const surfaceMap = this._surfaceRepo.loadAtRef(
+      input.repoPath,
+      input.headRef
+    );
     const reasons: string[] = [];
 
     const outsideAllowed = diff.files
@@ -70,25 +101,41 @@ export class EnvelopeGateService implements IEnvelopeGateService {
       );
     }
 
-    for (const label of input.envelope.forbiddenSurfaces) {
-      const globs = surfaceMap[label];
-      if (globs === undefined) {
-        reasons.push(`unresolvable surface label: ${label}`);
-        continue;
-      }
-      const touched = diff.files
-        .filter(file => matchesAnyGlob(globs, file.path))
-        .map(file => file.path);
-      if (touched.length > 0) {
+    if (surfaceMap === null) {
+      if (input.envelope.forbiddenSurfaces.length > 0) {
+        // Named error, not a local-disk fallback: labels cannot be resolved
+        // when the judged tree carries no surface contract.
         reasons.push(
-          `forbidden surface "${label}" touched: ${touched.join(', ')}`
+          `surface contract ${SURFACES_CONTRACT_PATH} missing from judged ` +
+            `tree ${input.headRef}; cannot resolve forbiddenSurfaces: ` +
+            input.envelope.forbiddenSurfaces.join(', ')
         );
+      }
+    } else {
+      for (const label of input.envelope.forbiddenSurfaces) {
+        const globs = surfaceMap[label];
+        if (globs === undefined) {
+          reasons.push(`unresolvable surface label: ${label}`);
+          continue;
+        }
+        const touched = diff.files
+          .filter(file => matchesAnyGlob(globs, file.path))
+          .map(file => file.path);
+        if (touched.length > 0) {
+          reasons.push(
+            `forbidden surface "${label}" touched: ${touched.join(', ')}`
+          );
+        }
       }
     }
 
-    if (diff.totalLines > input.envelope.maxDiffLines) {
+    const nonTestLines = diff.files
+      .filter(file => !isTestPath(file.path))
+      .reduce((sum, file) => sum + file.lines, 0);
+    if (nonTestLines > input.envelope.maxDiffLines) {
       reasons.push(
-        `diff is ${diff.totalLines} lines, exceeding maxDiffLines ${input.envelope.maxDiffLines}`
+        `diff is ${nonTestLines} non-test lines (${diff.totalLines} total ` +
+          `including tests), exceeding maxDiffLines ${input.envelope.maxDiffLines}`
       );
     }
 

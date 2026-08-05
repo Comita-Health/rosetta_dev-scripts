@@ -2,11 +2,341 @@
 
 ## Unreleased
 
-- **sdlc-workflow:** auto-recover merge-blocked waves when (1) GitHub reports
-  zero check-runs right after push — keep polling until suites register
-  (gh#7401 race) instead of freezing a red phase; (2) the task tip advances
-  after a verification breach — re-verify in-wave and re-select on resume
-  when the worktree head no longer matches the failing verification digest.
+- **sdlc-workflow:** the reviewer prompt no longer ships domain-specific
+  vocabulary as examples of invariants worth documenting. Examples are now
+  generic ("authorization, data-sensitivity boundaries, idempotency, ordering,
+  failure modes"); domain rules arrive through the consumer's own
+  `.sdlc/review-checklist.md` (ADR-0009). A test pins the upstream prompt free
+  of regulated-domain vocabulary and pins that a declared checklist still
+  carries it.
+- **sdlc-workflow:** phase closeout is now **derived, not authored**
+  (SPEC-PRD-0023-P1). Five specs had landed with their work merged and their
+  acceptance criteria still unticked — `PRD-0011/phase-1-spec.md` sat at 1 of
+  15 — because closing out a spec was a manual writing job that nobody's
+  definition of "done" required. When the last task of a phase merges, the
+  engine now reads the run's recorded verdicts (`closeout-aggregate.service`)
+  and opens a closeout PR whose entire diff is computed from them: a criterion
+  with a passing verdict is ticked, and `status: Done` is written only when
+  every criterion passes, every task merged, and every phase gate is green.
+  Partial coverage leaves the existing status untouched and surfaces the gaps
+  in a **Remainder** section rather than downgrading anything. The PR body
+  cites `(task, gate, evidence link)` per verified criterion, and the Remainder
+  section names the phase-level shortfalls — tasks with no merge commit, tasks
+  with no passing phase gate — that withhold `Done` even when every criterion
+  passes. Boxes a human
+  ticked by hand are **never unticked** — that tick is a record of hand
+  verification — but they do not count toward `Done` either, so they are
+  reported explicitly.
+- **sdlc-workflow:** a phase is no longer complete just because its tasks
+  merged — `phaseComplete` also requires a closeout PR that is open or merged,
+  queried live rather than cached (`utils/run-completion.ts`). A closed-unmerged
+  PR, or a `gh` call that fails outright, both read as incomplete: claiming a
+  phase is done on the strength of a network error is worse than making the
+  operator look. The phase Chronicle artifact carries the closeout PR URL
+  (`closeoutPr`), and the digest's cache key includes whether that link was
+  available, so a closeout that only succeeds on a later attempt still gets
+  published.
+- **sdlc-workflow:** closeout PRs are identified by their branch
+  (`sdlc/closeout/<spec-id>`), not their title, and are updated in place. An
+  interrupted closeout re-run leaves exactly one PR reflecting the latest
+  verdicts instead of a pile of near-duplicates. `closeout --run-id --spec
+--repo` drives the same code by hand for specs that landed before the
+  machinery existed.
+- **sdlc-workflow:** `docs:` is a real verification tier at runtime, not only in
+  the lint. `spec-lint` had accepted four tiers while `parseCriterionTier` knew
+  three, so an Approved spec carrying a `docs:` criterion passed intake and then
+  threw `SPEC_MALFORMED` in verification — which is why
+  `BUG-envelope-spec-integrity` T-04 merged with no criterion verdicts at all,
+  and why its closeout failed outright when it read the same spec back. `docs:`
+  now records as human-required alongside `manual:`, and a test pins the two
+  lists together.
+- **sdlc-workflow:** `specs/**` keeps exactly one writer. The privileged route
+  (`SpecFileRepository.writeCloseout`) refuses absolute paths, refuses to
+  escape the checkout, refuses anything outside a `specs/` tree, and refuses to
+  create a spec that is not already there — closeout amends an Approved
+  document, it never authors one. Static pins in `spec-write-policy.test.ts`
+  fail the suite if a second call site appears, if a spec write bypasses the
+  repository, or if the issue #40 envelope-breach regression test is skipped or
+  dropped from the suite CI gates merges on.
+- **sdlc-workflow:** the CI gate no longer treats "GitHub has not registered
+  a check run yet" as a verdict. A postmortem over 23 runs found **every**
+  CI block in the corpus — 16 of 59 verdicts — read `no check runs` or
+  `no CI results for <sha>`, with **zero actual CI failures**: the engine
+  pushed, polled once before the check suite existed, marked `blocked`,
+  escalated and exited. `ci-gate` now polls a bounded appear window
+  (`checksAppearTimeoutMs`, default 5 min) before judging, distinguishing
+  not-yet-reported (wait) from reported-and-failing (the existing ≤3-attempt
+  fix loop) from appear-deadline-exceeded (escalate — a suite that never
+  registers is a real misconfiguration).
+- **sdlc-workflow:** a red **reviewer or envelope** gate now gets a bounded
+  remediation round before it becomes a needs-human escalation. These were
+  22 of 44 historical escalations and every one ended its run cold, even
+  though median reviewer dispatch is 1.16 minutes — re-judging is cheap, so
+  the terminal stop was pure waste. `gate-remediation.service` re-dispatches
+  the implementation agent in the task's existing worktree with the failing
+  verdicts' reasons as input, commits and pushes, and lets the gates judge
+  the new head; the executor re-opens a task whose breached phase has a
+  newer remediation so the fix is actually re-evaluated. Bounded by
+  `state.gateFixAttempts` (default 2) and the run token budget, with
+  exhaustion escalating loudly. Envelope remediation is instructed to reduce
+  the diff and explicitly forbidden from raising `maxDiffLines` — a gate
+  that negotiates its own threshold is not a gate.
+- **sdlc-workflow:** the supervisor no longer exits on `merge-blocked`. That
+  single behavior fired 28 times across 79 waves, each time ending the
+  process and waiting for a hand relaunch, and accounts for the bulk of the
+  1,560 idle minutes (62.7% of elapsed time) measured across the corpus. It
+  now retries with backoff up to a bounded limit, invalidating the step-cache
+  entries that could produce a different answer (`ci` and the phase
+  aggregate) so the retry re-polls instead of replaying the cached block.
+  Retries are counted in `state.mergeBlockedRetries`; exhaustion is still a
+  loud terminal exit.
+- **sdlc-workflow:** the **sandbox gate joined the aggregate**. Previously
+  the aggregator received only `{ci, verification, reviewer, envelope}`, so a
+  failed sandbox deploy did not block a merge and "it merged" never implied
+  "it deployed". A declared sandbox that deployed unhealthily now blocks the
+  phase and records a `sandbox-failed` exception; a repo with no
+  `.sdlc/environments.json` still does not block, since the absence of a
+  contract is not evidence of a broken deploy.
+- **sdlc-workflow:** `emitOnce` woke a human exactly **once, ever** per
+  escalation title — it deduped on the title alone and never cleared the
+  marker, so recurrence was silently swallowed. Escalations now carry an
+  `occurrenceKey` (branch head SHA, or the implementation digest for a task
+  with no head) hashed into the dedupe marker: the same finding on unchanged
+  content stays quiet, but the same finding after an agent pushed a fix
+  re-notifies. Hashing (rather than appending) the occurrence keeps a long
+  dedupe key from truncating the suffix away and silently re-deduping.
+- **sdlc-workflow:** heartbeat coverage. Only `starting`, `implementation`
+  and `reviewer` set a step label, leaving 52.6% of measured work
+  unobservable and accruing sandbox / verification / ci / merge time under
+  whatever label was left standing — which overstated reviewer time by
+  ~3.5 minutes per segment across 51% of reviewer segments. Those four steps
+  now set their own labels, and the verifier agent reports per-criterion
+  progress through an optional sink on `VerificationInput`.
+- **sdlc-workflow:** the engine is now the **single writer** of
+  `supervise.exit`. `sdlc-continuity-daemon.sh` deleted the file before a
+  relaunch and then `echo $?`'d a bare exit code over it, destroying the
+  `reason`/`abnormal` evidence and leaving two incompatible formats on disk
+  — a bare `0` was indistinguishable from a zero-exit that left work
+  unmerged. The daemon's relaunch probe writes `supervise.relaunch-exit`
+  instead; `SuperviseExitRepository.read` still parses the legacy bare form
+  as `abnormal: true` so existing run directories stay readable.
+- **sdlc-workflow:** `state.json` writes are now **atomic and single-writer**
+  (SPEC-PRD-0021-P1 T-01/T-02). Every save goes through a temp file in the
+  same directory, `fsync`, then `rename`, so a crash mid-write leaves the
+  previous state fully parseable and a concurrent reader never observes a
+  truncated file. A `run.lock` in the run directory, taken by exclusive file
+  create, makes the continuity-relaunch-versus-manual-resume race structurally
+  impossible instead of merely unlikely: `run` / `supervise` hold it for the
+  session, short-lived mutators take a momentary lock around their write, and
+  a second engine fails immediately with `RUN_LOCK_HELD` naming the live pid,
+  host, owner and start time. A lock whose owner is dead on this host is
+  reclaimable so a SIGKILLed run stays resumable; a pid on another host never
+  is, since it cannot be probed from here.
+- **sdlc-workflow:** `retry-executor.service` is the engine's single
+  retry-policy surface (T-03): attempt cap, doubling backoff capped at 30s,
+  and the `RecoveryHistory` record schema defined exactly once for the later
+  gate-retry and breaker consumers. It re-invokes the caller's step and
+  nothing else — it holds no reference to a verdict type and has no branch
+  that can construct or soften one, because a retry layer able to do that
+  would make every gate advisory. Exhaustion escalates once and returns; it
+  never loops past the cap.
+- **sdlc-workflow:** the three non-gate steps — PR open, sandbox deploy and
+  Chronicle commit — are retried through that executor with their attempt
+  trail recorded on the step (`steps[<key>].recovery`), so a flaky step is
+  visible after the fact rather than only in a log the operator no longer has
+  (T-04). Only a _thrown_ sandbox error retries; an unhealthy deploy is a
+  verdict. Recovered steps land in the step cache like any other, so a resume
+  reuses them with zero hand-edits and no duplicate PR, deploy or ledger
+  commit. Gates themselves are deliberately not retried in this phase.
+- **sdlc-workflow:** agent dispatches run with a **sanitized environment**
+  (T-05). Nested-agent markers — `CURSOR_AGENT`, `CURSOR_INVOKED_AS`,
+  `CURSOR_CONVERSATION_ID`, the askpass socket/secret pair, `AGENT_TRANSCRIPTS`
+  and the Claude Code equivalents — are stripped before spawning, for both the
+  workspace-mutating runner and the `cursor-agent -p` completion transport
+  that carries the reviewer, verifier and decompose prompts. A child that
+  inherits them can decide it is re-entrant and exit without doing the work, a
+  silent no-op indistinguishable from "nothing to change", after which every
+  gate judges an unmodified branch. Deliberately a denylist rather than a
+  `CURSOR_*` wildcard, since the engine dispatches _with_ `CURSOR_AGENT_BIN`
+  and `CURSOR_MODEL`.
+- **sdlc-workflow:** a detached launch is now verified rather than assumed.
+  The parent sampled child liveness exactly once at 1.5s, and on a loaded
+  machine that sample landed while the child was still booting `tsx` — so it
+  printed "detached", exited 0, and the operator walked away from a run that
+  died a second later. It now watches for up to 8s and stops early on evidence
+  either way: the child's own `supervise.exit` record, or a dead pid.
+- **sdlc-workflow:** the sandbox contract is now **path-aware**
+  (SPEC-PRD-0011-P4 T-01/T-04). Deploy and health commands both receive
+  `SDLC_SANDBOX_BASE_SHA` alongside `SDLC_SANDBOX_SHA` — the task's integration
+  tip for a task deploy, the run's starting tip at the phase boundary, the
+  default-branch tip for a veto revert — so a repo-owned script can decide from
+  `base..head` whether anything deployable changed. Observed cost of not having
+  it: a task that touched only an inventory doc and shared unit tests still
+  dispatched both application stacks and waited for the live app to serve that
+  SHA. Path policy stays repo-owned; the engine publishes the range and no
+  filter. The variable is exported only when non-empty, because an empty value
+  looks "set" to a shell test and would make a script conclude nothing changed
+  and skip a real deploy.
+- **sdlc-workflow:** deploys are recorded in an append-only ledger keyed by
+  **tree content**, and three kinds of redundant deploy are now skipped
+  (SPEC-PRD-0022-P1 T-01/T-02/T-03). `<runsDir>/<runId>/deploys.jsonl` captures
+  each dispatch's content SHA, commit, trigger, workflow run URL and terminal
+  outcome, with the in-flight marker written before dispatch. Content already
+  live under a different commit is **reused** rather than redeployed — a merge
+  commit's SHA always differs from the PR head it merged even when the tree is
+  byte-identical, which is why commit comparison kept paying twice, and why the
+  reuse path skips the health probe too (the live app answers with the commit it
+  was deployed from). A content SHA another trigger is already deploying is
+  never dispatched a second time: the phase boundary stands down for an
+  in-flight push deploy and only probes health, so a lost race costs a retry on
+  a later wave instead of two jobs fighting over one target. Reuse and skip
+  decisions are recorded as their own events, because "no deploy happened" must
+  be distinguishable from a dedup bug that lost the dispatch. An unresolvable
+  tree SHA disables the ledger for that dispatch rather than failing the run.
+
+- **sdlc-workflow:** `queue-run --spec <path> --repo <path> …` writes a
+  durable FIFO launch record (`<runsDir>/queue/<n>.json`, deduped by spec
+  path) capturing the same argv surface as the continuity daemon's
+  `launch.json` (SPEC-BUG-retro-and-queued-plans-P1 T-02). When a supervised
+  enforce run completes with every task merged, the supervise loop pops the
+  queue head and — the same relaunch mechanics `--detach` already uses —
+  launches it detached once its spec reads `Approved` on `origin/<default>`;
+  an unapproved head stays queued with a visible `monitor.log` line, and a
+  failed launch is never a silent drop — it stays queued for retry and
+  raises a durable `sdlc_queue_launch` wake. The relaunch replays the
+  record's own `execPath`/`execArgv` (not the enforcing process's), so a
+  queued relaunch stays correct even under a differently-invoked daemon.
+  `status --queue` lists queued entries. This is the interim consumer; the
+  PRD-0020 daemon later owns the same queue via its watch registry against
+  this unchanged record format.
+- **sdlc-workflow:** the envelope gate's `maxDiffLines` budget now excludes
+  test files (`*.test.*`, `*.spec.*`, `__tests__/**`, `__mocks__/**` —
+  `isTestPath`) from the size count; they still count for `allowedPaths` /
+  `forbiddenSurfaces`. A thorough test suite is not a bigger blast radius
+  than a thin one, and counting it the same as production code was forcing
+  a choice between under-testing and inflating envelopes (caught live on
+  SPEC-BUG-retro-and-queued-plans-P1 T-02: 1187 total lines breached a
+  600-line budget, but only 626 were non-test). The reviewer prompt's
+  envelope section states the same exemption so the LLM reviewer's
+  independent size judgment matches the mechanical gate.
+- **sdlc-workflow:** gate verdicts are now linked to their eventual outcome
+  so per-gate precision is computable from the Chronicle ledger
+  (SPEC-BUG-reviewer-house-bar-P1 T-02). `record-merge --task` annotates
+  the merged task's gate verdicts `outcome: stood`; `check-veto`'s revert
+  path annotates the reverted tasks' verdicts `outcome: vetoed`. Each
+  annotation is a compact `sdlc.outcome.v1` artifact keyed by
+  `(runId, taskId, gate)`, so a resumed run overwrites rather than
+  duplicates. Read-side reporting (e.g. a precision report) is out of
+  scope — this task only guarantees the data exists going forward.
+- **sdlc-workflow:** the reviewer prompt now injects the target repo's
+  optional `.sdlc/review-checklist.md` (SPEC-BUG-reviewer-house-bar-P1
+  T-01), resolved from the judged tree via `ReviewChecklistRepository`
+  (T-03 tree-resolution rule). The assessment schema gains per-item
+  `checklistFindings`, and a failed `mandatory` item overrides a
+  concurring verdict to disagree. No file → unchanged pre-checklist
+  prompt/verdict shape; a malformed checklist fails loud with a named
+  `CONTRACT_MALFORMED` error. The engine ships no checklist content.
+- **ci:** `.github/workflows/ci.yml`'s `test` job now runs `bun run typecheck`
+  (`tsc --noEmit`) for `team-setup` and `sdlc-workflow`, each before that
+  package's `test:coverage` step (SPEC-BUG-ci-typecheck-gate-P1 T-01). Jest
+  runs through `@swc/jest`, which strips TypeScript types without checking
+  them, so a `tsc`-only defect (duplicate object property, mismatched type,
+  missing interface member) could ride onto `main` with CI green the whole
+  time. The new step fails the build fast on that class of error instead of
+  requiring someone to run `bun run build` by hand to notice.
+- **sdlc-workflow:** synthesized `allowedPaths` are grounded in the target
+  repo tree instead of trusted as LLM guesses (#35 /
+  SPEC-BUG-envelope-spec-integrity-P1 T-01). At `decompose`, every envelope
+  glob must match at least one existing path in the `--repo` checkout or be
+  justified as a new-path intent (a task naming the file it creates in its
+  engineering notes); anything else fails synthesis with
+  `ENVELOPE_UNGROUNDED` listing the offending globs. A diff-forecast
+  heuristic additionally warns — without blocking — when task engineering
+  notes reference a path outside the envelope, so the human reviews a
+  coherent envelope instead of discovering the gap as a mid-run breach.
+- **sdlc-workflow:** `forbiddenSurfaces` fail closed at synthesis (#36 /
+  SPEC-BUG-envelope-spec-integrity-P1 T-02). `decompose` resolves every
+  synthesized surface label against the target repo's `.sdlc/surfaces.json`
+  and aborts with `SURFACE_UNRESOLVABLE` — each unresolvable label named and
+  the repo's known labels listed — instead of letting a label no gate can
+  enforce ship (or vanish) before a human reviews the spec. The known labels
+  are also fed into the synthesis prompt so the model picks from real
+  surfaces. Specs whose labels all resolve render byte-identically to prior
+  behavior, and arbitrary consumer labels (e.g. a healthcare
+  `payments-phi-boundary`) round-trip PRD → spec → intake without loss.
+- **sdlc-workflow:** the envelope gate resolves `.sdlc/surfaces.json` from
+  the git tree under judgment (the task PR tip) via
+  `SurfaceMapRepository.loadAtRef`, never the operator's local checkout — a
+  locally edited (uncommitted) contract can no longer sway a verdict. A
+  contract missing from the judged tree while the envelope declares
+  `forbiddenSurfaces` is now a named breach reason (contract path + judged
+  ref), not a local-file fallback. README documents the tree-resolution
+  rule and audits the other evaluation-time `.sdlc/` readers (sandbox /
+  verification contracts load from the task worktree, which is the judged
+  tree's checkout) (SPEC-BUG-envelope-spec-integrity-P1 T-03).
+- **sdlc-workflow:** two integrity guards on the spec file itself (#40 /
+  SPEC-BUG-envelope-spec-integrity-P1 T-04). The envelope gate now pins the
+  self-ticking regression end-to-end: a product-task diff that edits its own
+  `specs/**` file — including flipping its acceptance checkboxes — hard-breaches
+  even when `allowedPaths` explicitly covers the spec path; checkbox / `status:`
+  closeout has a single writer, the engine closeout / docs PR after the product
+  tasks merge (PRD-0023). Added `sdlc-workflow spec-lint --spec <path>`:
+  validates front-matter parse, envelope schema + inline-array integrity, and
+  checkbox integrity (criteria present, tiers recognized) with named
+  `SPEC_MALFORMED` / `SPEC_INVALID` errors — no LLM call, no `--repo`, hook/CI
+  safe. It is the guard that catches a formatter-reshaped envelope (the Prettier
+  incident: a folded YAML block sequence the tolerant parser mis-joins into one
+  garbage glob) before intake silently accepts it.
+
+- **sdlc-workflow:** enforce-merge reconciles a thrown `gh pr merge` against
+  GitHub (`mergeCommit.oid`) before filing `merge-blocked`. A
+  `--delete-branch` false negative with the task branch still checked out
+  in the run worktree now records the real `mergedSha` and unblocks the
+  phase gate instead of posting a spurious needs-human
+  (SPEC-BUG-fail-loud-run-lifecycle-P1 T-03; entry deferred from the task
+  PR for envelope compliance).
+
+- **sdlc-workflow:** needs-human escalations are assigned and delivered, not
+  parked. `run --operator <login>` (or `SDLC_OPERATOR`) assigns the GitHub
+  issue created for each exception entry; without an operator the issue still
+  posts and `monitor.log` warns. Every escalation also emits one durable
+  wake-inbox event (title-idempotent across resume) alongside the existing
+  queue item. Swallowed `gh issue create` failures append a loud
+  `monitor.log` warning while the run continues
+  (SPEC-BUG-fail-loud-run-lifecycle-P1 T-04).
+
+- **sdlc-workflow:** supervise / detached children install exit traps so any
+  trappable termination (clean exit, thrown error, SIGTERM/SIGINT) writes
+  `supervise.exit` (`code` + `reason` + `abnormal`), a terminal
+  `monitor.log` line, and a durable `sdlc_supervisor` wake (#38 /
+  SPEC-BUG-fail-loud-run-lifecycle-P1 T-02). Abnormal zero-exits
+  (incomplete tasks) are distinguishable from all-merged completion in
+  artifacts alone. SIGKILL / power-loss stay with the continuity daemon's
+  liveness check — documented in the README detection boundary. Detach
+  parents still exit non-zero when the child dies during startup (missing
+  spec / refused intake).
+
+- **sdlc-workflow:** persist `state.json` at run invocation start — before
+  intake completes and before the first step-cache boundary — so a crash
+  never leaves `status --run-id` answering `RUN_NOT_FOUND` (#37 /
+  SPEC-BUG-fail-loud-run-lifecycle-P1 T-01). Launch record carries run id,
+  spec path/digest, base SHA, launch argv, `startedAt`, and an empty step
+  map. Refused intake still records the blocked verdict and exits non-zero;
+  supervise clears its `supervise.pid` on clean exit so the continuity
+  daemon does not treat a terminal refusal as a relaunchable half-run.
+
+- **team-setup / Addi merge-on-approve:** after merging a PR that touches
+  `specs/**/phase-*-spec.md`, emit `repository_dispatch` type
+  `sdlc-run-launch` with `client_payload: { specPaths, mergedSha, prNumber }`
+  exactly once per merge SHA (commit-status dedup). Non-spec merges emit
+  nothing. Script: `team-setup/scripts/emit-sdlc-run-launch.mjs`
+  (SPEC-BUG-one-click-spec-approval-P1 T-02).
+
+- **team-setup / Addi merge-on-approve:** on Approve of an Addi PR that
+  touches Draft `specs/**/phase-*-spec.md`, push a DCO-signed
+  `docs(spec): approve SPEC-… on human Approve` flip (Addi App) before
+  merge. Script: `team-setup/scripts/flip-spec-status.mjs`. Non-spec PRs
+  unchanged (SPEC-BUG-one-click-spec-approval-P1 T-01).
 - **sdlc-workflow:** enforce intake / supervise re-read the Approved spec from
   `origin/<defaultBranch>` (`SpecDocRepository.readAtRef`) instead of comparing
   the operator working tree to origin. Stale local checkbox edits no longer
@@ -69,31 +399,14 @@
 - **addi-authorship rule:** documented a recurring false-positive permission
   error. `gh pr create`/`gh issue create` without an explicit `--repo`
   default to targeting a forked repo's upstream parent, not `origin` — on
-  `Comita-Health/rosetta_dev-scripts` (forked from
+  a consumer fork of `rosetta_dev-scripts` (forked from
   `Rosetta-Foundation/rosetta_dev-scripts`) this produced `GraphQL: Resource
-  not accessible by integration (createPullRequest)`, indistinguishable
+not accessible by integration (createPullRequest)`, indistinguishable
   from Addi genuinely lacking `pull_requests: write`, which it does not.
   Confirmed live: REST `POST /pulls` and a raw GraphQL `createPullRequest`
   both pass the permission check on the same token; only `gh pr create`'s
   default fork-upstream resolution failed. Fix is `--repo <owner>/<repo>`,
   not a permission grant.
-- **sdlc-workflow:** an enforcing run now refuses a spec that is not the one on
-  the repo's default branch — missing there, or differing from the local copy.
-  The approval gate is a human approving the PR that lands the spec, but
-  nothing enforced it: `run --spec <path>` read a local file, so an agent could
-  flip `status: Approved` in its own checkout and launch. That is exactly how
-  the first PRD-9999 canary skipped its own gate. Branch protection cannot
-  cover this (private repo on a free plan, client-side husky guard, and the
-  implementation prompt tells agents to use `--no-verify`). `--shadow` runs are
-  exempt, since they never merge and iterating on an unlanded spec is the point.
-- **sdlc-workflow:** a run now blocks at the intake gate when the spec envelope
-  names a `forbiddenSurfaces` label the target repo does not define in
-  `.sdlc/surfaces.json`. The envelope gate fails closed on an unresolvable
-  label, so an undefined one breached **every** task unconditionally, no matter
-  what the diff contained — and only after a full wave of agent work had been
-  paid for. The intake verdict lists each bad label alongside the labels the
-  repo does define. Spec synthesis routinely invents plausible names
-  (`migrations`, `frontend`, `handlers`) that no repo declares.
 - **sdlc-workflow:** closed the "acceptance criteria" transparency gap
   identified while coaching PRD/spec authoring: all `test:` criteria on a
   task share a single run of the repo's scripted verify command, so a
@@ -126,7 +439,7 @@
   descriptions (a separate, previously-silent bug: the old lazy-match
   lookahead terminated at the end of a phase's first line, truncating or
   dropping any phase whose description wrapped). Added `sdlc-workflow
-  prd-lint --prd <id> --docs-dir <dir>` — validates a PRD parses cleanly with
+prd-lint --prd <id> --docs-dir <dir>` — validates a PRD parses cleanly with
   no LLM call and no `--repo`, for fast feedback right after drafting, before
   `decompose` ever runs.
 - **sdlc-workflow:** sandbox deploy and test-tier verification now run
@@ -141,29 +454,20 @@
   cuts ~1.5–2 minutes off the deploy-finishes-to-merge gap per deployable
   task. CI is unaffected — it already overlaps for free since GitHub
   Actions triggers the moment the PR opens.
-- **sdlc-workflow / team-setup:** the continuity daemon could never actually
-  restart anything, and said it had. Launch records stored `execPath` (plain
-  node) plus a `.ts` entry but not the interpreter flags, so every relaunch —
-  and every `run --supervise --detach` from a source checkout — died on
-  `ERR_UNKNOWN_FILE_EXTENSION` before reading a byte. The daemon then wrote the
-  corpse's pid, logged "relaunched", and woke the operator to "confirm it is
-  making progress". Launch records now carry `execArgv` and both the detach
-  path and the daemon replay it (records already on disk fall back to `tsx`),
-  and the daemon probes the child before claiming a restart, escalating a
-  distinct wake when it dies immediately.
+- **sdlc-workflow:** `run --supervise --detach` works from a source checkout
+  again. The detached child was spawned as `process.execPath` plus the argv,
+  dropping the interpreter flags — running from source that is plain node and
+  a `.ts` entry, so the child died on `ERR_UNKNOWN_FILE_EXTENSION` before its
+  first wave. `process.execArgv` is now replayed into the child.
+- **team-setup:** the continuity daemon replays `execArgv` when relaunching a
+  supervisor (falling back to `tsx` for launch records written without it) and
+  probes the child before reporting a restart, so a relaunch that dies at
+  startup escalates instead of waking the operator to "confirm progress" on a
+  process that never ran.
 - **team-setup:** the continuity daemon no longer re-logs and re-kills a
   stalled agent on every 60s tick. A killed agent never touches its heartbeat
-  again, so the condition is permanent once detected — one abandoned run
-  emitted 800 "stalled — killing" lines over 13 hours, burying every other
-  run. The kill now happens once per condition, matching the wake.
-- **sdlc-workflow:** enforcing-mode merges no longer fail on every task. The
-  merge ran `gh pr merge --squash --delete-branch`, and the engine only ever
-  merges a branch checked out in one of its own worktrees, so gh always failed
-  the _local_ delete — after the merge had already landed. Every task reported
-  `merge failed`, filed a needs-human issue, and held the phase gate behind
-  work that was in fact on the default branch. `--delete-branch` is dropped
-  (repos set `delete_branch_on_merge`), and a merge command that exits non-zero
-  is now reconciled against real PR state before it is called a failure.
+  again, so the condition is permanent once detected; the kill now fires once
+  per condition, matching the wake.
 - **sdlc-workflow:** `run --detach` no longer reports success when the child
   dies during startup. It printed `[supervise] detached` and exited 0 as soon
   as the spawn returned, so a bad `--spec` path, a still-`Draft` spec, or a
@@ -171,13 +475,9 @@
   `state.json` exists that early, so the continuity daemon skipped the run too.
   The parent now probes the child after a startup grace and, if it is gone,
   surfaces the tail of the child's own log and exits 1.
-- **sdlc-workflow:** SPEC-PRD-0011-P4 path-aware sandbox deploy. The sandbox
-  gate now exports `SDLC_SANDBOX_BASE_SHA` (the task's gate base; the run's
-  frozen base at the phase boundary) alongside `SDLC_SANDBOX_SHA`, so
-  repo-owned deploy scripts can diff `base..head` and skip or thin out the
-  ship. The engine stays path-agnostic — policy lives in the target repo.
-  First consumer: `comita_admissions`, where a docs-and-tests-only task used
-  to pay a full backend + frontend AWS deploy.
+- **team-setup:** deploy dual-tenant `addi-merge-webhook` to an AWS Lambda Function
+  URL; consumer-org and Rosetta org webhooks deliver
+  `pull_request_review` → `repository_dispatch` (`addi-merge-on-approve`).
 - **team-setup:** remove `attribution` from project `.cursor/cli.json` — Cursor
   only allows `permissions` at project scope; `attribution` belongs in
   `~/.cursor/cli-config.json` and was failing Agent CLI schema validation.
@@ -185,22 +485,18 @@
   before falling back to `shared.baseDir`. Every checkout ships the same
   hard-coded `baseDir`, so running it from a second workspace silently rewrote
   the first — the two workspaces drifted while both appeared synced.
-- **team-setup:** Addi merge-on-approve uses GitHub **`merge-async`** for
-  native stacked PRs (`pull.stack`); plain `gh pr merge` is rejected on stacks.
-  Conflicts on a lower PR still require an agent resolve (GHA comments only).
 - **team-setup:** `pr-approve-watch` also wakes on human **Request changes**
   (`signal: changes_requested` in the wake JSON) — once per new non-bot review
   id — so feedback can stay on the PR; agent fixes without merging and keeps
   watching until Approve.
-- **team-setup:** Addi merge-on-approve uses **merge commits** for stacked PRs
-  (base ≠ default branch); squash only onto the default branch. Conflict path
-  stays comment-only — agents resolve; documented in the gold-standard table.
-- **team-setup:** Comita rollout of Addi merge-on-approve (org `ADDI_CLIENT_ID` / `ADDI_APP_PRIVATE_KEY` for Comita Addi App `addi-m`).
+- **team-setup:** Addi merge-on-approve uses GitHub **`merge-async`** for
+  native stacked PRs (`pull.stack`); plain `gh pr merge` is rejected on stacks.
+  Conflicts on a lower PR still require an agent resolve (GHA comments only).
 - **team-setup:** gold-standard **Addi PR automation** —
   `docs/addi-pr-automation-standard.md` + hardened
   `addi-merge-on-approve.yml` (repository_dispatch / workflow_run / schedule)
   - `addi-merge-webhook` bridge; `pr-approve-watch` demoted to triage when GHA
-    is enabled. Comita and Rosetta each use their own Addi App Client ID + PEM
+  is enabled. Each organization uses its own Addi App Client ID + PEM
     under the same Action variable names.
 - **team-setup:** add `addi-authorship` rule — agent PRs/issues must be created
   as the workspace GitHub App (Addi); verify `viewer.login` before create; never
@@ -228,13 +524,13 @@
   issues (kickoff / human comments / linked PRs / closed) and wake the agent
   to drive Done-when → close; `/watch-issue-resolve` + always-on rule.
 - **team-setup:** ban Cursor/tool marketing footers in commits and PR bodies
-  (`no-tool-attribution` rule + `attribution.attributePRsToAgent: false` in
-  workspace `.cursor/cli.json`); agents must strip injected "Made with Cursor"
+  (`no-tool-attribution` rule + `attribution` opt-out in global
+  `cli-config.json`); agents must strip injected "Made with Cursor"
   via `gh pr edit` if the client still appends it.
 - **team-setup:** add `pr-approve-watch` skill/rule/command — background-watch
   PRs for a human GitHub Approve proceed signal (`AGENT_LOOP_WAKE_pr_approve`),
-  then merge and continue. Works for Rosetta (`~/.config/rosetta/…`) and Comita
-  (`~/.config/comita/…`) activate scripts.
+  then merge and continue. Works for Rosetta (`~/.config/rosetta/…`) and consumer
+  workspace (`~/.config/<workspace>/…`) activate scripts.
 - **sdlc-workflow:** supervise fails fast on enforce `merge-blocked` (no spurious
   "no ready task" wave); gate logs label `[enforce]` vs `[shadow]`; monitor notes
   when the heartbeat watch stops.
@@ -247,6 +543,16 @@
   link it from `architecture-hsr`; mirror description in Cursor `.mdc` generation.
 - **sdlc-workflow:** reviewer prompt includes the documentation bar checklist so
   shadow/enforce reviews catch missing or hollow docs on new exports.
+- **sdlc-workflow:** bug-fix runs now feed their own retro back into intake
+  instead of ending at merge. For a `SPEC-BUG-*` spec, the phase boundary
+  that posts the T-07 digest also dispatches one inference call over the
+  spec's Context section and the run's verdict/exception history, asking
+  what would have caught the bug earlier and which stage should own that
+  check. Recommendations commit as one `sdlc.retro.v1` artifact and link
+  from a `[retro]`-tagged queue Inbox item. Idempotent across resume;
+  non-`BUG-*` runs unaffected; a model failure degrades
+  loud-but-nonblocking with a `[retro] WARNING` in `monitor.log`
+  (SPEC-BUG-retro-and-queued-plans-P1 T-01).
 
 ## 1.0.0
 

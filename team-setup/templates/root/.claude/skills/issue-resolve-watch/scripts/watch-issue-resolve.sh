@@ -5,9 +5,9 @@
 # Usage:
 #   bash .cursor/skills/issue-resolve-watch/scripts/watch-issue-resolve.sh \
 #     --interval 30 \
-#     [--activate ~/.config/comita/github-app-activate.sh] \
+#     [--activate ~/.config/rosetta/github-app-activate.sh] \
 #     [--kickoff] \
-#     Comita-Health/comita_admissions#294
+#     Rosetta-Foundation/rosetta_dev-scripts#1
 #
 # Sentinel (stdout): AGENT_LOOP_WAKE_issue_resolve <json>
 # Pair with Cursor agent loop notify_on_output on ^AGENT_LOOP_WAKE_issue_resolve.
@@ -67,24 +67,17 @@ resolve_activate() {
     printf '%s' "$ROSETTA_GH_ACTIVATE"
     return
   fi
-  local cwd
-  cwd=$(pwd -P 2>/dev/null || pwd)
-  case "$cwd" in
-    */comita|*/comita/*)
-      if [[ -x "$HOME/.config/comita/github-app-activate.sh" ]]; then
-        printf '%s' "$HOME/.config/comita/github-app-activate.sh"
-        return
-      fi
-      ;;
-  esac
   if [[ -x "$HOME/.config/rosetta/github-app-activate.sh" ]]; then
     printf '%s' "$HOME/.config/rosetta/github-app-activate.sh"
     return
   fi
-  if [[ -x "$HOME/.config/comita/github-app-activate.sh" ]]; then
-    printf '%s' "$HOME/.config/comita/github-app-activate.sh"
-    return
-  fi
+  local candidate
+  for candidate in "$HOME"/.config/*/github-app-activate.sh; do
+    if [[ -x "$candidate" ]]; then
+      printf '%s' "$candidate"
+      return
+    fi
+  done
   printf ''
 }
 
@@ -115,7 +108,9 @@ print(json.dumps({
     "resolution: read title/body/Done-when, triage new comments, implement "
     "or open/land PRs as needed, update checkboxes, and close when Done-when "
     "is met. Do not leave a watched issue idle without a next step or a clear "
-    "human blocker noted on the issue. Keep watching remaining open targets."
+    "human blocker noted on the issue. Chat notify is best-effort — drain "
+    "this wake from the watcher terminal even if the chat stayed quiet. "
+    "Keep watching remaining open targets."
   ),
   "repo": os.environ["REPO"],
   "number": int(os.environ["NUM"]),
@@ -127,6 +122,7 @@ PY
   )
   printf 'AGENT_LOOP_WAKE_issue_resolve %s\n' "$payload"
   echo "watch-issue-resolve: $reason → $target (remaining=$remaining)" >&2
+  echo "watch-issue-resolve: NOTE chat notify is best-effort; agent must drain AGENT_LOOP_WAKE_issue_resolve from this terminal if the chat stays quiet." >&2
 }
 
 STATE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/issue-resolve-watch.XXXXXX")

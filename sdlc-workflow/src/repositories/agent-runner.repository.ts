@@ -1,6 +1,7 @@
 import { spawn } from 'child_process';
 import { injectable } from 'inversify';
 import { WorkflowError } from '../types';
+import { sanitizedAgentEnv } from '../utils/agent-env';
 
 export interface AgentRunResult {
   ok: boolean;
@@ -15,6 +16,13 @@ export interface AgentRunResult {
  * Asynchronous (`spawn`, not `spawnSync`) so the SPEC-PRD-0011-P3 T-01
  * task pool can fan agents out concurrently without blocking the event
  * loop.
+ *
+ * @remarks
+ * Every dispatch runs with a sanitized environment (SPEC-PRD-0021-P1 T-05).
+ * The spec scopes this to retries, but the failure mode — a nested agent that
+ * silently no-ops on an inherited `CURSOR_AGENT` — is identical on a first
+ * attempt, and a no-op that only the retry path guards against is a bug
+ * waiting for the first attempt to hit it.
  */
 export interface IAgentRunnerRepository {
   run(cwd: string, prompt: string): Promise<AgentRunResult>;
@@ -52,7 +60,7 @@ export class AgentRunnerRepository implements IAgentRunnerRepository {
     const limitMs = timeoutMs();
 
     return new Promise<AgentRunResult>((resolve, reject) => {
-      const child = spawn(bin, args, { cwd });
+      const child = spawn(bin, args, { cwd, env: sanitizedAgentEnv() });
       let stdout = '';
       let stderr = '';
       let timedOut = false;

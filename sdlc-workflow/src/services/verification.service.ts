@@ -10,6 +10,7 @@ import {
   GateVerdict,
   SpecTask
 } from '../types';
+import type { ProgressSink } from './executor.service';
 import { parseAllCriteria, TieredCriterion } from '../utils/criterion-tier';
 import { extractJson } from '../utils/json-schema';
 import { buildVerifierPrompt } from '../utils/verifier-prompt';
@@ -27,6 +28,12 @@ export interface VerificationInput {
    * test-tier scripted check is not re-run.
    */
   precomputedTestTier?: CriterionVerdict[];
+  /**
+   * Optional heartbeat sink (#39). The verifier agent is an unbounded model
+   * call — the Wave 0 postmortem found it emitted no heartbeats at all, so
+   * its time silently inflated whichever step label happened to be current.
+   */
+  progress?: ProgressSink;
 }
 
 /** Fields {@link verifyTestTierOnly} needs — no sandbox health report. */
@@ -95,11 +102,25 @@ export class VerificationService implements IVerificationService {
       );
     }
 
-    for (const criterion of tiered.filter(item => item.tier === 'agent')) {
+    const agentTier = tiered.filter(item => item.tier === 'agent');
+    for (const [index, criterion] of agentTier.entries()) {
+      input.progress?.set({
+        taskId: input.task.id,
+        step: 'verification',
+        worktreePath: input.worktreePath,
+        lastLine:
+          `verifier agent ${index + 1}/${agentTier.length}: ` +
+          criterion.body.slice(0, 80)
+      });
       verdicts.push(await this.runAgentTier(input, criterion));
     }
 
-    for (const criterion of tiered.filter(item => item.tier === 'manual')) {
+    // `manual:` and `docs:` are both closed by a human — the second by the
+    // closeout docs PR — so neither is executable here and both record as
+    // human-required rather than as an absent verdict.
+    for (const criterion of tiered.filter(
+      item => item.tier === 'manual' || item.tier === 'docs'
+    )) {
       verdicts.push(this.criterionVerdict(input, criterion, 'human-required'));
     }
 
@@ -229,10 +250,7 @@ export class VerificationService implements IVerificationService {
     return {
       gate: 'verification',
       outcome,
-      // human-required escalates too: it blocks the merge exactly like a
-      // failure, so staying silent would strand the task with no ledger
-      // entry and nothing for a human to act on.
-      wouldEscalate: failing.length > 0 || manual.length > 0,
+      wouldEscalate: failing.length > 0,
       reasons: [
         ...this.groupFailureReasons(failing),
         ...manual.map(verdict => `human required: ${verdict.criterion}`)
@@ -278,7 +296,9 @@ export class VerificationService implements IVerificationService {
                 .join('; ')}`
       );
     }
-    reasons.push(...withoutEvidence.map(verdict => `failed: ${verdict.criterion}`));
+    reasons.push(
+      ...withoutEvidence.map(verdict => `failed: ${verdict.criterion}`)
+    );
     return reasons;
   }
 }

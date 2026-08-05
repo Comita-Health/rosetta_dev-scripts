@@ -303,4 +303,96 @@ describe('PullRequestRepository (P3 T-02)', () => {
       );
     });
   });
+
+  describe('mergeCommitOid (merge reconciliation)', () => {
+    it('returns the merge commit OID when GitHub reports the PR merged', () => {
+      execMock.mockReturnValue('abc123def4567890abc123def4567890abc123de\n');
+
+      expect(repo.mergeCommitOid('/repo', 14)).toBe(
+        'abc123def4567890abc123def4567890abc123de'
+      );
+      expect(execMock.mock.calls[0][0]).toContain(
+        'gh pr view 14 --json mergeCommit'
+      );
+      expect(execMock.mock.calls[0][0]).toContain('.mergeCommit.oid // empty');
+    });
+
+    it('returns null when the PR has no merge commit (genuinely unmerged)', () => {
+      execMock.mockReturnValue('\n');
+
+      expect(repo.mergeCommitOid('/repo', 14)).toBeNull();
+    });
+
+    it('returns null for a non-SHA jq payload', () => {
+      execMock.mockReturnValue('null\n');
+
+      expect(repo.mergeCommitOid('/repo', 14)).toBeNull();
+    });
+  });
+
+  // SPEC-PRD-0023-P1 T-02 / T-04: closeout branches outlive the PR on them, so
+  // both the generator and the completion check need state, not just open-ness.
+  describe('latestForBranch', () => {
+    it('reports the PR with its state, including merged and closed', () => {
+      for (const state of ['OPEN', 'MERGED', 'CLOSED'] as const) {
+        execMock.mockReturnValueOnce(
+          `[{"url":"https://github.com/o/r/pull/9","number":9,"state":"${state}"}]`
+        );
+
+        expect(repo.latestForBranch('/repo', 'sdlc/closeout/SPEC-X')).toEqual({
+          url: 'https://github.com/o/r/pull/9',
+          number: 9,
+          state
+        });
+      }
+    });
+
+    it('queries every state so a merged closeout is not mistaken for a missing one', () => {
+      execMock.mockReturnValue('[]');
+
+      repo.latestForBranch('/repo', 'sdlc/closeout/SPEC-X');
+
+      const [command, options] = execMock.mock.calls[0];
+      expect(command).toContain('gh pr list --head "sdlc/closeout/SPEC-X"');
+      expect(command).toContain('--state all');
+      expect(command).toContain('--limit 1');
+      expect(options.cwd).toBe('/repo');
+    });
+
+    it('returns null when the branch never had a PR', () => {
+      execMock.mockReturnValue('[]');
+
+      expect(repo.latestForBranch('/repo', 'b')).toBeNull();
+    });
+
+    it('throws typed on unparseable gh output rather than reporting no PR', () => {
+      execMock.mockReturnValue('gh: rate limit exceeded');
+
+      expect(() => repo.latestForBranch('/repo', 'b')).toThrow(
+        expect.objectContaining({ code: 'GH_FAILED' })
+      );
+    });
+  });
+
+  describe('updateBody', () => {
+    it('refreshes an existing PR body via stdin', () => {
+      execMock.mockReturnValue('');
+
+      repo.updateBody('/repo', 9, '## Summary\nderived from run-1');
+
+      const [command, options] = execMock.mock.calls[0];
+      expect(command).toContain('gh pr edit 9 --body-file -');
+      expect(options.input).toBe('## Summary\nderived from run-1');
+    });
+
+    it('throws typed when gh cannot edit the PR', () => {
+      execMock.mockImplementation(() => {
+        throw new Error('gh: pull request is closed');
+      });
+
+      expect(() => repo.updateBody('/repo', 9, 'x')).toThrow(
+        expect.objectContaining({ code: 'GH_FAILED' })
+      );
+    });
+  });
 });

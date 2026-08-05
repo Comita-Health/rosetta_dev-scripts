@@ -11,11 +11,11 @@ Approve their own PR and the proceed signal breaks.
    `createPullRequest` / `createIssue`, activate Addi:
 
    ```bash
-   # Comita-Health repos
-   eval "$(bash ~/.config/comita/github-app-activate.sh)"
-
    # Rosetta-Foundation repos
    eval "$(bash ~/.config/rosetta/github-app-activate.sh)"
+
+   # Consumer workspaces
+   eval "$(bash ~/.config/<workspace>/github-app-activate.sh)"
    ```
 
 2. **Verify** the token is the app before creating:
@@ -33,7 +33,7 @@ Approve their own PR and the proceed signal breaks.
    first rule out the fork-targeting false positive in rule 3a below, which
    produces the exact same error text for a different reason.
 
-3a. **On a forked repo** (e.g. `Comita-Health/rosetta_dev-scripts`, forked
+3a. **On a forked repo** (e.g. `Example-Org/rosetta_dev-scripts`, forked
     from `Rosetta-Foundation/rosetta_dev-scripts`): `gh pr create` /
     `gh issue create` run **without an explicit `--repo`** default to
     targeting the fork's **upstream parent**, not `origin`. The Addi token
@@ -77,5 +77,5 @@ Approve their own PR and the proceed signal breaks.
   same fork-targeting bug by resolving `origin` differently, not because
   Addi actually lacked the permission.
 - Opening the PR as human “just to land it” and hoping Approve still works.
-- Mixing Comita Addi tokens on Rosetta-Foundation repos (or the reverse)
-  without checking `viewer.login` and installation repos.
+- Using an activation script for a different organization without checking
+  `viewer.login` and installation repos.

@@ -43,7 +43,13 @@ describe('layDownRootConfig', () => {
     mockReaddirSync.mockImplementation((p: string) => {
       if (p.endsWith('.cursor')) return ['cli.json', 'skills'];
       if (p.endsWith(`${path.sep}rules`))
-        return ['architecture-hsr.md', 'code-style.md', 'inline-docs.md'];
+        return [
+          'architecture-hsr.md',
+          'code-style.md',
+          'inline-docs.md',
+          'sdlc-run-supervise.md',
+          'pr-approve-watch.md'
+        ];
       if (p.endsWith(`${path.sep}commands`))
         return ['review.md', 'add-repo.md', 'sdlc-status.md', 'sdlc-run.md'];
       return [];
@@ -77,6 +83,14 @@ describe('layDownRootConfig', () => {
     expect(mockWriteFileSync).toHaveBeenCalledWith(
       path.join('/base', '.cursor', 'rules', 'inline-docs.mdc'),
       expect.stringContaining('TSDoc / JSDoc bar')
+    );
+    expect(mockWriteFileSync).toHaveBeenCalledWith(
+      path.join('/base', '.cursor', 'rules', 'sdlc-run-supervise.mdc'),
+      expect.stringContaining('background-supervise sdlc-workflow runs')
+    );
+    expect(mockWriteFileSync).toHaveBeenCalledWith(
+      path.join('/base', '.cursor', 'rules', 'pr-approve-watch.mdc'),
+      expect.stringContaining('Approve proceed signal')
     );
     expect(mockWriteFileSync).toHaveBeenCalledWith(
       path.join('/base', '.cursor', 'rules', 'command-review.mdc'),

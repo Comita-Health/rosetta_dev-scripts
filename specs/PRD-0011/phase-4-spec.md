@@ -34,7 +34,7 @@ Phases 1–3 shipped a full-loop SDLC with a sandbox gate that deploys the task
 branch (or merged tip) via the repo-owned `.sdlc/environments.json` contract
 and requires health output to echo `SDLC_SANDBOX_SHA`.
 
-Live pain (Comita Admissions `PR #302` / run `prd-0004-p1a-2026-08-02` T-01):
+Live pain (consumer app `PR #302` / run `prd-0004-p1a-2026-08-02` T-01):
 the task changed only an inventory doc and shared **unit tests**. The sandbox
 gate still dispatched `deploy-organization.yml` with `backend=true` and
 `frontend=true` and waited for the live app to serve that SHA — many minutes
@@ -48,8 +48,8 @@ files. Skip policy must treat docs / `__tests__` / `*.test.ts` as
 non-deployable even under otherwise deployable trees.
 
 **Engine stays path-agnostic** except for exporting `SDLC_SANDBOX_BASE_SHA`
-(task gate base). **Path policy is repo-owned** (first consumer:
-`comita_admissions`). Companion implementation in admissions is out of this
+(task gate base). **Path policy is repo-owned** (first consumer: consumer app
+repo). Companion implementation in the consumer app is out of this
 envelope’s allowedPaths and lands as a parallel PR referenced from T-02/T-03.
 
 ## Task T-01: Pass `SDLC_SANDBOX_BASE_SHA` from the engine
@@ -66,19 +66,19 @@ when known.
 
 ### Acceptance criteria
 
-- [ ] test: deploy + health `run()` calls include `SDLC_SANDBOX_BASE_SHA` when
+- [x] test: deploy + health `run()` calls include `SDLC_SANDBOX_BASE_SHA` when
       `baseSha` is provided on the input.
-- [ ] test: when `baseSha` is omitted, only `SDLC_SANDBOX_SHA` is exported
+- [x] test: when `baseSha` is omitted, only `SDLC_SANDBOX_SHA` is exported
       (scripts may fall back to `git merge-base`).
-- [ ] test: existing SHA-idempotent “already healthy” behavior is unchanged.
+- [x] test: existing SHA-idempotent “already healthy” behavior is unchanged.
 
-## Task T-02: Admissions ignore list + path decision helper (companion PR)
+## Task T-02: Consumer app ignore list + path decision helper (companion PR)
 
 - **Story:** S-01
 - **Complexity:** M
 - **Depends on:** []
 
-In `comita_admissions` (parallel PR, not this envelope):
+In the consumer app repo (parallel PR, not this envelope):
 
 1. Add `.sdlc/sandbox-deploy-ignore.yml` with globs that never require a
    sandbox ship (at minimum: `docs/**`, `specs/**`, `**/*.md`,
@@ -91,13 +91,19 @@ In `comita_admissions` (parallel PR, not this envelope):
 
 ### Acceptance criteria
 
-- [ ] test: docs + `**/__tests__/**` only → `skip` (#302-shaped).
-- [ ] test: shared **source** under `packages/app/shared/**` (non-test) →
+- [x] test: docs + `**/__tests__/**` only → `skip` (#302-shaped).
+- [x] test: shared **source** under `packages/app/shared/**` (non-test) →
       `frontend` (or `both` if backend also matches).
-- [ ] test: backend handler path only → `backend`.
-- [ ] test: empty diff → `skip`.
+- [x] test: backend handler path only → `backend`.
+- [ ] test: empty diff → `skip`. **Deliberately not implemented — an empty
+      diff resolves to `both`.** No files at all means the refs were wrong (a
+      stale base, or a head that is not the commit being deployed), not that
+      nothing shipped; answering `skip` there lets health self-report a SHA it
+      never probed, which is a green gate on unverified code. Locked in by
+      `test_empty_diff_ships_rather_than_skipping`. A real diff of only
+      ignorable files is the legitimate skip and is covered.
 
-## Task T-03: Wire admissions sandbox-deploy / sandbox-health (companion PR)
+## Task T-03: Wire consumer app sandbox-deploy / sandbox-health (companion PR)
 
 - **Story:** S-01
 - **Complexity:** M
@@ -119,12 +125,12 @@ Update `scripts/sdlc/sandbox-deploy.sh` and `sandbox-health.sh`:
 
 ### Acceptance criteria
 
-- [ ] test: decision `skip` → deploy script does not call `gh workflow run`.
-- [ ] test: decision `skip` → health stdout contains `SDLC_SANDBOX_SHA` and
+- [x] test: decision `skip` → deploy script does not call `gh workflow run`.
+- [x] test: decision `skip` → health stdout contains `SDLC_SANDBOX_SHA` and
       `skipped=no-deployable-paths`.
-- [ ] test: decision `frontend` → dispatch includes `frontend=true` and
+- [x] test: decision `frontend` → dispatch includes `frontend=true` and
       `backend=false` (and the inverse for `backend`).
-- [ ] docs: `docs/sdlc-contracts.md` describes ignore file + skip/partial/full.
+- [x] docs: `docs/sdlc-contracts.md` describes ignore file + skip/partial/full.
 
 ## Task T-04: Engine docs / changelog for the BASE_SHA contract
 
@@ -139,13 +145,13 @@ vars.
 
 ### Acceptance criteria
 
-- [ ] docs: README states both `SDLC_SANDBOX_SHA` and `SDLC_SANDBOX_BASE_SHA`
+- [x] docs: README states both `SDLC_SANDBOX_SHA` and `SDLC_SANDBOX_BASE_SHA`
       and that path skip/thin-dispatch is repo-owned.
-- [ ] docs: CHANGELOG mentions SPEC-PRD-0011-P4 / path-aware sandbox.
+- [x] docs: CHANGELOG mentions SPEC-PRD-0011-P4 / path-aware sandbox.
 
 ## Out of scope
 
 - Changing PR Checks / dorny filters (CI should still run unit tests for
   test-file edits).
 - Skipping local `verification.json` `testCommand`.
-- Rewriting historical run state for prior Comita Phase 1a tasks.
+- Rewriting historical run state for prior Phase 1a tasks.

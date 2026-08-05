@@ -1,1 +1,3 @@
 Background-watch one or more GitHub issues toward resolution (Done-when → close). Follow the `issue-resolve-watch` skill: arm `.cursor/skills/issue-resolve-watch/scripts/watch-issue-resolve.sh` with `notify_on_output` on `^AGENT_LOOP_WAKE_issue_resolve`. Use `--kickoff` when work should start immediately. Watched issues are not parking lots.
+
+Note: chat wake notify is best-effort — drain `AGENT_LOOP_WAKE_issue_resolve` from the watcher terminal if the chat stays quiet.

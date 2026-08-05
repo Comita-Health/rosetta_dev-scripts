@@ -214,11 +214,17 @@ for a in list(record.get("execArgv", [])) + list(record.get("argv", [])):
     exec_path="$(command -v bunx)"
   fi
 
-  rm -f "$run_dir/supervise.exit"
+  # The engine is the only writer of `supervise.exit` — it is a JSON record
+  # (`{code,reason,abnormal,at}`) and the sole machine-readable account of why
+  # a run ended. Deleting it here erased that forensics, and `echo $?`
+  # overwrote it with a bare integer that carried no completion evidence, so
+  # a `0` could not be distinguished from a zero-exit that left work
+  # unmerged. The probe gets its own file instead.
+  rm -f "$run_dir/supervise.relaunch-exit"
   (
     cd "$cwd" || exit 1
     "$exec_path" "${argv[@]}" >>"$run_dir/supervise.log" 2>&1
-    echo $? >"$run_dir/supervise.exit"
+    echo $? >"$run_dir/supervise.relaunch-exit"
   ) &
   disown 2>/dev/null || true
   local new_pid=$!
@@ -242,7 +248,7 @@ for a in list(record.get("execArgv", [])) + list(record.get("argv", [])):
   fi
 
   local exit_code
-  exit_code=$(cat "$run_dir/supervise.exit" 2>/dev/null || echo "")
+  exit_code=$(cat "$run_dir/supervise.relaunch-exit" 2>/dev/null || echo "")
   rm -f "$run_dir/supervise.pid"
 
   if [[ "$exit_code" == "0" ]]; then

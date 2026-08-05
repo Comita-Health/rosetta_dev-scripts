@@ -55,12 +55,16 @@ describe('PrLifecycleService (P3 T-02)', () => {
         diffText: jest.fn(),
         fetch: jest.fn(),
         resolveSha: jest.fn(),
+        treeSha: jest.fn(),
+        worktreeForBranch: jest.fn(),
+        refExists: jest.fn().mockReturnValue(false),
         defaultBranch: jest.fn(),
-        fileAtRef: jest.fn().mockReturnValue(null),
-        pathDiffersFromRef: jest.fn().mockReturnValue(false),
+        fileAtRef: jest.fn(),
+        pathDiffersFromRef: jest.fn(),
         revertMerge: jest.fn(),
         stageAll: jest.fn(),
         commit: jest.fn(),
+        listFiles: jest.fn().mockReturnValue([]),
         removeWorktreeAsync: jest.fn()
       });
     container
@@ -69,7 +73,10 @@ describe('PrLifecycleService (P3 T-02)', () => {
         findByBranch,
         create,
         merge: jest.fn(),
-        comment: jest.fn()
+        mergeCommitOid: jest.fn().mockReturnValue(null),
+        comment: jest.fn(),
+        latestForBranch: jest.fn().mockReturnValue(null),
+        updateBody: jest.fn()
       });
     container
       .bind<IPrLifecycleService>(WORKFLOW_TOKENS.PrLifecycleService)
