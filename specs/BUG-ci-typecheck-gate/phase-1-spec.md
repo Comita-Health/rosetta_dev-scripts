@@ -2,7 +2,7 @@
 id: SPEC-BUG-ci-typecheck-gate-P1
 prd: BUG-ci-typecheck-gate # synthetic id — lightweight bug path, no PRD file
 phase: 1
-status: Approved # Draft | Approved | Done | Superseded
+status: Done # Draft | Approved | Done | Superseded
 date: 2026-08-04
 owner: Russ Watson
 envelope:
@@ -65,19 +65,19 @@ any test script.
 
 ### Acceptance criteria
 
-- [ ] test: `bun run typecheck` (defined as `tsc --noEmit`) exits `0` in both
+- [x] test: `bun run typecheck` (defined as `tsc --noEmit`) exits `0` in both
       `sdlc-workflow` and `team-setup` on the current tree.
-- [ ] agent: with a deliberate type error temporarily introduced in a scratch
+- [x] agent: with a deliberate type error temporarily introduced in a scratch
       file in one package (e.g. a duplicate object property or a value
       assigned to a mismatched type), `bun run typecheck` in that package
       exits non-zero and names the error; the scratch file is then removed
       and the tree left clean — this is the regression proof that the gate
       fails loud instead of passing silently like the jest suite does.
-- [ ] agent: `.github/workflows/ci.yml`'s `test` job runs a typecheck step
+- [x] agent: `.github/workflows/ci.yml`'s `test` job runs a typecheck step
       for each of `team-setup` and `sdlc-workflow` before that package's
       existing test step, and this task's own PR shows both typecheck steps
       executing (and passing) in its CI run.
-- [ ] agent: diff is confined to the two `package.json` scripts, `ci.yml`,
+- [x] agent: diff is confined to the two `package.json` scripts, `ci.yml`,
       `CHANGELOG.md`, and this spec's own file — no source/logic changes in
       `src/**`.
 
