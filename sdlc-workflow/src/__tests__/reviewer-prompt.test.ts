@@ -17,6 +17,34 @@ describe('buildReviewerPrompt', () => {
     expect(prompt).toContain('specs/**');
   });
 
+  // ADR-0009: the upstream prompt carries mechanism, not one consumer's
+  // domain vocabulary. Policy reaches the reviewer through
+  // `.sdlc/review-checklist.md` — the seam below.
+  it('keeps the upstream prompt free of consumer domain vocabulary', () => {
+    const prompt = buildReviewerPrompt(
+      makeTask(),
+      makeEnvelope(),
+      'diff --git a/src/a.ts b/src/a.ts\n+added line'
+    );
+
+    for (const term of ['PHI', 'HIPAA', 'patient']) {
+      expect(prompt).not.toContain(term);
+    }
+    // The generic invariant it replaced still has to be asked about.
+    expect(prompt).toContain('data-sensitivity boundaries');
+  });
+
+  it('carries a consumer domain rule only when the repo declares it', () => {
+    const prompt = buildReviewerPrompt(
+      makeTask(),
+      makeEnvelope(),
+      'diff --git a/src/a.ts b/src/a.ts\n+added line',
+      { items: [{ text: 'Never log a patient identifier', mandatory: true }] }
+    );
+
+    expect(prompt).toContain('1. Never log a patient identifier (mandatory)');
+  });
+
   // BUG-retro-and-queued-plans-P1 retro: the reviewer's own size judgment
   // must match the mechanical envelope gate's test-exempt maxDiffLines.
   it('tells the reviewer that maxDiffLines exempts test files', () => {

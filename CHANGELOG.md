@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** the reviewer prompt no longer ships domain-specific
+  vocabulary as examples of invariants worth documenting. Examples are now
+  generic ("authorization, data-sensitivity boundaries, idempotency, ordering,
+  failure modes"); domain rules arrive through the consumer's own
+  `.sdlc/review-checklist.md` (ADR-0009). A test pins the upstream prompt free
+  of regulated-domain vocabulary and pins that a declared checklist still
+  carries it.
 - **sdlc-workflow:** phase closeout is now **derived, not authored**
   (SPEC-PRD-0023-P1). Five specs had landed with their work merged and their
   acceptance criteria still unticked — `PRD-0011/phase-1-spec.md` sat at 1 of
