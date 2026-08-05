@@ -291,7 +291,8 @@ export type ArtifactSchema =
   | 'sdlc.exceptions.v1'
   | 'sdlc.digest.v1'
   | 'sdlc.merge.v1'
-  | 'sdlc.revert.v1';
+  | 'sdlc.revert.v1'
+  | 'sdlc.outcome.v1';
 
 export interface ChronicleArtifact {
   schema: ArtifactSchema;
@@ -310,6 +311,28 @@ export interface VerdictArtifactPayload {
   reasons: string[];
   evidenceRefs: string[]; // resolvable evidence artifact IDs
   taskId: string;
+}
+
+/**
+ * BUG-reviewer-house-bar-P1 T-02: what eventually happened to a recorded gate
+ * verdict, so per-gate precision (how often a concur preceded a veto/rework,
+ * how often a breach was overridden) is computable from the ledger.
+ * `reworked` is reserved for a future rework-detection trigger; this task
+ * wires only `vetoed` (queue-veto revert) and `stood` (human-approved merge).
+ */
+export type VerdictOutcome = 'vetoed' | 'reworked' | 'stood';
+
+/**
+ * Payload of an `sdlc.outcome.v1` artifact — links one gate verdict (by
+ * task + gate + its inputs digest) to its eventual outcome. One artifact
+ * per (runId, taskId, gate); re-recording the same outcome overwrites the
+ * same file rather than appending a duplicate.
+ */
+export interface OutcomeArtifactPayload {
+  taskId: string;
+  gate: string;
+  verdictInputsDigest: string;
+  outcome: VerdictOutcome;
 }
 
 export interface DiffStat {

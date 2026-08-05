@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** gate verdicts are now linked to their eventual outcome
+  so per-gate precision is computable from the Chronicle ledger
+  (SPEC-BUG-reviewer-house-bar-P1 T-02). `record-merge --task` annotates
+  the merged task's gate verdicts `outcome: stood`; `check-veto`'s revert
+  path annotates the reverted tasks' verdicts `outcome: vetoed`. Each
+  annotation is a compact `sdlc.outcome.v1` artifact keyed by
+  `(runId, taskId, gate)`, so a resumed run overwrites rather than
+  duplicates. Read-side reporting (e.g. a precision report) is out of
+  scope — this task only guarantees the data exists going forward.
 - **sdlc-workflow:** the reviewer prompt now injects the target repo's
   optional `.sdlc/review-checklist.md` (SPEC-BUG-reviewer-house-bar-P1
   T-01), resolved from the judged tree via `ReviewChecklistRepository`
