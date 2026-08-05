@@ -28,6 +28,13 @@ const buildChecklistSection = (checklist: ReviewChecklist): string[] => [
  * Includes the workspace documentation bar (TSDoc/JSDoc). `checklist`
  * omitted (undefined) reproduces the pre-checklist prompt byte-for-byte
  * (SPEC-BUG-reviewer-house-bar-P1 T-01 no-regression requirement).
+ *
+ * @remarks
+ * This prompt is the upstream default, so it stays domain-neutral: a consumer's
+ * rules ("never log a patient identifier") arrive through
+ * `.sdlc/review-checklist.md`, which is the seam ADR-0009 requires policy to
+ * travel through. A domain example baked in here would ship one consumer's
+ * vocabulary to every other one.
  */
 export const buildReviewerPrompt = (
   task: SpecTask,
@@ -77,7 +84,8 @@ export const buildReviewerPrompt = (
     '',
     '- Backend / engine: new `@injectable()` Handler, Service, or Repository',
     '  classes and their new public methods need TSDoc covering purpose and',
-    '  non-obvious invariants (authz, PHI/PII, idempotency, failure modes).',
+    '  non-obvious invariants (authorization, data-sensitivity boundaries,',
+    '  idempotency, ordering, failure modes).',
     '  Do not require `@param` / `@returns` that only restate TypeScript types.',
     '- Frontend: types/props are the primary API docs; require short TSDoc on',
     '  non-obvious platform/auth/session/entitlement helpers. Do not fail solely',
