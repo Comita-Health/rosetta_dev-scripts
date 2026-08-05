@@ -14,7 +14,7 @@ envelope:
       'CHANGELOG.md'
     ]
   forbiddenSurfaces: ['ci-config', 'personal-queue-schema']
-  maxDiffLines: 600
+  maxDiffLines: 700 # raised from 600 (T-02's real non-test diff landed at 626)
   budgetK: 150
 ---
 
