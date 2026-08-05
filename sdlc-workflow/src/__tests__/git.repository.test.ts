@@ -77,6 +77,16 @@ describe('GitRepository', () => {
     expect(execMock.mock.calls[1][0]).toContain('rev-parse "origin/main"');
   });
 
+  it('resolves a ref to the tree it points at (SPEC-PRD-0022-P1 T-01)', () => {
+    // Content, not commit: this is the deploy-dedup key, so a merge commit and
+    // the PR head it merged have to land on the same answer.
+    execMock.mockReturnValue('tree789\n');
+    expect(repo.treeSha('/repo', 'merge-commit')).toBe('tree789');
+    expect(execMock.mock.calls[0][0]).toContain(
+      'rev-parse "merge-commit^{tree}"'
+    );
+  });
+
   it('reads the default branch from origin/HEAD, falling back to main', () => {
     execMock.mockReturnValue('refs/remotes/origin/trunk\n');
     expect(repo.defaultBranch('/repo')).toBe('trunk');
@@ -94,10 +104,36 @@ describe('GitRepository', () => {
     expect(repo.defaultBranch('/repo')).toBe('build-env/dev');
   });
 
+  it('falls back to main when origin/HEAD points somewhere unexpected', () => {
+    execMock.mockReturnValue('refs/heads/something-else\n');
+    expect(repo.defaultBranch('/repo')).toBe('main');
+
+    execMock.mockReturnValue('refs/remotes/origin/\n');
+    expect(repo.defaultBranch('/repo')).toBe('main');
+  });
+
+  it('pushes a branch and sets its upstream', () => {
+    execMock.mockReturnValue('');
+    repo.push('/wt', 'sdlc/run-1/T-01');
+    expect(execMock.mock.calls[0][0]).toContain(
+      'push -u origin "sdlc/run-1/T-01"'
+    );
+  });
+
+  it('lists tracked and unignored files, dropping blank lines', () => {
+    execMock.mockReturnValue('src/a.ts\n  src/b.ts  \n\n');
+    expect(repo.listFiles('/repo')).toEqual(['src/a.ts', 'src/b.ts']);
+    expect(execMock.mock.calls[0][0]).toContain('--exclude-standard');
+  });
+
   it('returns file contents at a ref, or null when absent', () => {
     execMock.mockReturnValue('# spec\n');
-    expect(repo.fileAtRef('/repo', 'origin/main', 'specs/x.md')).toBe('# spec\n');
-    expect(execMock.mock.calls[0][0]).toContain('show "origin/main:specs/x.md"');
+    expect(repo.fileAtRef('/repo', 'origin/main', 'specs/x.md')).toBe(
+      '# spec\n'
+    );
+    expect(execMock.mock.calls[0][0]).toContain(
+      'show "origin/main:specs/x.md"'
+    );
 
     execMock.mockImplementation(() => {
       throw new Error('fatal: path does not exist');
@@ -206,7 +242,9 @@ describe('GitRepository', () => {
       const child = new FakeChild();
       spawnMock.mockReturnValue(child);
 
-      expect(() => repo.removeWorktreeAsync('/repo', worktreePath)).not.toThrow();
+      expect(() =>
+        repo.removeWorktreeAsync('/repo', worktreePath)
+      ).not.toThrow();
       child.stderr.emit('data', Buffer.from('fatal: worktree is locked'));
       child.emit('close', 1);
 
@@ -219,12 +257,78 @@ describe('GitRepository', () => {
       const child = new FakeChild();
       spawnMock.mockReturnValue(child);
 
-      expect(() => repo.removeWorktreeAsync('/repo', worktreePath)).not.toThrow();
+      expect(() =>
+        repo.removeWorktreeAsync('/repo', worktreePath)
+      ).not.toThrow();
       child.emit('error', new Error('ENOENT'));
 
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('ENOENT')
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('ENOENT'));
+    });
+  });
+
+  // SPEC-PRD-0023-P1 T-02: a closeout branch is long-lived — the second run of
+  // a phase must land on top of the first closeout commit, not beside it.
+  describe('worktreeForBranch (closeout branches)', () => {
+    it('starts from the remote branch when one already exists', () => {
+      execMock.mockReturnValue('');
+
+      repo.worktreeForBranch(
+        '/repo',
+        '/nonexistent/wt',
+        'sdlc/closeout/SPEC-X',
+        'base-sha'
       );
+
+      const [verify, add] = execMock.mock.calls.map(([command]) => command);
+      expect(verify).toContain('rev-parse --verify');
+      expect(verify).toContain('origin/sdlc/closeout/SPEC-X');
+      expect(add).toContain('worktree add -B "sdlc/closeout/SPEC-X"');
+      expect(add).toContain('origin/sdlc/closeout/SPEC-X');
+    });
+
+    it('falls back to the base sha the first time the branch is created', () => {
+      execMock.mockImplementationOnce(() => {
+        throw new Error('fatal: needed a single revision');
+      });
+
+      repo.worktreeForBranch(
+        '/repo',
+        '/nonexistent/wt',
+        'sdlc/closeout/SPEC-X',
+        'base-sha'
+      );
+
+      const add = execMock.mock.calls[1][0];
+      expect(add).toContain('"base-sha"');
+      expect(add).not.toContain('origin/sdlc/closeout/SPEC-X"');
+    });
+
+    it('reuses an existing worktree directory without invoking git', () => {
+      repo.worktreeForBranch(
+        '/repo',
+        os.tmpdir(),
+        'sdlc/closeout/SPEC-X',
+        'base-sha'
+      );
+
+      expect(execMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('refExists', () => {
+    it('reports true for a ref that resolves to a commit', () => {
+      execMock.mockReturnValue('abc123\n');
+
+      expect(repo.refExists('/repo', 'origin/main')).toBe(true);
+      expect(execMock.mock.calls[0][0]).toContain('origin/main^{commit}');
+    });
+
+    it('reports false rather than throwing for an unknown ref', () => {
+      execMock.mockImplementation(() => {
+        throw new Error('fatal: bad revision');
+      });
+
+      expect(repo.refExists('/repo', 'origin/nope')).toBe(false);
     });
   });
 });

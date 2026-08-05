@@ -119,6 +119,28 @@ const latestPhaseStep = (state: RunState, taskId: string) => {
 const isMerged = (state: RunState, taskId: string): boolean =>
   state.taskResults[taskId]?.mergedSha !== undefined;
 
+/**
+ * Wave 0: true when a gate remediation landed *after* the given phase step
+ * was recorded.
+ *
+ * @remarks
+ * Breach-terminal-per-digest is the right default — retrying identical
+ * content just burns the same verdict again. But a remediation round
+ * deliberately changes the task head, and the implementation digest is
+ * rooted at {task content, integration tip}, neither of which moves when
+ * the agent commits a fix. Without this check the fix would sit on the
+ * branch forever, never judged. Compared by timestamp rather than digest
+ * because selection cannot recompute a gate digest it has no head SHA for.
+ */
+const remediatedAfter = (
+  state: RunState,
+  taskId: string,
+  phaseCompletedAt: string
+): boolean => {
+  const remediation = state.remediations?.[taskId];
+  return remediation !== undefined && remediation.recordedAt > phaseCompletedAt;
+};
+
 const selectReadyTasks = (
   spec: SpecDocument,
   state: RunState,
@@ -148,12 +170,15 @@ const selectReadyTasks = (
         // Completed at the current content: resume the gate pipeline until
         // phase lands. After a *pass* phase with no merge step, re-select
         // so enforce can retry `gh pr merge` (dirty PR / flaky API). A
-        // *breach* phase stays terminal for this digest.
+        // *breach* phase stays terminal for this digest — unless a Wave 0
+        // remediation round has since pushed a fix, which is new content
+        // the gates have not judged.
         const phase = latestPhaseStep(state, task.id);
         if (phase !== undefined) {
           const passed = phase.verdict?.outcome === 'pass';
           const mergeDone = hasStep(state, 'merge', task.id);
-          if (!passed || mergeDone) {
+          const remediated = remediatedAfter(state, task.id, phase.completedAt);
+          if (mergeDone || (!passed && !remediated)) {
             continue;
           }
         }
@@ -488,6 +513,9 @@ export class ExecutorService implements IExecutorService {
       steps: {},
       tokenSpendK: 0,
       ciFixAttempts: {},
+      gateFixAttempts: {},
+      remediations: {},
+      mergeBlockedRetries: 0,
       updatedAt: now
     };
   }

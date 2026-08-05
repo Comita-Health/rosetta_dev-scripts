@@ -26,6 +26,26 @@ export interface IGitRepository {
     branch: string,
     baseSha: string
   ): void;
+  /**
+   * Create (or reuse) a worktree on a branch that may already exist on
+   * origin — the closeout branch (SPEC-PRD-0023-P1 T-02).
+   *
+   * @remarks
+   * {@link IGitRepository.addWorktree} always creates a *new* branch, which is
+   * right for task branches and wrong here: a regenerated closeout has to land
+   * on the same branch as the PR it is updating, and re-creating that branch
+   * from the default tip would push a non-fast-forward. When `origin/<branch>`
+   * exists this starts from it; otherwise from `baseSha`. Safe only for
+   * branches the engine is the sole writer of.
+   */
+  worktreeForBranch(
+    repoPath: string,
+    worktreePath: string,
+    branch: string,
+    baseSha: string
+  ): void;
+  /** True when a ref resolves in this repo (no network). */
+  refExists(repoPath: string, ref: string): boolean;
   /** Numstat diff between two refs (added + deleted lines per file). */
   diffStat(repoPath: string, baseRef: string, headRef: string): DiffStat;
   /** Full unified diff text between two refs. */
@@ -39,6 +59,17 @@ export interface IGitRepository {
   fetch(repoPath: string): void;
   /** Resolve any ref (e.g. `origin/main`) to a SHA. */
   resolveSha(repoPath: string, ref: string): string;
+  /**
+   * SHA of the *tree* a ref points at — what the commit would deploy, with
+   * no history, author or message in it (SPEC-PRD-0022-P1 T-01).
+   *
+   * @remarks
+   * This is the deploy-dedup key. A merge commit's SHA always differs from the
+   * PR head it merged, but a fast-forward-equivalent merge produces the same
+   * tree, so commit-SHA comparison reports "not deployed" for content that is
+   * already live and pays for the deploy twice.
+   */
+  treeSha(repoPath: string, ref: string): string;
   /**
    * Repo-relative paths of every tracked and untracked-but-not-ignored file
    * in the checkout — the tree envelope grounding runs against (#35).
@@ -117,6 +148,29 @@ export class GitRepository implements IGitRepository {
     git(repoPath, `worktree add -b "${branch}" "${worktreePath}" "${baseSha}"`);
   }
 
+  worktreeForBranch(
+    repoPath: string,
+    worktreePath: string,
+    branch: string,
+    baseSha: string
+  ): void {
+    if (existsSync(worktreePath)) {
+      return;
+    }
+    const remote = `origin/${branch}`;
+    const start = this.refExists(repoPath, remote) ? remote : baseSha;
+    git(repoPath, `worktree add -B "${branch}" "${worktreePath}" "${start}"`);
+  }
+
+  refExists(repoPath: string, ref: string): boolean {
+    try {
+      git(repoPath, `rev-parse --verify --quiet "${ref}^{commit}"`);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   diffText(repoPath: string, baseRef: string, headRef: string): string {
     return git(repoPath, `diff "${baseRef}".."${headRef}"`);
   }
@@ -131,6 +185,10 @@ export class GitRepository implements IGitRepository {
 
   resolveSha(repoPath: string, ref: string): string {
     return git(repoPath, `rev-parse "${ref}"`).trim();
+  }
+
+  treeSha(repoPath: string, ref: string): string {
+    return git(repoPath, `rev-parse "${ref}^{tree}"`).trim();
   }
 
   listFiles(repoPath: string): string[] {

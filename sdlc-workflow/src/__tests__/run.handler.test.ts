@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import { mkdtempSync, readFileSync, rmSync } from 'fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'fs';
 import os from 'os';
 import path from 'path';
 import { Container } from 'inversify';
@@ -14,9 +14,16 @@ import {
 import type { IRunStateRepository } from '../repositories/run-state.repository';
 import type { ISpecDocRepository } from '../repositories/spec-doc.repository';
 import type { IEscalationService } from '../services/escalation.service';
+import type { IGateRemediationService } from '../services/gate-remediation.service';
+import {
+  RetryExecutorService,
+  type IRetryExecutorService
+} from '../services/retry-executor.service';
 import type { IAggregatorService } from '../services/aggregator.service';
 import type { IChronicleCommitService } from '../services/chronicle-commit.service';
 import type { ICiGateService } from '../services/ci-gate.service';
+import type { ICloseoutAggregateService } from '../services/closeout-aggregate.service';
+import type { ICloseoutService } from '../services/closeout.service';
 import type { IDigestService } from '../services/digest.service';
 import type { IEnvelopeGateService } from '../services/envelope-gate.service';
 import type { IRetroService } from '../services/retro.service';
@@ -31,9 +38,18 @@ import type { IHeartbeatService } from '../services/heartbeat.service';
 import type { IReviewerGateService } from '../services/reviewer-gate.service';
 import type { IReviewerPublishService } from '../services/reviewer-publish.service';
 import type { ISandboxDeployService } from '../services/sandbox-deploy.service';
-import type { IVerificationService } from '../services/verification.service';
+import type {
+  IVerificationService,
+  VerificationInput
+} from '../services/verification.service';
 import { WORKFLOW_TOKENS } from '../tokens';
-import { GateVerdict, RunState, SpecDocument, WorkflowError } from '../types';
+import {
+  CloseoutAggregate,
+  GateVerdict,
+  RunState,
+  SpecDocument,
+  WorkflowError
+} from '../types';
 import { makeEnvelope, makeTask } from './fixtures';
 
 const SPEC: SpecDocument = {
@@ -65,15 +81,30 @@ const makeState = (): RunState => ({
   steps: {},
   tokenSpendK: 0,
   ciFixAttempts: {},
+  gateFixAttempts: {},
+  remediations: {},
+  mergeBlockedRetries: 0,
   updatedAt: 'x'
 });
 
 const INPUT = {
-  specPath: '/specs/spec.md',
+  specPath: '/repo/specs/PRD-0099/phase-2-spec.md',
   repoPath: '/repo',
   runId: 'run-1',
   runsDir: '/runs',
   maxParallel: 3
+};
+
+/** SPEC-PRD-0023-P1: the aggregation the closeout step is handed. */
+const CLOSEOUT_AGGREGATE: CloseoutAggregate = {
+  runId: 'run-1',
+  specId: SPEC.id,
+  criteria: [],
+  taskGates: [],
+  taskIds: ['T-01'],
+  mergedTaskIds: ['T-01'],
+  phasePassedTaskIds: ['T-01'],
+  fullyCovered: true
 };
 
 const verdictOf = (
@@ -103,6 +134,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
   let retroPost: jest.Mock;
   let chronicleRecord: jest.Mock;
   let recordMerge: jest.Mock;
+  let setContext: jest.Mock;
   let evidenceSave: jest.Mock;
   let appendVerdict: jest.Mock;
   let recordExceptions: jest.Mock;
@@ -120,9 +152,13 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
   let prCreate: jest.Mock;
   let gitPush: jest.Mock;
   let gitFetch: jest.Mock;
+  let treeSha: jest.Mock;
   let removeWorktreeAsync: jest.Mock;
   let specRead: jest.Mock;
   let escalationPost: jest.Mock;
+  let remediate: jest.Mock;
+  let closeoutAggregate: jest.Mock;
+  let closeoutGenerate: jest.Mock;
 
   const taskOutcome = (
     overrides: Partial<ExecutorOutcome> = {}
@@ -225,7 +261,16 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
     recordMerge = jest
       .fn()
       .mockResolvedValue('chronicles/sdlc/run-1/merge.json');
+    setContext = jest.fn();
     evidenceSave = jest.fn().mockReturnValue('/evidence/x.txt');
+    closeoutAggregate = jest.fn().mockReturnValue(CLOSEOUT_AGGREGATE);
+    closeoutGenerate = jest.fn().mockResolvedValue({
+      kind: 'created',
+      pr: { url: 'https://github.com/o/r/pull/9', number: 9 },
+      statusWritten: 'Done',
+      tickedCount: 1,
+      remainderCount: 0
+    });
 
     // Persistence mocks mirror the real repository's in-memory mutation so
     // resume behaviour (step cache, verdict filtering) can be exercised.
@@ -264,6 +309,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
     revertMerge = jest.fn();
     gitPush = jest.fn();
     gitFetch = jest.fn();
+    treeSha = jest.fn().mockReturnValue('tree-sha');
     removeWorktreeAsync = jest.fn();
     prCreate = jest.fn().mockReturnValue({
       url: 'https://github.com/org/repo/pull/99',
@@ -273,6 +319,14 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
     escalationPost = jest
       .fn()
       .mockReturnValue({ posted: [], wakes: [], issues: {} });
+    // Default: nothing to remediate, so red gates still escalate and block
+    // exactly as they did before Wave 0 — tests that want the remediation
+    // path override this per case.
+    remediate = jest.fn().mockResolvedValue({
+      kind: 'skipped',
+      attempt: 0,
+      detail: 'no remediable gate findings'
+    });
 
     const container = new Container();
     container
@@ -300,7 +354,9 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
         create: prCreate,
         merge: prMerge,
         mergeCommitOid,
-        comment: jest.fn()
+        comment: jest.fn(),
+        latestForBranch: jest.fn().mockReturnValue(null),
+        updateBody: jest.fn()
       });
     container
       .bind<IQueueRepository>(WORKFLOW_TOKENS.QueueRepository)
@@ -352,6 +408,9 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
         push: gitPush,
         fetch: gitFetch,
         resolveSha: jest.fn().mockReturnValue('main-sha'),
+        treeSha,
+        worktreeForBranch: jest.fn(),
+        refExists: jest.fn().mockReturnValue(false),
         defaultBranch: jest.fn().mockReturnValue('main'),
         fileAtRef: jest.fn(),
         pathDiffersFromRef: jest.fn(),
@@ -365,7 +424,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
       .bind<IHeartbeatService>(WORKFLOW_TOKENS.HeartbeatService)
       .toConstantValue({
         start: jest.fn(),
-        setContext: jest.fn(),
+        setContext,
         tick: jest.fn(),
         stop: jest.fn()
       });
@@ -394,10 +453,28 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
         recordTaskPrUrl,
         recordCiFixAttempt: jest.fn(),
         recordTokenSpend: jest.fn(),
+        recordGateFixAttempt: jest.fn(),
+        recordRemediation: jest.fn(),
+        recordMergeBlockedRetry: jest.fn(),
+        invalidateSteps: jest.fn().mockReturnValue([]),
         load: stateLoad,
         save: jest.fn(),
         recordTaskResult: jest.fn()
       });
+    container
+      .bind<IGateRemediationService>(WORKFLOW_TOKENS.GateRemediationService)
+      .toConstantValue({ remediate });
+    container
+      .bind<ICloseoutAggregateService>(WORKFLOW_TOKENS.CloseoutAggregateService)
+      .toConstantValue({ aggregate: closeoutAggregate });
+    container
+      .bind<ICloseoutService>(WORKFLOW_TOKENS.CloseoutService)
+      .toConstantValue({ generate: closeoutGenerate });
+    // The real executor: retry policy is behavior under test here, not a
+    // collaborator to stub out. Backoff is zeroed per call via input.
+    container
+      .bind<IRetryExecutorService>(WORKFLOW_TOKENS.RetryExecutorService)
+      .to(RetryExecutorService);
     container.bind<IRunHandler>(WORKFLOW_TOKENS.RunHandler).to(RunHandler);
     handler = container.get<IRunHandler>(WORKFLOW_TOKENS.RunHandler);
     jest.spyOn(console, 'log').mockImplementation(() => undefined);
@@ -459,7 +536,18 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
     expect(deploy).toHaveBeenCalledWith({
       worktreePath: '/runs/run-1/worktrees/T-01',
       sha: 'head-sha',
-      previous: undefined
+      // SPEC-PRD-0011-P4 T-01: the deploy scope is the task's integration tip,
+      // the same base the envelope and reviewer gates diff against.
+      baseSha: 'base-sha',
+      previous: undefined,
+      // SPEC-PRD-0022-P1 T-01: the tree the commit points at is the dedup key.
+      ledger: {
+        runsDir: '/runs',
+        runId: 'run-1',
+        contentSha: 'tree-sha',
+        trigger: 'task',
+        taskId: 'T-01'
+      }
     });
     expect(verify).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -474,6 +562,20 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
       'run-1',
       'T-01-sandbox-health',
       'sha=head-sha ok'
+    );
+  });
+
+  it('disables deploy dedup for a dispatch whose tree it cannot resolve', async () => {
+    // A missing content key costs a possibly redundant deploy. Failing the run
+    // instead would trade that for no delivery at all.
+    treeSha.mockImplementation(() => {
+      throw new Error('fatal: not a tree object');
+    });
+
+    await handler.runTask(INPUT);
+
+    expect(deploy).toHaveBeenCalledWith(
+      expect.objectContaining({ ledger: undefined })
     );
   });
 
@@ -726,12 +828,57 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
     expect(openTaskPr).toHaveBeenCalledTimes(1);
   });
 
-  it('records a blocked pr verdict on push/PR failure, keeps state intact, and retries on the next run (P3 T-02)', async () => {
+  // SPEC-PRD-0021-P1 T-04: a transient PR-open failure used to cost the whole
+  // task — it recorded a blocked verdict and waited for a hand relaunch. Now
+  // the shared retry executor absorbs it in-process.
+  it('recovers from a transient push/PR failure without blocking the task', async () => {
     openTaskPr.mockImplementationOnce(() => {
       throw new WorkflowError('gh pr failed', 'GH_FAILED', ['boom']);
     });
 
-    const result = await handler.runTask(INPUT);
+    const result = await handler.runTask({ ...INPUT, retryBackoffMs: 0 });
+
+    expect(result.outcome).toBe('executed');
+    expect(openTaskPr).toHaveBeenCalledTimes(2);
+    expect(state.verdicts).not.toContainEqual(
+      expect.objectContaining({ gate: 'pr', outcome: 'blocked' })
+    );
+    expect(recordTaskPrUrl).toHaveBeenCalledTimes(1);
+
+    // The attempt trail survives on the step, so a flaky step is visible
+    // afterwards rather than only in a log the operator no longer has.
+    const prStep = Object.entries(state.steps).find(([key]) =>
+      key.startsWith('pr:')
+    )?.[1];
+    expect(prStep?.recovery).toMatchObject({
+      path: 'pr:T-01',
+      escalated: false
+    });
+    expect(prStep?.recovery?.attempts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ attempt: 1, outcome: 'failed' }),
+        expect.objectContaining({ attempt: 2, outcome: 'succeeded' })
+      ])
+    );
+  });
+
+  it('does not stamp a recovery record on a step that succeeded first try', async () => {
+    await handler.runTask(INPUT);
+
+    const prStep = Object.entries(state.steps).find(([key]) =>
+      key.startsWith('pr:')
+    )?.[1];
+    // Presence of the record is the "this was flaky" signal — a history on
+    // every step would erase it.
+    expect(prStep?.recovery).toBeUndefined();
+  });
+
+  it('records a blocked pr verdict once retries are exhausted, keeping state intact for the next run (P3 T-02)', async () => {
+    openTaskPr.mockImplementation(() => {
+      throw new WorkflowError('gh pr failed', 'GH_FAILED', ['boom']);
+    });
+
+    const result = await handler.runTask({ ...INPUT, retryBackoffMs: 0 });
 
     // The failure is recorded honestly and the pipeline continues.
     expect(result.outcome).toBe('executed');
@@ -749,10 +896,6 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
       false
     );
     expect(evaluate).toHaveBeenCalledTimes(1); // gates still ran
-
-    await handler.runTask(INPUT);
-    expect(openTaskPr).toHaveBeenCalledTimes(2);
-    expect(recordTaskPrUrl).toHaveBeenCalledTimes(1);
   });
 
   describe('P3 T-04 gate enforcement', () => {
@@ -852,6 +995,216 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
       }
     );
 
+    // Wave 0 instrumentation: 52.6% of measured work was unobservable because
+    // only `starting`, `implementation` and `reviewer` set a heartbeat step —
+    // sandbox, verification, ci and merge time all accrued under whatever
+    // label was left over, which overstated reviewer time by ~3.5 min a
+    // segment.
+    it('labels every post-implementation step so time is not misattributed to reviewer', async () => {
+      greenGates();
+
+      await handler.runTask(INPUT);
+
+      const steps = setContext.mock.calls.map(([ctx]) => ctx.step);
+      expect(steps).toEqual(
+        expect.arrayContaining([
+          'reviewer',
+          'sandbox',
+          'verification',
+          'ci',
+          'merge'
+        ])
+      );
+      // The reviewer label must be superseded, not left standing over the
+      // gates that follow it.
+      expect(steps.lastIndexOf('reviewer')).toBeLessThan(
+        steps.lastIndexOf('merge')
+      );
+    });
+
+    it('labels the verifier agent as verification while it runs', async () => {
+      greenGates();
+      // The real service calls the sink per agent-tier criterion; the mock
+      // stands in for that contract.
+      verify.mockImplementation(async (verifyInput: VerificationInput) => {
+        verifyInput.progress?.set({
+          taskId: 'T-01',
+          step: 'verification',
+          lastLine: 'verifier agent 1/1: the thing works'
+        });
+        return {
+          verdict: verdictOf('verification', 'pass'),
+          criteria: criterionVerdicts
+        };
+      });
+
+      await handler.runTask(INPUT);
+
+      expect(setContext).toHaveBeenCalledWith(
+        expect.objectContaining({
+          step: 'verification',
+          lastLine: 'verifier agent 1/1: the thing works'
+        })
+      );
+    });
+
+    // Wave 0: a red *remediable* gate gets one bounded agent round before it
+    // becomes a needs-human escalation. Reviewer disagreement and envelope
+    // breach were 22 of 44 historical escalations and every one of them ended
+    // its run cold.
+    describe('gate remediation (Wave 0)', () => {
+      // A real monitor.log path: the remediation round is an operator-visible
+      // event, so the durable line is part of the contract, not incidental.
+      let monitorDir: string;
+      let monitorPath: string;
+      const remediationInput = () => ({ ...INPUT, monitorPath });
+      // An unwritten log and a log without the line both mean "not logged".
+      const monitorLog = (): string =>
+        existsSync(monitorPath) ? readFileSync(monitorPath, 'utf-8') : '';
+
+      beforeEach(() => {
+        monitorDir = mkdtempSync(path.join(os.tmpdir(), 'sdlc-remediate-'));
+        monitorPath = path.join(monitorDir, 'monitor.log');
+      });
+
+      afterEach(() => rmSync(monitorDir, { recursive: true, force: true }));
+
+      const redReviewer = () => {
+        greenGates();
+        review.mockResolvedValue(
+          verdictOf('reviewer', 'breach', ['unsafe migration'])
+        );
+        aggregate.mockReturnValue({
+          verdict: verdictOf('phase', 'breach', ['failing gates: reviewer']),
+          exceptions: [
+            {
+              trigger: 'reviewer-disagreement' as const,
+              taskId: 'T-01',
+              context: ['unsafe migration'],
+              recordedAt: 'x'
+            }
+          ]
+        });
+      };
+
+      it('dispatches remediation with the reviewer and envelope verdicts', async () => {
+        redReviewer();
+
+        await handler.runTask(INPUT);
+
+        expect(remediate).toHaveBeenCalledTimes(1);
+        const call = remediate.mock.calls[0][0];
+        expect(call.branch).toBe('sdlc/run-1/T-01');
+        expect(call.task.id).toBe('T-01');
+        expect(call.envelope).toBe(SPEC.envelope);
+        expect(call.verdicts.map((v: GateVerdict) => v.gate)).toEqual([
+          'reviewer',
+          'envelope'
+        ]);
+      });
+
+      it('suppresses the escalation and the merge attempt when a fix landed', async () => {
+        redReviewer();
+        remediate.mockResolvedValue({
+          kind: 'remediated',
+          attempt: 1,
+          sha: 'fix-sha',
+          detail: 'attempt 1/2 addressed [reviewer]'
+        });
+
+        await handler.runTask(remediationInput());
+
+        // Filing a needs-human issue for a finding the engine is actively
+        // fixing is exactly the noise that teaches an operator to ignore
+        // escalations.
+        expect(escalationPost).not.toHaveBeenCalled();
+        expect(prMerge).not.toHaveBeenCalled();
+        expect(state.exceptions).not.toContainEqual(
+          expect.objectContaining({ trigger: 'merge-blocked' })
+        );
+        expect(monitorLog()).toContain(
+          '[remediate] T-01 attempt 1/2 addressed [reviewer]'
+        );
+      });
+
+      it('records a failed round in monitor.log so a spent attempt is visible', async () => {
+        redReviewer();
+        remediate.mockResolvedValue({
+          kind: 'failed',
+          attempt: 1,
+          detail: 'remediation agent produced no commit'
+        });
+
+        await handler.runTask(remediationInput());
+
+        expect(monitorLog()).toContain('[remediate] T-01 failed');
+        expect(escalationPost).toHaveBeenCalled();
+      });
+
+      it('keeps the common skip out of monitor.log', async () => {
+        redReviewer();
+
+        await handler.runTask(remediationInput());
+
+        // Most red gates have nothing remediable; logging every one would
+        // bury the rounds that actually happened.
+        expect(monitorLog()).not.toContain('[remediate]');
+      });
+
+      it('still escalates when remediation is skipped or fails', async () => {
+        redReviewer();
+        remediate.mockResolvedValue({
+          kind: 'skipped',
+          attempt: 2,
+          detail: 'gate-fix attempts exhausted (2/2)'
+        });
+
+        await handler.runTask(INPUT);
+
+        // An exhausted budget must be loud, not silently absorbed.
+        expect(escalationPost).toHaveBeenCalled();
+        expect(state.exceptions).toContainEqual(
+          expect.objectContaining({ trigger: 'merge-blocked' })
+        );
+      });
+
+      it('never remediates a green phase', async () => {
+        greenGates();
+
+        await handler.runTask(INPUT);
+
+        expect(remediate).not.toHaveBeenCalled();
+      });
+
+      it('never remediates in shadow mode', async () => {
+        redReviewer();
+
+        await handler.runTask({ ...INPUT, shadow: true });
+
+        // Shadow is calibration: it observes what the gates would say and
+        // changes nothing on the branch.
+        expect(remediate).not.toHaveBeenCalled();
+      });
+
+      it('does not remediate from a cached phase verdict on resume', async () => {
+        redReviewer();
+        remediate.mockResolvedValue({
+          kind: 'remediated',
+          attempt: 1,
+          sha: 'fix-sha',
+          detail: 'd'
+        });
+
+        await handler.runTask(remediationInput());
+        expect(remediate).toHaveBeenCalledTimes(1);
+
+        // Resume replays the step graph; the cached phase verdict must not
+        // spend another remediation round on content already fixed.
+        await handler.runTask(remediationInput());
+        expect(remediate).toHaveBeenCalledTimes(1);
+      });
+    });
+
     it('with the shadow flag set, verdicts are recorded but no merge call is ever issued', async () => {
       greenGates();
 
@@ -870,7 +1223,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
         throw new WorkflowError('gh unavailable', 'GH_FAILED');
       });
 
-      await handler.runTask(INPUT);
+      await handler.runTask({ ...INPUT, retryBackoffMs: 0 });
 
       expect(prMerge).not.toHaveBeenCalled();
       expect(state.exceptions).toContainEqual(
@@ -968,7 +1321,22 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
       // dedicated _phase worktree — not a task branch.
       const calls = phaseDeployCalls();
       expect(calls).toHaveLength(1);
-      expect(calls[0][0]).toEqual(expect.objectContaining({ sha: 'main-sha' }));
+      expect(calls[0][0]).toEqual(
+        expect.objectContaining({
+          sha: 'main-sha',
+          // The phase ships everything the wave merged, so its deploy range
+          // starts at the tip the run began from (SPEC-PRD-0011-P4 T-01)...
+          baseSha: 'base-sha',
+          // ...and it enters the ledger as a phase-boundary trigger, which is
+          // what lets it stand down for a push deploy of the same content
+          // (SPEC-PRD-0022-P1 T-03).
+          ledger: expect.objectContaining({
+            contentSha: 'tree-sha',
+            trigger: 'phase-boundary',
+            taskId: 'phase'
+          })
+        })
+      );
       // The phase digest carries the merged SHAs and the recorded verdicts.
       const phasePost = digestPost.mock.calls.find(
         ([arg]) => arg.taskId === 'phase'
@@ -1052,6 +1420,121 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
       ).toHaveLength(0);
     });
 
+    // SPEC-PRD-0023-P1 T-02 / T-05: the final task merging is what triggers
+    // closeout, and the digest that follows links the PR it produced.
+    describe('closeout on final task merge (SPEC-PRD-0023-P1)', () => {
+      it('derives the closeout PR from the run verdicts with no authoring step', async () => {
+        greenGates();
+
+        await handler.runTask({ ...INPUT, chronicleRepo: '/chronicle' });
+
+        expect(closeoutAggregate).toHaveBeenCalledWith({
+          runsDir: '/runs',
+          runId: 'run-1',
+          spec: SPEC
+        });
+        expect(closeoutGenerate).toHaveBeenCalledWith({
+          repoPath: '/repo',
+          runsDir: '/runs',
+          runId: 'run-1',
+          spec: SPEC,
+          specRelPath: 'specs/PRD-0099/phase-2-spec.md',
+          aggregate: CLOSEOUT_AGGREGATE
+        });
+      });
+
+      it('links the closeout PR into the phase digest', async () => {
+        greenGates();
+
+        await handler.runTask({ ...INPUT, chronicleRepo: '/chronicle' });
+
+        const phasePost = digestPost.mock.calls.find(
+          ([arg]) => arg.taskId === 'phase'
+        );
+        expect(phasePost?.[0].closeoutPrUrl).toBe(
+          'https://github.com/o/r/pull/9'
+        );
+      });
+
+      it('re-runs the generator on resume so a late closeout still lands', async () => {
+        greenGates();
+
+        await handler.runTask({ ...INPUT, chronicleRepo: '/chronicle' });
+        await handler.runTask({ ...INPUT, chronicleRepo: '/chronicle' });
+
+        // Unlike the deploy and digest, closeout is not step-cached: the
+        // verdict set it derives from keeps moving until the phase is done.
+        expect(closeoutGenerate).toHaveBeenCalledTimes(2);
+      });
+
+      it('posts the digest with the link once a later closeout succeeds', async () => {
+        greenGates();
+        closeoutGenerate.mockResolvedValueOnce({
+          kind: 'unchanged',
+          tickedCount: 0,
+          remainderCount: 1,
+          detail: 'no closeout PR exists yet'
+        });
+
+        await handler.runTask({ ...INPUT, chronicleRepo: '/chronicle' });
+        const first = digestPost.mock.calls.filter(
+          ([arg]) => arg.taskId === 'phase'
+        );
+        expect(first).toHaveLength(1);
+        expect(first[0][0].closeoutPrUrl).toBeUndefined();
+
+        await handler.runTask({ ...INPUT, chronicleRepo: '/chronicle' });
+
+        const posts = digestPost.mock.calls.filter(
+          ([arg]) => arg.taskId === 'phase'
+        );
+        expect(posts).toHaveLength(2);
+        expect(posts[1][0].closeoutPrUrl).toBe('https://github.com/o/r/pull/9');
+      });
+
+      it('does not block the run when closeout generation throws', async () => {
+        greenGates();
+        closeoutGenerate.mockRejectedValue(
+          new WorkflowError('gh pr create failed', 'GH_FAILED', ['403'])
+        );
+
+        const result = await handler.runTask({
+          ...INPUT,
+          chronicleRepo: '/chronicle'
+        });
+
+        expect(result.outcome).toBe('executed');
+        const phasePost = digestPost.mock.calls.find(
+          ([arg]) => arg.taskId === 'phase'
+        );
+        expect(phasePost?.[0].closeoutPrUrl).toBeUndefined();
+      });
+
+      it('never closes out a shadow run', async () => {
+        greenGates();
+
+        await handler.runTask({
+          ...INPUT,
+          chronicleRepo: '/chronicle',
+          shadow: true
+        });
+
+        expect(closeoutGenerate).not.toHaveBeenCalled();
+      });
+
+      it('refuses a spec outside the repo instead of guessing a path', async () => {
+        greenGates();
+
+        await handler.runTask({
+          ...INPUT,
+          specPath: '/elsewhere/spec.md',
+          chronicleRepo: '/chronicle'
+        });
+
+        expect(closeoutGenerate).not.toHaveBeenCalled();
+      });
+    });
+
     describe('checkVeto', () => {
       const VETO_INPUT = {
         runsDir: '/runs',
@@ -1106,6 +1589,8 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
         );
         expect(revertDeploys).toHaveLength(1);
         expect(Object.keys(revertDeploys[0][0]).sort()).toEqual([
+          'baseSha',
+          'ledger',
           'previous',
           'sha',
           'worktreePath'
@@ -1160,9 +1645,9 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
         );
         const forwarded = recordRevert.mock.calls[0][0].revertedVerdicts;
         expect(forwarded).toHaveLength(2);
-        expect(
-          forwarded.some((v: GateVerdict) => v.taskId === 'T-03')
-        ).toBe(false);
+        expect(forwarded.some((v: GateVerdict) => v.taskId === 'T-03')).toBe(
+          false
+        );
       });
 
       it('absence of a veto tag changes nothing', async () => {
@@ -1345,28 +1830,136 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
   });
 
   it('resumes mid-pipeline from cached steps after a kill between gates (T-09)', async () => {
-    // First pass killed after the reviewer gate: run with sandbox deploy
-    // failing hard to stop the pipeline there.
-    deploy.mockRejectedValueOnce(new Error('killed'));
+    // First pass killed at the verification gate. A gate throw is a genuine
+    // stop — unlike a non-gate step failure, which the T-04 retry executor
+    // now absorbs rather than letting it end the run.
+    verify.mockRejectedValueOnce(new Error('killed'));
     await expect(handler.runTask(INPUT)).rejects.toThrow('killed');
     expect(evaluate).toHaveBeenCalledTimes(1);
     expect(review).toHaveBeenCalledTimes(1);
+    expect(deploy).toHaveBeenCalledTimes(1);
 
-    // Resume: envelope and reviewer verdicts come from the step cache;
-    // the remaining steps execute exactly once.
-    deploy.mockResolvedValue({
-      verdict: sandboxVerdict,
-      record: { sha: 'head-sha', status: 'healthy', recordedAt: 'x' },
-      healthReport: 'sha=head-sha ok'
-    });
+    // Resume: envelope, reviewer and sandbox come from the step cache; only
+    // the killed step and everything after it executes.
     const result = await handler.runTask(INPUT);
 
     expect(result.outcome).toBe('executed');
     expect(evaluate).toHaveBeenCalledTimes(1);
     expect(review).toHaveBeenCalledTimes(1);
-    expect(deploy).toHaveBeenCalledTimes(2); // first call was the kill
-    expect(verify).toHaveBeenCalledTimes(1);
+    expect(deploy).toHaveBeenCalledTimes(1);
+    expect(verify).toHaveBeenCalledTimes(2); // first call was the kill
     expect(aggregate).toHaveBeenCalledTimes(1);
+  });
+
+  // T-04: the sandbox deploy is retried on a *thrown* error, but an unhealthy
+  // deploy is a verdict — retrying that would make the gate advisory.
+  it('retries a throwing sandbox deploy and blocks the gate once exhausted', async () => {
+    deploy.mockRejectedValue(new Error('deploy host unreachable'));
+
+    await handler.runTask({ ...INPUT, retryBackoffMs: 0 });
+
+    expect(deploy).toHaveBeenCalledTimes(3);
+    expect(state.verdicts).toContainEqual(
+      expect.objectContaining({
+        gate: 'sandbox',
+        outcome: 'blocked',
+        reasons: [expect.stringContaining('deploy host unreachable')]
+      })
+    );
+  });
+
+  it('never retries an unhealthy sandbox verdict', async () => {
+    deploy.mockResolvedValue({
+      verdict: verdictOf('sandbox', 'breach', ['health check never echoed']),
+      record: { sha: 'head-sha', status: 'unhealthy', recordedAt: 'x' }
+    });
+
+    await handler.runTask({ ...INPUT, retryBackoffMs: 0 });
+
+    expect(deploy).toHaveBeenCalledTimes(1);
+  });
+
+  // T-04's third non-gate step: a git push against a separate ledger repo,
+  // the most network-flaky operation in the pipeline.
+  it('retries a failing Chronicle commit and records the recovery', async () => {
+    chronicleRecord.mockRejectedValueOnce(new Error('remote hung up'));
+
+    await handler.runTask({
+      ...INPUT,
+      chronicleRepo: '/chronicle',
+      retryBackoffMs: 0
+    });
+
+    expect(chronicleRecord).toHaveBeenCalledTimes(2);
+    const step = Object.entries(state.steps).find(([key]) =>
+      key.startsWith('chronicle-record:')
+    )?.[1];
+    expect(step?.recovery).toMatchObject({
+      path: 'chronicle-record:T-01',
+      escalated: false
+    });
+  });
+
+  it('leaves the Chronicle step uncached when its retries are exhausted', async () => {
+    chronicleRecord.mockRejectedValue(new Error('remote hung up'));
+
+    await handler.runTask({
+      ...INPUT,
+      chronicleRepo: '/chronicle',
+      retryBackoffMs: 0
+    });
+
+    expect(chronicleRecord).toHaveBeenCalledTimes(3);
+    // Caching a step that never happened would silently skip the artifact
+    // commit on resume, losing the run's evidence for good.
+    expect(
+      Object.keys(state.steps).some(key => key.startsWith('chronicle-record:'))
+    ).toBe(false);
+  });
+
+  // T-04 AC: after a retry succeeds the run resumes from the step cache in
+  // state.json with zero hand-edits, and the recovered step is not repeated.
+  it('resumes from the step cache after a retry, with no duplicate side effect', async () => {
+    openTaskPr.mockImplementationOnce(() => {
+      throw new WorkflowError('gh pr failed', 'GH_FAILED', ['boom']);
+    });
+    deploy.mockRejectedValueOnce(new Error('deploy host unreachable'));
+    chronicleRecord.mockRejectedValueOnce(new Error('remote hung up'));
+
+    const first = await handler.runTask({
+      ...INPUT,
+      chronicleRepo: '/chronicle',
+      retryBackoffMs: 0
+    });
+    expect(first.outcome).toBe('executed');
+    // One recovered call each: the failure plus the successful retry.
+    expect(openTaskPr).toHaveBeenCalledTimes(2);
+    expect(deploy).toHaveBeenCalledTimes(2);
+    expect(chronicleRecord).toHaveBeenCalledTimes(2);
+
+    const savedSteps = { ...state.steps };
+    await handler.runTask({
+      ...INPUT,
+      chronicleRepo: '/chronicle',
+      retryBackoffMs: 0
+    });
+
+    // Nothing re-executed on resume — a second PR, deploy, or ledger commit
+    // is the duplicate side effect this acceptance criterion is about.
+    expect(openTaskPr).toHaveBeenCalledTimes(2);
+    expect(deploy).toHaveBeenCalledTimes(2);
+    expect(chronicleRecord).toHaveBeenCalledTimes(2);
+    // Resume read the recovered steps as-is: same keys, same recovery trail.
+    expect(Object.keys(state.steps).sort()).toEqual(
+      Object.keys(savedSteps).sort()
+    );
+    // Every cached step was persisted by the engine, not patched in by hand.
+    expect(recordStep).toHaveBeenCalledWith(
+      '/runs',
+      expect.anything(),
+      expect.stringMatching(/^pr:T-01:/),
+      expect.objectContaining({ recovery: expect.anything() })
+    );
   });
 
   it('shows run status: tasks, cached steps, verdicts, exceptions (T-09)', async () => {

@@ -1,6 +1,7 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
-import { injectable } from 'inversify';
+import { existsSync, mkdirSync, readFileSync } from 'fs';
+import { inject, injectable } from 'inversify';
 import path from 'path';
+import { WORKFLOW_TOKENS } from '../tokens';
 import {
   CriterionVerdict,
   ExceptionEntry,
@@ -8,8 +9,11 @@ import {
   RunState,
   SandboxRecord,
   StepResult,
-  TaskRunResult
+  TaskRunResult,
+  WorkflowError
 } from '../types';
+import { writeFileAtomic } from '../utils/atomic-write';
+import type { IRunLockRepository } from './run-lock.repository';
 
 /**
  * Persists run state as JSON under `<runsDir>/<runId>/state.json` so a
@@ -69,6 +73,47 @@ export interface IRunStateRepository {
    * spend and persist. Returns the new total.
    */
   recordTokenSpend(runsDir: string, state: RunState, deltaK: number): number;
+  /**
+   * Wave 0: increment the task's gate remediation counter and persist.
+   * Returns the new count. Persisted so resume never refills the budget.
+   */
+  recordGateFixAttempt(
+    runsDir: string,
+    state: RunState,
+    taskId: string
+  ): number;
+  /**
+   * Wave 0: record the head SHA a remediation round produced. Task
+   * re-selection consults this to reopen a task whose phase gate breached
+   * before the fix landed.
+   */
+  recordRemediation(
+    runsDir: string,
+    state: RunState,
+    taskId: string,
+    sha: string,
+    gates: string[]
+  ): void;
+  /**
+   * Wave 0: increment and persist the run's supervisor merge-blocked retry
+   * count. Returns the new count.
+   */
+  recordMergeBlockedRetry(runsDir: string, state: RunState): number;
+  /**
+   * Wave 0: drop cached steps matching `predicate` so the next wave
+   * re-evaluates them, and persist. Returns the keys removed.
+   *
+   * @remarks
+   * The supervisor's bounded merge-blocked retry needs this: replaying a
+   * wave against an intact step cache reuses the same red verdicts and
+   * makes no progress, so a retry that does not invalidate is just a
+   * slower way to reach the same stop.
+   */
+  invalidateSteps(
+    runsDir: string,
+    state: RunState,
+    predicate: (step: StepResult, key: string) => boolean
+  ): string[];
 }
 
 const stateFile = (runsDir: string, runId: string): string =>
@@ -76,6 +121,11 @@ const stateFile = (runsDir: string, runId: string): string =>
 
 @injectable()
 export class RunStateRepository implements IRunStateRepository {
+  constructor(
+    @inject(WORKFLOW_TOKENS.RunLockRepository)
+    private readonly _lockRepo: IRunLockRepository
+  ) {}
+
   load(runsDir: string, runId: string): RunState | null {
     const file = stateFile(runsDir, runId);
     if (!existsSync(file)) return null;
@@ -86,6 +136,9 @@ export class RunStateRepository implements IRunStateRepository {
     state.steps = state.steps ?? {};
     state.tokenSpendK = state.tokenSpendK ?? 0;
     state.ciFixAttempts = state.ciFixAttempts ?? {};
+    state.gateFixAttempts = state.gateFixAttempts ?? {};
+    state.remediations = state.remediations ?? {};
+    state.mergeBlockedRetries = state.mergeBlockedRetries ?? 0;
     // #37 launch record — older states only had updatedAt.
     state.startedAt = state.startedAt ?? state.updatedAt;
     state.specDigest = state.specDigest ?? '';
@@ -93,11 +146,58 @@ export class RunStateRepository implements IRunStateRepository {
     return state;
   }
 
+  /**
+   * T-01 / T-02: every write is atomic (temp file + `fsync` + `rename`) and
+   * happens under the run lock, so a crash cannot tear the file and a second
+   * writer cannot interleave with the first.
+   *
+   * @remarks
+   * Callers that own a run for its whole lifetime (`run`, `supervise`) hold
+   * the lock across the session. Short-lived mutators that did not acquire
+   * one still write under a *momentary* lock taken here, so there is no path
+   * to an unlocked write — the difference is only how long the lock is held.
+   *
+   * @throws `WorkflowError` `RUN_LOCK_NOT_HELD` when another live process
+   * owns the run. That is a refusal to clobber, not a transient failure:
+   * retrying it without stopping the other writer will fail the same way.
+   */
   save(runsDir: string, state: RunState): string {
     const file = stateFile(runsDir, state.runId);
     mkdirSync(path.dirname(file), { recursive: true });
     state.updatedAt = new Date().toISOString();
-    writeFileSync(file, JSON.stringify(state, null, 2));
+    const contents = `${JSON.stringify(state, null, 2)}\n`;
+
+    if (this._lockRepo.heldByThisProcess(runsDir, state.runId)) {
+      writeFileAtomic(file, contents);
+      return file;
+    }
+
+    let lock;
+    try {
+      lock = this._lockRepo.acquire(runsDir, state.runId, 'state-write');
+    } catch (err) {
+      const holder = this._lockRepo.holder(runsDir, state.runId);
+      throw new WorkflowError(
+        `refusing to write state.json for run ${state.runId}: the run lock is held by another writer`,
+        'RUN_LOCK_NOT_HELD',
+        [
+          holder === null
+            ? 'lock holder could not be identified'
+            : `held by pid ${holder.pid} on ${holder.host} (${holder.owner}) since ${holder.acquiredAt}`,
+          // The acquisition's own details, not just its summary: when no
+          // holder can be named, they carry the only concrete thing left —
+          // the lock path an operator has to go look at.
+          ...(err instanceof WorkflowError
+            ? err.details
+            : [err instanceof Error ? err.message : String(err)])
+        ]
+      );
+    }
+    try {
+      writeFileAtomic(file, contents);
+    } finally {
+      this._lockRepo.release(lock);
+    }
     return file;
   }
 
@@ -197,5 +297,56 @@ export class RunStateRepository implements IRunStateRepository {
     state.tokenSpendK = (state.tokenSpendK ?? 0) + deltaK;
     this.save(runsDir, state);
     return state.tokenSpendK;
+  }
+
+  recordGateFixAttempt(
+    runsDir: string,
+    state: RunState,
+    taskId: string
+  ): number {
+    state.gateFixAttempts = state.gateFixAttempts ?? {};
+    const next = (state.gateFixAttempts[taskId] ?? 0) + 1;
+    state.gateFixAttempts[taskId] = next;
+    this.save(runsDir, state);
+    return next;
+  }
+
+  recordRemediation(
+    runsDir: string,
+    state: RunState,
+    taskId: string,
+    sha: string,
+    gates: string[]
+  ): void {
+    state.remediations = state.remediations ?? {};
+    state.remediations[taskId] = {
+      attempt: state.gateFixAttempts?.[taskId] ?? 1,
+      sha,
+      gates,
+      recordedAt: new Date().toISOString()
+    };
+    this.save(runsDir, state);
+  }
+
+  recordMergeBlockedRetry(runsDir: string, state: RunState): number {
+    state.mergeBlockedRetries = (state.mergeBlockedRetries ?? 0) + 1;
+    this.save(runsDir, state);
+    return state.mergeBlockedRetries;
+  }
+
+  invalidateSteps(
+    runsDir: string,
+    state: RunState,
+    predicate: (step: StepResult, key: string) => boolean
+  ): string[] {
+    const removed = Object.entries(state.steps)
+      .filter(([key, step]) => predicate(step, key))
+      .map(([key]) => key);
+    if (removed.length === 0) return [];
+    for (const key of removed) {
+      delete state.steps[key];
+    }
+    this.save(runsDir, state);
+    return removed;
   }
 }

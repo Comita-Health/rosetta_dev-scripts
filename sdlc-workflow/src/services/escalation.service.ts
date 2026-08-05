@@ -25,6 +25,14 @@ export interface EscalateInput {
   operator?: string;
   /** Path for loud escalation warnings (default: skip file write). */
   monitorPath?: string;
+  /**
+   * Identifies the content this escalation is about — normally the task's
+   * head SHA or the failing verdict's inputs digest. Resuming a run passes
+   * the same value and stays quiet; the same escalation recurring against
+   * *new* content passes a different value and wakes the human again.
+   * Absent → once-ever per title, the pre-Wave-0 behaviour.
+   */
+  occurrenceKey?: string;
   /** Override wake-inbox root for tests. */
   wakeDir?: string;
 }
@@ -150,6 +158,7 @@ export class EscalationService implements IEscalationService {
       const wakeFile = this._wakeRepo.emitOnce({
         kind: 'sdlc_escalation',
         dedupeKey: title,
+        occurrenceKey: input.occurrenceKey,
         prompt: `SDLC escalation: ${title}. Triage the needs-human issue / queue item, then resume the run.`,
         data: {
           runId: input.runId,

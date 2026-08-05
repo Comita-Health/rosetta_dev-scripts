@@ -11,10 +11,15 @@ import path from 'path';
 import chalk from 'chalk';
 import type { IGitRepository } from '../repositories/git.repository';
 import type { IProcessDetachRepository } from '../repositories/process-detach.repository';
+import type { IPullRequestRepository } from '../repositories/pull-request.repository';
 import type {
   IRunQueueRepository,
   QueuedLaunchRecord
 } from '../repositories/run-queue.repository';
+import type {
+  IRunLockRepository,
+  RunLock
+} from '../repositories/run-lock.repository';
 import type { IRunStateRepository } from '../repositories/run-state.repository';
 import type { ISpecDocRepository } from '../repositories/spec-doc.repository';
 import type {
@@ -32,8 +37,10 @@ import { WORKFLOW_TOKENS } from '../tokens';
 import {
   allTasksMerged,
   hasMergeBlockedHalt,
-  hasUnmergedCompletedTasks
+  hasUnmergedCompletedTasks,
+  phaseComplete
 } from '../utils/run-completion';
+import { closeoutBranch } from '../utils/spec-closeout';
 import { buildSuperviseChildArgv } from '../utils/supervise-argv';
 import {
   exitRecordFromError,
@@ -44,12 +51,51 @@ import {
 import type { IHeartbeatWatchService } from './heartbeat-watch.service';
 
 /**
- * How long to let a detached child prove it survived startup. Startup failures
- * throw within milliseconds (file reads and spec parsing), so this only has to
- * clear process spawn — it is not a health check.
+ * How long to watch a detached child before claiming it started. Startup
+ * failures throw within milliseconds of the child's *own* start, but the child
+ * is `node`/`tsx` booting a TypeScript entry point, which on a loaded machine
+ * can take seconds before it reaches the throw.
+ *
+ * @remarks
+ * A single sample at 1.5s used to decide this, and under load it sampled while
+ * the child was still booting — alive, so the parent printed "detached" and
+ * exited 0 for a run that died a second later. The window is watched, not
+ * sampled, and it ends the moment there is evidence either way, so a healthy
+ * launch is not slowed by the larger budget.
  */
-const DETACH_STARTUP_GRACE_MS = 1_500;
+const DETACH_STARTUP_GRACE_MS = 8_000;
+const DETACH_STARTUP_POLL_MS = 150;
 const DETACH_FAILURE_LOG_LINES = 20;
+
+/**
+ * Wave 0: how many times a merge-blocked wave is retried before the run
+ * stops for a human.
+ *
+ * @remarks
+ * The performance postmortem measured 28 merge-blocked supervisor exits
+ * across 79 waves, each ending the process and waiting for a hand
+ * relaunch — together the bulk of 1,560 idle minutes (62.7% of elapsed
+ * time). Most were mechanical: a CI verdict polled before checks
+ * registered, or a `gh pr merge` that lost a race with a sibling landing on
+ * the default branch. Both clear on a retry; neither needed a human.
+ *
+ * The budget is small and persisted (`state.mergeBlockedRetries`) so a
+ * genuinely stuck run still reaches a human quickly, and a relaunch cannot
+ * refill it into an infinite loop.
+ */
+const MERGE_BLOCKED_RETRY_LIMIT = 3;
+const DEFAULT_MERGE_BLOCKED_BACKOFF_MS = 30_000;
+
+/**
+ * Steps dropped before a merge-blocked retry. Re-evaluating these is the
+ * entire point of the retry: `ci` because absent checks are the dominant
+ * false block, `phase` because it aggregates `ci`, and `merge` is never
+ * cached on a blocked task anyway. `implementation`, `reviewer`, `sandbox`
+ * and `verification` are deliberately kept — replaying paid agent work
+ * that already reached a verdict is pure cost, and reviewer/envelope
+ * findings are the remediation loop's job, not the retry's.
+ */
+const MERGE_BLOCKED_RETRY_STEPS = new Set(['ci', 'phase']);
 
 const sleep = (ms: number): Promise<void> =>
   new Promise(resolve => setTimeout(resolve, ms));
@@ -92,6 +138,16 @@ export interface SuperviseInput extends RunTaskInput {
    * so wakes land in `$ROSETTA_WAKE_DIR` / `~/.rosetta/wake`.
    */
   wakeDir?: string;
+  /**
+   * Base backoff before a merge-blocked retry wave, default 30s (doubled
+   * per attempt). Tests pass 0.
+   */
+  mergeBlockedBackoffMs?: number;
+  /**
+   * How long to watch a detached child for a startup death before reporting
+   * it as launched. Tests shorten it; production leaves it unset.
+   */
+  detachVerifyMs?: number;
 }
 
 export interface SuperviseResult {
@@ -133,22 +189,59 @@ export class SuperviseService implements ISuperviseService {
     @inject(WORKFLOW_TOKENS.WakeInboxRepository)
     private readonly _wakeRepo: IWakeInboxRepository,
     @inject(WORKFLOW_TOKENS.RunQueueRepository)
-    private readonly _runQueueRepo: IRunQueueRepository
+    private readonly _runQueueRepo: IRunQueueRepository,
+    @inject(WORKFLOW_TOKENS.RunLockRepository)
+    private readonly _runLockRepo: IRunLockRepository,
+    @inject(WORKFLOW_TOKENS.PullRequestRepository)
+    private readonly _prRepo: IPullRequestRepository
   ) {}
 
   async run(input: SuperviseInput): Promise<SuperviseResult> {
     if (input.detach === true) {
+      // The parent only spawns and reports; the child holds the lock for the
+      // life of the run. Taking it here would make every detached launch race
+      // its own child.
       return this.detach(input);
     }
-    if (input.supervise !== true) {
-      const lastWave = await this._runHandler.runTask(input);
-      return {
-        kind: this.mapWaveKind(lastWave, input),
-        waves: 1,
-        lastWave
-      };
+
+    // SPEC-PRD-0021-P1 T-02. Held for the whole session, not per write: the
+    // race this closes is a continuity-layer relaunch starting a second engine
+    // over a live one, and two processes taking turns writing valid states
+    // still interleave waves and double-dispatch agents.
+    const lock = this.acquireSession(input);
+    try {
+      if (input.supervise !== true) {
+        const lastWave = await this._runHandler.runTask(input);
+        return {
+          kind: this.mapWaveKind(lastWave, input),
+          waves: 1,
+          lastWave
+        };
+      }
+      return await this.loop(input);
+    } finally {
+      if (lock !== undefined) this._runLockRepo.release(lock);
     }
-    return this.loop(input);
+  }
+
+  /**
+   * Take the run lock, or fail fast naming the live holder.
+   *
+   * @remarks
+   * Returns `undefined` only when this process already holds the lock, which
+   * happens when a resume re-enters through the same process — releasing a
+   * lock we did not take here would hand the run to a waiting relaunch
+   * mid-wave.
+   */
+  private acquireSession(input: SuperviseInput): RunLock | undefined {
+    if (this._runLockRepo.heldByThisProcess(input.runsDir, input.runId)) {
+      return undefined;
+    }
+    return this._runLockRepo.acquire(
+      input.runsDir,
+      input.runId,
+      input.supervise === true ? 'supervise' : 'run'
+    );
   }
 
   private async detach(input: SuperviseInput): Promise<SuperviseResult> {
@@ -180,8 +273,7 @@ export class SuperviseService implements ISuperviseService {
     // printing a cheerful "detached" and exiting 0, so the operator walks away
     // from a run that never began. Confirm the child actually survived before
     // claiming success.
-    await sleep(DETACH_STARTUP_GRACE_MS);
-    if (!this._detachRepo.isAlive(pid)) {
+    if (!(await this.survivedStartup(pid, runDir, input.detachVerifyMs))) {
       const detail = tailFile(logPath, DETACH_FAILURE_LOG_LINES);
       console.error(
         chalk.red(`\n[supervise] detached child exited during startup`)
@@ -214,6 +306,32 @@ export class SuperviseService implements ISuperviseService {
       monitorPath,
       logPath
     };
+  }
+
+  /**
+   * Watch a freshly detached child until there is evidence it started, or
+   * evidence it did not.
+   *
+   * @remarks
+   * Two independent proofs of failure, because either alone has a blind spot:
+   * the child's own `supervise.exit` record is deterministic but only exists
+   * once it reached its terminal handler, and pid liveness catches a child that
+   * died too hard to record anything. Returning `true` on deadline is the only
+   * optimistic branch, and by then the child has had the whole window to fail.
+   */
+  private async survivedStartup(
+    pid: number,
+    runDir: string,
+    verifyMs: number | undefined
+  ): Promise<boolean> {
+    const budgetMs = verifyMs ?? DETACH_STARTUP_GRACE_MS;
+    const deadline = Date.now() + budgetMs;
+    do {
+      await sleep(Math.min(DETACH_STARTUP_POLL_MS, budgetMs));
+      if (this._exitRepo.read(runDir) !== null) return false;
+      if (!this._detachRepo.isAlive(pid)) return false;
+    } while (Date.now() < deadline);
+    return true;
   }
 
   private async loop(input: SuperviseInput): Promise<SuperviseResult> {
@@ -287,7 +405,7 @@ export class SuperviseService implements ISuperviseService {
         const spec = this.readSpecForSupervise(input);
         const state = this._runStateRepo.load(input.runsDir, input.runId);
 
-        if (allTasksMerged(spec, state)) {
+        if (this.phaseIsComplete(input, spec, state, monitorPath)) {
           this._hbWatch.note(
             monitorPath,
             `[supervise] ALL TASKS MERGED after wave ${waves}`
@@ -333,6 +451,12 @@ export class SuperviseService implements ISuperviseService {
             lastWave.tasks.map(task => task.taskId)
           )
         ) {
+          const blockedTaskIds = lastWave.tasks.map(task => task.taskId);
+          if (
+            await this.retryMergeBlocked(input, monitorPath, blockedTaskIds)
+          ) {
+            continue;
+          }
           this._hbWatch.note(
             monitorPath,
             `[supervise] MERGE BLOCKED after wave ${waves} — escalate / fix gates, then resume`
@@ -437,6 +561,72 @@ export class SuperviseService implements ISuperviseService {
     }
   }
 
+  /**
+   * Wave 0: consume one merge-blocked retry from the run's budget. Returns
+   * true when the caller should run another wave, false when the block must
+   * reach a human.
+   *
+   * @remarks
+   * A retry that does not invalidate the step cache is pointless — the wave
+   * would replay the same cached red verdicts. So this drops the `ci` and
+   * `phase` steps of the blocked tasks (see
+   * {@link MERGE_BLOCKED_RETRY_STEPS}) before backing off, which is what
+   * lets a CI verdict recorded before GitHub registered any checks be
+   * re-judged against the checks that have since appeared.
+   *
+   * The budget is deliberately not per-task: a wave stops on the first
+   * blocked task, and per-task budgets would let a 5-task wave spend 15
+   * retries walking the same failure.
+   */
+  private async retryMergeBlocked(
+    input: SuperviseInput,
+    monitorPath: string,
+    blockedTaskIds: string[]
+  ): Promise<boolean> {
+    const state = this._runStateRepo.load(input.runsDir, input.runId);
+    if (state === null) return false;
+
+    const spent = state.mergeBlockedRetries ?? 0;
+    if (spent >= MERGE_BLOCKED_RETRY_LIMIT) {
+      this._hbWatch.note(
+        monitorPath,
+        `[supervise] merge-blocked retries exhausted (${spent}/${MERGE_BLOCKED_RETRY_LIMIT}) — handing to a human`
+      );
+      return false;
+    }
+
+    const attempt = this._runStateRepo.recordMergeBlockedRetry(
+      input.runsDir,
+      state
+    );
+    const blocked = new Set(blockedTaskIds);
+    const dropped = this._runStateRepo.invalidateSteps(
+      input.runsDir,
+      state,
+      step =>
+        step.taskId !== undefined &&
+        blocked.has(step.taskId) &&
+        MERGE_BLOCKED_RETRY_STEPS.has(step.name)
+    );
+
+    const backoffMs =
+      (input.mergeBlockedBackoffMs ?? DEFAULT_MERGE_BLOCKED_BACKOFF_MS) *
+      2 ** (attempt - 1);
+    this._hbWatch.note(
+      monitorPath,
+      `[supervise] merge blocked — retry ${attempt}/${MERGE_BLOCKED_RETRY_LIMIT} ` +
+        `in ${Math.round(backoffMs / 1000)}s (re-evaluating ${dropped.length} ` +
+        `cached step(s) for ${blockedTaskIds.join(', ')})`
+    );
+    console.log(
+      chalk.yellow(
+        `\n[supervise] merge blocked — retrying (${attempt}/${MERGE_BLOCKED_RETRY_LIMIT}) after ${Math.round(backoffMs / 1000)}s`
+      )
+    );
+    if (backoffMs > 0) await sleep(backoffMs);
+    return true;
+  }
+
   private mapWaveKind(
     lastWave: RunTaskResult,
     input: SuperviseInput
@@ -449,10 +639,64 @@ export class SuperviseService implements ISuperviseService {
     }
     const spec = this.readSpecForSupervise(input);
     const state = this._runStateRepo.load(input.runsDir, input.runId);
-    if (allTasksMerged(spec, state)) {
+    if (this.phaseIsComplete(input, spec, state)) {
       return 'completed';
     }
     return 'stopped';
+  }
+
+  /**
+   * SPEC-PRD-0023-P1 T-04: "all tasks merged" is necessary but not
+   * sufficient — the phase's closeout PR must also exist and be merged or
+   * open awaiting Approve.
+   *
+   * @remarks
+   * Queried live on every call, never cached: a closeout PR that someone
+   * closes must stop counting. Shadow runs are exempt — they never merge for
+   * real, so they never produce a closeout to wait for. A `gh` failure here
+   * reports incomplete (fail closed) with a monitor line naming why, because
+   * the alternative is claiming a phase is done on the strength of a network
+   * error.
+   */
+  private phaseIsComplete(
+    input: SuperviseInput,
+    spec: SpecDocument,
+    state: ReturnType<IRunStateRepository['load']>,
+    monitorPath?: string
+  ): boolean {
+    if (!allTasksMerged(spec, state)) {
+      return false;
+    }
+    if (input.shadow === true) {
+      return true;
+    }
+    const branch = closeoutBranch(spec.id);
+    let pr: { state: 'OPEN' | 'MERGED' | 'CLOSED' } | null = null;
+    try {
+      pr = this._prRepo.latestForBranch(input.repoPath, branch);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      this.noteIfWatched(
+        monitorPath,
+        `[supervise] cannot resolve closeout PR for ${spec.id} (${branch}) — ` +
+          `phase reported incomplete: ${detail.slice(0, 200)}`
+      );
+      return false;
+    }
+    const complete = phaseComplete(spec, state, pr);
+    if (!complete) {
+      this.noteIfWatched(
+        monitorPath,
+        `[supervise] every task merged but the closeout PR for ${spec.id} is ` +
+          `${pr === null ? 'missing' : pr.state.toLowerCase()} — phase incomplete (${branch})`
+      );
+    }
+    return complete;
+  }
+
+  private noteIfWatched(monitorPath: string | undefined, line: string): void {
+    if (monitorPath === undefined) return;
+    this._hbWatch.note(monitorPath, line);
   }
 
   /**
@@ -506,7 +750,10 @@ export class SuperviseService implements ISuperviseService {
     );
 
     try {
-      const launch = await this.launchQueuedRecord(record);
+      const launch = await this.launchQueuedRecord(
+        record,
+        input.detachVerifyMs
+      );
       if (launch.alive) {
         this._runQueueRepo.remove(input.runsDir, seq);
         this._hbWatch.note(
@@ -556,7 +803,8 @@ export class SuperviseService implements ISuperviseService {
    * repository, and confirm the child survives the startup grace window.
    */
   private async launchQueuedRecord(
-    record: QueuedLaunchRecord
+    record: QueuedLaunchRecord,
+    verifyMs: number | undefined
   ): Promise<{ pid: number; alive: boolean; runId: string; detail: string }> {
     const runId = record.runId ?? this.deriveQueuedRunId(record.specPath);
     const runDir = path.join(record.runsDir, runId);
@@ -583,8 +831,7 @@ export class SuperviseService implements ISuperviseService {
     });
     writeFileSync(path.join(runDir, 'supervise.pid'), `${pid}\n`);
 
-    await sleep(DETACH_STARTUP_GRACE_MS);
-    const alive = this._detachRepo.isAlive(pid);
+    const alive = await this.survivedStartup(pid, runDir, verifyMs);
     return {
       pid,
       alive,

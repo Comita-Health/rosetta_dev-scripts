@@ -28,9 +28,9 @@ Record every dispatched deploy as a durable run artifact keyed by the deployed t
 
 ### Acceptance criteria
 
-- [ ] test: dispatching a deploy writes a run artifact containing the tree-content SHA, trigger source, workflow run reference, and outcome.
-- [ ] test: two commits with different commit SHAs but identical tree content resolve to the same content-SHA key in the deploy record.
-- [ ] test: deploy records survive engine process restart and are readable by run ID after the run completes.
+- [x] test: dispatching a deploy writes a run artifact containing the tree-content SHA, trigger source, workflow run reference, and outcome.
+- [x] test: two commits with different commit SHAs but identical tree content resolve to the same content-SHA key in the deploy record.
+- [x] test: deploy records survive engine process restart and are readable by run ID after the run completes.
 
 ## Task T-02: Merge-path deploy dedup keyed on content SHA
 
@@ -42,8 +42,8 @@ Dedup must compare tree content via T-01's records, not commit SHA string equali
 
 ### Acceptance criteria
 
-- [ ] test: when the merged commit's content equals an already-deployed PR-head SHA's content, the merge path records reuse of that deploy instead of dispatching a new one.
-- [ ] test: when merged content differs from any previously deployed PR-head SHA, a new deploy is dispatched normally.
+- [x] test: when the merged commit's content equals an already-deployed PR-head SHA's content, the merge path records reuse of that deploy instead of dispatching a new one.
+- [x] test: when merged content differs from any previously deployed PR-head SHA, a new deploy is dispatched normally.
 - [ ] agent: merge a PR whose head was already deployed and confirm no second deploy job is dispatched, with the reuse decision visible in run artifacts.
 
 ## Task T-03: Phase-boundary deploy race avoidance against push-triggered deploys
@@ -56,8 +56,8 @@ Needs an idempotency/locking guard keyed on content SHA so phase-boundary dispat
 
 ### Acceptance criteria
 
-- [ ] test: phase-boundary flow checks for an in-flight or completed push-triggered deploy for the same content SHA and skips dispatch if one exists or is pending.
-- [ ] test: near-simultaneous triggering of phase-boundary and push deploy for the same SHA results in exactly one dispatched deploy job.
+- [x] test: phase-boundary flow checks for an in-flight or completed push-triggered deploy for the same content SHA and skips dispatch if one exists or is pending.
+- [x] test: near-simultaneous triggering of phase-boundary and push deploy for the same SHA results in exactly one dispatched deploy job.
 - [ ] agent: trigger a push deploy and a phase boundary for the same SHA in close succession and confirm only one deploy runs end-to-end.
 
 ## Task T-04: Live validation of dedup, race avoidance, and PRD-0011 Phase 4 fast-pass

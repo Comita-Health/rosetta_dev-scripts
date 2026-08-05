@@ -107,7 +107,9 @@ describe('ReviewerPublishService', () => {
         create: jest.fn(),
         merge: jest.fn(),
         mergeCommitOid: jest.fn().mockReturnValue(null),
-        comment
+        comment,
+        latestForBranch: jest.fn().mockReturnValue(null),
+        updateBody: jest.fn()
       });
     container
       .bind<ICiStatusRepository>(WORKFLOW_TOKENS.CiStatusRepository)

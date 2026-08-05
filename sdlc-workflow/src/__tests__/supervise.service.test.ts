@@ -8,6 +8,7 @@ import type { IRunHandler, RunTaskResult } from '../handlers/run.handler';
 import type { ISpecDocRepository } from '../repositories/spec-doc.repository';
 import type { IRunStateRepository } from '../repositories/run-state.repository';
 import type { IProcessDetachRepository } from '../repositories/process-detach.repository';
+import type { IPullRequestRepository } from '../repositories/pull-request.repository';
 import type {
   IRunQueueRepository,
   QueuedLaunchRecord
@@ -21,6 +22,10 @@ import {
   WakeInboxRepository,
   type IWakeInboxRepository
 } from '../repositories/wake-inbox.repository';
+import {
+  RunLockRepository,
+  type IRunLockRepository
+} from '../repositories/run-lock.repository';
 import { WORKFLOW_TOKENS } from '../tokens';
 import type { RunState, SpecDocument } from '../types';
 import {
@@ -52,6 +57,9 @@ describe('SuperviseService', () => {
   let readAtRef: jest.Mock;
   let queuePeek: jest.Mock;
   let queueRemove: jest.Mock;
+  let recordMergeBlockedRetry: jest.Mock;
+  let invalidateSteps: jest.Mock;
+  let latestForBranch: jest.Mock;
   let supervise: ISuperviseService;
   let runsDir: string;
   let wakeDir: string;
@@ -104,6 +112,20 @@ describe('SuperviseService', () => {
     readAtRef = jest.fn().mockReturnValue(baseSpec);
     queuePeek = jest.fn().mockReturnValue(null);
     queueRemove = jest.fn();
+    recordMergeBlockedRetry = jest
+      .fn()
+      .mockImplementation((_dir, state: RunState) => {
+        state.mergeBlockedRetries = (state.mergeBlockedRetries ?? 0) + 1;
+        return state.mergeBlockedRetries;
+      });
+    invalidateSteps = jest.fn().mockReturnValue([]);
+    // SPEC-PRD-0023-P1 T-04: an open closeout PR is the default, so existing
+    // completion assertions describe a phase that closed out normally.
+    latestForBranch = jest.fn().mockReturnValue({
+      url: 'https://github.com/o/r/pull/7',
+      number: 7,
+      state: 'OPEN'
+    });
     exitRepo = new SuperviseExitRepository();
 
     const container = new Container();
@@ -128,6 +150,9 @@ describe('SuperviseService', () => {
       diffText: jest.fn(),
       push: jest.fn(),
       resolveSha: jest.fn(),
+      treeSha: jest.fn(),
+      worktreeForBranch: jest.fn(),
+      refExists: jest.fn().mockReturnValue(false),
       revertMerge: jest.fn(),
       stageAll: jest.fn(),
       commit: jest.fn(),
@@ -135,7 +160,11 @@ describe('SuperviseService', () => {
     });
     container
       .bind<IRunStateRepository>(WORKFLOW_TOKENS.RunStateRepository)
-      .toConstantValue({ load } as unknown as IRunStateRepository);
+      .toConstantValue({
+        load,
+        recordMergeBlockedRetry,
+        invalidateSteps
+      } as unknown as IRunStateRepository);
     container
       .bind<IProcessDetachRepository>(WORKFLOW_TOKENS.ProcessDetachRepository)
       .toConstantValue({ spawnDetached, isAlive });
@@ -161,6 +190,20 @@ describe('SuperviseService', () => {
         remove: queueRemove
       });
     container
+      .bind<IRunLockRepository>(WORKFLOW_TOKENS.RunLockRepository)
+      .to(RunLockRepository);
+    container
+      .bind<IPullRequestRepository>(WORKFLOW_TOKENS.PullRequestRepository)
+      .toConstantValue({
+        findByBranch: jest.fn(),
+        create: jest.fn(),
+        merge: jest.fn(),
+        mergeCommitOid: jest.fn(),
+        comment: jest.fn(),
+        latestForBranch,
+        updateBody: jest.fn()
+      });
+    container
       .bind<ISuperviseService>(WORKFLOW_TOKENS.SuperviseService)
       .to(SuperviseService);
     supervise = container.get(WORKFLOW_TOKENS.SuperviseService);
@@ -177,6 +220,10 @@ describe('SuperviseService', () => {
     supervise: true,
     detach: false,
     wakeDir,
+    // Wave 0 retries back off before the next wave — never in tests.
+    mergeBlockedBackoffMs: 0,
+    // Production watches a detached child for seconds; tests need one poll.
+    detachVerifyMs: 1,
     ...over
   });
 
@@ -275,6 +322,194 @@ describe('SuperviseService', () => {
     expect(result.detail).toBeUndefined();
   });
 
+  // A single liveness sample used to decide this, and on a loaded machine it
+  // landed while the child was still booting `tsx` — alive, so the parent
+  // printed "detached" and exited 0 for a run that died a moment later.
+  it('catches a child that dies later in the startup window', async () => {
+    // Alive for the first sample, dead later in the window — the exact shape
+    // of a `tsx` child that is still booting when the old single sample ran.
+    isAlive
+      .mockReturnValueOnce(true)
+      .mockReturnValueOnce(true)
+      .mockReturnValue(false);
+
+    const result = await supervise.run(
+      input({
+        detach: true,
+        detachVerifyMs: 2_000,
+        detachArgv: ['node', 'src/index.ts', 'run', '--detach']
+      })
+    );
+
+    expect(result.kind).toBe('failed');
+    expect(isAlive.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  it('trusts the child own exit record over its liveness', async () => {
+    // The pid may still be winding down, or already reused. The record the
+    // child wrote about itself is the deterministic evidence.
+    isAlive.mockReturnValue(true);
+    exitRepo.write(path.join(runsDir, 'run-1'), {
+      code: 1,
+      reason: 'SPEC_MALFORMED',
+      abnormal: true,
+      at: '2026-08-05T00:00:00Z'
+    });
+
+    const result = await supervise.run(
+      input({
+        detach: true,
+        detachVerifyMs: 400,
+        detachArgv: ['node', 'src/index.ts', 'run', '--detach']
+      })
+    );
+
+    expect(result.kind).toBe('failed');
+  });
+
+  it('stops watching as soon as the child proves it died', async () => {
+    isAlive.mockReturnValue(false);
+    const started = Date.now();
+
+    await supervise.run(
+      input({
+        detach: true,
+        // No explicit budget: the production default is seconds long, and the
+        // point is that a decided outcome ends the watch instead of burning
+        // the whole window.
+        detachVerifyMs: undefined,
+        detachArgv: ['node', 'src/index.ts', 'run', '--detach']
+      })
+    );
+
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
+  // SPEC-PRD-0021-P1 T-02. The lock lives at the session boundary because the
+  // race being closed is two *engines* on one run, not two writes.
+  describe('single-writer session lock (Wave 1)', () => {
+    const lockPath = (): string => path.join(runsDir, 'run-1', 'run.lock');
+
+    const writeLiveForeignLock = (): void => {
+      mkdirSync(path.join(runsDir, 'run-1'), { recursive: true });
+      writeFileSync(
+        lockPath(),
+        `${JSON.stringify({
+          pid: process.ppid,
+          host: os.hostname(),
+          owner: 'supervise',
+          token: 'held',
+          acquiredAt: '2026-08-05T00:00:00Z'
+        })}\n`
+      );
+    };
+
+    it('holds the lock while waves run and releases it afterwards', async () => {
+      runTask.mockImplementation(async () => {
+        expect(existsSync(lockPath())).toBe(true);
+        return wave('executed');
+      });
+      load.mockReturnValue({
+        taskResults: {
+          'T-01': {
+            taskId: 'T-01',
+            status: 'completed',
+            mergedSha: 'a',
+            recordedAt: 't'
+          },
+          'T-02': {
+            taskId: 'T-02',
+            status: 'completed',
+            mergedSha: 'b',
+            recordedAt: 't'
+          }
+        }
+      } as unknown as RunState);
+
+      await supervise.run(input());
+
+      expect(runTask).toHaveBeenCalled();
+      // A lock left behind would make the *next* launch fail for no reason.
+      expect(existsSync(lockPath())).toBe(false);
+    });
+
+    it('refuses to start a second engine over a live one', async () => {
+      writeLiveForeignLock();
+
+      await expect(supervise.run(input())).rejects.toMatchObject({
+        code: 'RUN_LOCK_HELD'
+      });
+      // Failing fast is the point: no wave may run, not even one.
+      expect(runTask).not.toHaveBeenCalled();
+    });
+
+    it('names the live holder and what to do about it', async () => {
+      writeLiveForeignLock();
+
+      await expect(supervise.run(input())).rejects.toMatchObject({
+        details: expect.arrayContaining([
+          expect.stringContaining(String(process.ppid)),
+          expect.stringContaining('already running')
+        ])
+      });
+    });
+
+    it('releases the lock when a wave throws', async () => {
+      runTask.mockRejectedValue(new Error('worktree gone'));
+
+      await expect(supervise.run(input())).rejects.toThrow('worktree gone');
+
+      // Without this, a crashed run could only be resumed by hand-deleting a
+      // lock file — the class of manual surgery this phase exists to remove.
+      expect(existsSync(lockPath())).toBe(false);
+    });
+
+    it('takes the lock for a single unsupervised wave too', async () => {
+      runTask.mockImplementation(async () => {
+        expect(existsSync(lockPath())).toBe(true);
+        return wave('executed');
+      });
+
+      await supervise.run(input({ supervise: false }));
+
+      expect(existsSync(lockPath())).toBe(false);
+    });
+
+    it('leaves the lock to the child on a detached launch', async () => {
+      await supervise.run(
+        input({
+          detach: true,
+          detachArgv: ['node', 'src/index.ts', 'run', '--detach']
+        })
+      );
+
+      // The parent exits immediately; a lock taken here would be released
+      // out from under the child, or worse, block it.
+      expect(existsSync(lockPath())).toBe(false);
+    });
+
+    it('reclaims a lock whose owner is dead', async () => {
+      mkdirSync(path.join(runsDir, 'run-1'), { recursive: true });
+      writeFileSync(
+        lockPath(),
+        `${JSON.stringify({
+          // Never a live pid: pid 0 is not addressable by kill(2) as a process.
+          pid: 2 ** 30,
+          host: os.hostname(),
+          owner: 'supervise',
+          token: 'crashed',
+          acquiredAt: '2026-08-05T00:00:00Z'
+        })}\n`
+      );
+      runTask.mockResolvedValue(wave('executed'));
+
+      await supervise.run(input({ supervise: false }));
+
+      // A SIGKILLed supervisor must not make its run permanently unresumable.
+      expect(runTask).toHaveBeenCalled();
+    });
+  });
+
   it('loops until all tasks are merged', async () => {
     runTask
       .mockResolvedValueOnce(wave('executed'))
@@ -314,6 +549,131 @@ describe('SuperviseService', () => {
     expect(result.kind).toBe('completed');
     expect(result.waves).toBe(2);
     expect(runTask).toHaveBeenCalledTimes(2);
+  });
+
+  // SPEC-PRD-0023-P1 T-04: a phase is complete when its tasks merged *and* its
+  // closeout PR exists. Merged-with-no-closeout is the debt that let five
+  // specs land while still reading as Approved.
+  describe('closeout-gated phase completion (T-04)', () => {
+    const merged = {
+      taskResults: {
+        'T-01': {
+          taskId: 'T-01',
+          status: 'completed',
+          mergedSha: 'a',
+          recordedAt: 't'
+        },
+        'T-02': {
+          taskId: 'T-02',
+          status: 'completed',
+          mergedSha: 'b',
+          recordedAt: 't'
+        }
+      }
+    } as unknown as RunState;
+
+    it('does not report completion while the closeout PR is missing', async () => {
+      latestForBranch.mockReturnValue(null);
+      runTask
+        .mockResolvedValueOnce(wave('executed'))
+        .mockResolvedValueOnce(wave('no-ready-task'));
+      load.mockReturnValue(merged);
+
+      const result = await supervise.run(input());
+
+      expect(result.kind).toBe('stopped');
+      expect(result.detail).toBe('no-ready-task');
+      expect(latestForBranch).toHaveBeenCalledWith(
+        '/repo',
+        'sdlc/closeout/SPEC-X'
+      );
+      expect(note.mock.calls.map(call => call[1]).join('\n')).toContain(
+        'closeout PR for SPEC-X is missing'
+      );
+    });
+
+    it('reports completion with an open closeout PR awaiting Approve', async () => {
+      latestForBranch.mockReturnValue({
+        url: 'https://github.com/o/r/pull/7',
+        number: 7,
+        state: 'OPEN'
+      });
+      runTask.mockResolvedValue(wave('executed'));
+      load.mockReturnValue(merged);
+
+      expect((await supervise.run(input())).kind).toBe('completed');
+    });
+
+    it('reports completion with a merged closeout PR', async () => {
+      latestForBranch.mockReturnValue({
+        url: 'https://github.com/o/r/pull/7',
+        number: 7,
+        state: 'MERGED'
+      });
+      runTask.mockResolvedValue(wave('executed'));
+      load.mockReturnValue(merged);
+
+      expect((await supervise.run(input())).kind).toBe('completed');
+    });
+
+    it('refuses completion when the closeout PR was closed unmerged', async () => {
+      latestForBranch.mockReturnValue({
+        url: 'https://github.com/o/r/pull/7',
+        number: 7,
+        state: 'CLOSED'
+      });
+      runTask
+        .mockResolvedValueOnce(wave('executed'))
+        .mockResolvedValueOnce(wave('no-ready-task'));
+      load.mockReturnValue(merged);
+
+      const result = await supervise.run(input());
+
+      expect(result.kind).toBe('stopped');
+      expect(note.mock.calls.map(call => call[1]).join('\n')).toContain(
+        'closeout PR for SPEC-X is closed'
+      );
+    });
+
+    it('fails closed when the closeout PR cannot be resolved', async () => {
+      latestForBranch.mockImplementation(() => {
+        throw new Error('gh pr list failed: network unreachable');
+      });
+      runTask
+        .mockResolvedValueOnce(wave('executed'))
+        .mockResolvedValueOnce(wave('no-ready-task'));
+      load.mockReturnValue(merged);
+
+      const result = await supervise.run(input());
+
+      // Claiming a phase is done on the strength of a network error is worse
+      // than making the operator look.
+      expect(result.kind).toBe('stopped');
+      expect(note.mock.calls.map(call => call[1]).join('\n')).toContain(
+        'cannot resolve closeout PR for SPEC-X'
+      );
+    });
+
+    it('never asks for a closeout PR on a shadow run', async () => {
+      runTask.mockResolvedValue(wave('executed'));
+      load.mockReturnValue(merged);
+
+      const result = await supervise.run(input({ shadow: true }));
+
+      expect(result.kind).toBe('completed');
+      expect(latestForBranch).not.toHaveBeenCalled();
+    });
+
+    it('gates the single-wave path on the closeout PR too', async () => {
+      latestForBranch.mockReturnValue(null);
+      runTask.mockResolvedValue(wave('executed'));
+      load.mockReturnValue(merged);
+
+      const result = await supervise.run(input({ supervise: false }));
+
+      expect(result.kind).toBe('stopped');
+      expect(latestForBranch).toHaveBeenCalled();
+    });
   });
 
   it('stops at shadow human gate when tasks are completed but unmerged', async () => {
@@ -611,7 +971,7 @@ describe('SuperviseService', () => {
     // A record whose execPath/execArgv deliberately differ from this test
     // process's own would have let the pre-fix code (which read
     // process.execPath/process.execArgv directly) pass unnoticed.
-    it('spawns the queued launch with the record\'s own execPath/execArgv, not the enforcing process\'s', async () => {
+    it("spawns the queued launch with the record's own execPath/execArgv, not the enforcing process's", async () => {
       runTask.mockResolvedValueOnce(wave('executed'));
       load.mockReturnValueOnce(mergedBoth);
 
@@ -638,7 +998,10 @@ describe('SuperviseService', () => {
       runTask.mockResolvedValueOnce(wave('executed'));
       load.mockReturnValueOnce(mergedBoth);
 
-      const record = queuedRecord('/queued/repo', '/queued/repo/specs/draft.md');
+      const record = queuedRecord(
+        '/queued/repo',
+        '/queued/repo/specs/draft.md'
+      );
       record.runsDir = runsDir;
       queuePeek.mockReturnValue({ seq: 8, record });
       readAtRef.mockImplementation((repoPath: string) =>
@@ -657,7 +1020,11 @@ describe('SuperviseService', () => {
       expect(queueCall).toBeUndefined();
       const notes = note.mock.calls.map(call => String(call[1]));
       expect(
-        notes.some(line => line.includes('not yet Approved') && line.includes('/queued/repo/specs/draft.md'))
+        notes.some(
+          line =>
+            line.includes('not yet Approved') &&
+            line.includes('/queued/repo/specs/draft.md')
+        )
       ).toBe(true);
     });
 
@@ -681,7 +1048,10 @@ describe('SuperviseService', () => {
       const queueWakeName = wakes.find(name => name.includes('queue-launch'));
       expect(queueWakeName).toBeDefined();
       const payload = JSON.parse(
-        readFileSync(path.join(wakeDir, 'pending', queueWakeName as string), 'utf-8')
+        readFileSync(
+          path.join(wakeDir, 'pending', queueWakeName as string),
+          'utf-8'
+        )
       ) as { kind: string; data: { specPath: string } };
       expect(payload.kind).toBe('sdlc_queue_launch');
       expect(payload.data.specPath).toBe('/queued/repo/specs/spec.md');
@@ -689,7 +1059,9 @@ describe('SuperviseService', () => {
       const notes = note.mock.calls.map(call => String(call[1]));
       expect(
         notes.some(
-          line => line.includes('[queue] FAILED') && line.includes('retained for retry')
+          line =>
+            line.includes('[queue] FAILED') &&
+            line.includes('retained for retry')
         )
       ).toBe(true);
     });
@@ -749,7 +1121,10 @@ describe('SuperviseService', () => {
       const wakes = pendingWakes();
       const queueWakeName = wakes.find(name => name.includes('queue-launch'));
       const payload = JSON.parse(
-        readFileSync(path.join(wakeDir, 'pending', queueWakeName as string), 'utf-8')
+        readFileSync(
+          path.join(wakeDir, 'pending', queueWakeName as string),
+          'utf-8'
+        )
       ) as { data: { detail: string } };
       expect(payload.data.detail).toContain('spawn EAGAIN');
     });
@@ -793,9 +1168,8 @@ describe('SuperviseService', () => {
     expect(result.detail).toBe('no-ready-task');
   });
 
-  it('fails immediately on enforce merge-blocked instead of spinning no-ready', async () => {
-    runTask.mockResolvedValue(wave('executed'));
-    load.mockReturnValue({
+  const mergeBlockedState = (): RunState =>
+    ({
       taskResults: {
         'T-01': {
           taskId: 'T-01',
@@ -826,12 +1200,79 @@ describe('SuperviseService', () => {
           recordedAt: 't'
         }
       ]
-    } as unknown as RunState);
+    }) as unknown as RunState;
 
-    const result = await supervise.run(input());
+  // Wave 0: merge-blocked is no longer terminal on sight. The postmortem
+  // found 28 merge-blocked exits across 79 waves, each parking the run for a
+  // hand relaunch, and the trigger was almost always mechanical (CI polled
+  // before checks registered, or a merge racing a sibling). The supervisor
+  // now spends a small persisted budget retrying before it asks for a human.
+  it('retries a merge-blocked wave, invalidating the cached ci/phase steps', async () => {
+    runTask.mockResolvedValue(wave('executed'));
+    const state = mergeBlockedState();
+    load.mockReturnValue(state);
+
+    const result = await supervise.run(input({ maxWaves: 10 }));
+
     expect(result.kind).toBe('failed');
     expect(result.detail).toBe('merge-blocked');
+    // 3 retries → 4 waves total, then the block reaches a human.
+    expect(runTask).toHaveBeenCalledTimes(4);
+    expect(recordMergeBlockedRetry).toHaveBeenCalledTimes(3);
+    expect(state.mergeBlockedRetries).toBe(3);
+    expect(note.mock.calls.flat().join('\n')).toContain(
+      'merge-blocked retries exhausted (3/3)'
+    );
+  });
+
+  it('re-evaluates only the ci and phase steps of the blocked tasks', async () => {
+    runTask.mockResolvedValue(wave('executed'));
+    load.mockReturnValue(mergeBlockedState());
+
+    await supervise.run(input({ maxWaves: 10 }));
+
+    const predicate = invalidateSteps.mock.calls[0][2] as (
+      step: { name: string; taskId?: string },
+      key: string
+    ) => boolean;
+    expect(predicate({ name: 'ci', taskId: 'T-01' }, 'ci:T-01:d')).toBe(true);
+    expect(predicate({ name: 'phase', taskId: 'T-01' }, 'phase:T-01:d')).toBe(
+      true
+    );
+    // Paid agent work that already produced a verdict is never replayed.
+    expect(
+      predicate({ name: 'reviewer', taskId: 'T-01' }, 'reviewer:T-01:d')
+    ).toBe(false);
+    expect(
+      predicate({ name: 'implementation', taskId: 'T-01' }, 'impl:T-01:d')
+    ).toBe(false);
+    // A sibling task that was not part of the blocked wave keeps its cache.
+    expect(predicate({ name: 'ci', taskId: 'T-02' }, 'ci:T-02:d')).toBe(false);
+  });
+
+  it('does not retry a merge-blocked wave whose budget is already spent', async () => {
+    runTask.mockResolvedValue(wave('executed'));
+    load.mockReturnValue({
+      ...mergeBlockedState(),
+      mergeBlockedRetries: 3
+    } as unknown as RunState);
+
+    const result = await supervise.run(input({ maxWaves: 10 }));
+
+    expect(result.detail).toBe('merge-blocked');
+    // A relaunch must not refill the budget into an infinite retry loop.
     expect(runTask).toHaveBeenCalledTimes(1);
+    expect(recordMergeBlockedRetry).not.toHaveBeenCalled();
+  });
+
+  it('never retries a merge-blocked wave in shadow mode', async () => {
+    runTask.mockResolvedValue(wave('executed'));
+    load.mockReturnValue(mergeBlockedState());
+
+    const result = await supervise.run(input({ shadow: true, maxWaves: 10 }));
+
+    expect(recordMergeBlockedRetry).not.toHaveBeenCalled();
+    expect(result.detail).toBe('shadow-human-gate');
   });
 
   it('fails when max-waves is exhausted without full merge', async () => {

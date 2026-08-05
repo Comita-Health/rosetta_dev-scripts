@@ -6,6 +6,14 @@ export interface GateSet {
   verification: GateVerdict;
   reviewer: GateVerdict;
   envelope: GateVerdict;
+  /**
+   * Wave 0: sandbox deploy joins the aggregate so a merge implies a
+   * deploy. Optional because a repo that declares no sandbox contract
+   * produces no sandbox verdict at all — see
+   * {@link isDeclaredSandboxFailure} for how "not declared" is kept
+   * distinct from "declared and broken".
+   */
+  sandbox?: GateVerdict;
 }
 
 export interface AggregateInput {
@@ -21,10 +29,10 @@ export interface AggregateResult {
 }
 
 /**
- * SPEC-PRD-0011-P2 T-06: combine the four machine gates into one
- * phase-gate verdict and derive exception-ledger entries for every
- * would-escalate trigger (reviewer disagreement, third failing CI fix
- * attempt, envelope breach, budget exhaustion). Shadow mode: the aggregate
+ * SPEC-PRD-0011-P2 T-06: combine the machine gates into one phase-gate
+ * verdict and derive exception-ledger entries for every would-escalate
+ * trigger (reviewer disagreement, third failing CI fix attempt, envelope
+ * breach, sandbox failure, budget exhaustion). Shadow mode: the aggregate
  * verdict is recorded but never advances, blocks, or merges anything —
  * human approval is the only advance mechanism this phase.
  */
@@ -34,12 +42,32 @@ export interface IAggregatorService {
 
 const CI_FIX_ATTEMPT_LIMIT = 3;
 
+/**
+ * True when a sandbox verdict represents a *declared* sandbox that failed,
+ * as opposed to a repo that never declared one.
+ *
+ * @remarks
+ * `SandboxDeployService` returns `blocked` + `wouldEscalate: false` for the
+ * missing-contract case and `breach` + `wouldEscalate: true` for a failed
+ * deploy or health check. Folding the former into the aggregate would fail
+ * every task in every repo without `.sdlc/environments.json`, so absence
+ * stays non-blocking while a real deploy failure now blocks the merge —
+ * that asymmetry is the whole point of "merged implies deployed".
+ */
+const isDeclaredSandboxFailure = (verdict: GateVerdict): boolean =>
+  verdict.outcome !== 'pass' && verdict.wouldEscalate === true;
+
 @injectable()
 export class AggregatorService implements IAggregatorService {
   aggregate(input: AggregateInput): AggregateResult {
     const now = new Date().toISOString();
     const failing = Object.entries(input.gates)
-      .filter(([, verdict]) => verdict.outcome !== 'pass')
+      .filter(([name, verdict]) => {
+        if (verdict === undefined) return false;
+        return name === 'sandbox'
+          ? isDeclaredSandboxFailure(verdict)
+          : verdict.outcome !== 'pass';
+      })
       .map(([name]) => name);
 
     const verdict: GateVerdict = {
@@ -67,6 +95,18 @@ export class AggregatorService implements IAggregatorService {
         trigger: 'envelope-breach',
         taskId: input.taskId,
         context: input.gates.envelope.reasons,
+        recordedAt: now
+      });
+    }
+
+    if (
+      input.gates.sandbox !== undefined &&
+      isDeclaredSandboxFailure(input.gates.sandbox)
+    ) {
+      exceptions.push({
+        trigger: 'sandbox-failed',
+        taskId: input.taskId,
+        context: input.gates.sandbox.reasons,
         recordedAt: now
       });
     }

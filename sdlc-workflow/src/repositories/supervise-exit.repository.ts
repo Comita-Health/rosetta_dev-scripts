@@ -9,6 +9,14 @@ import path from 'path';
  * `abnormal` distinguishes legitimate all-merged completion (`code: 0`,
  * `abnormal: false`) from a zero-exit that left work incomplete (`code: 0`,
  * `abnormal: true`) — readable from artifacts alone without the process.
+ *
+ * @remarks
+ * The engine is the **single writer** of this file. The continuity daemon
+ * used to delete it and then `echo $?` a bare exit code over it, which both
+ * destroyed the reason/abnormal evidence and left two incompatible formats
+ * on disk; it now writes its relaunch probe to `supervise.relaunch-exit`
+ * instead. {@link SuperviseExitRepository.read} still tolerates the bare
+ * form so pre-Wave-0 run directories stay readable.
  */
 export interface SuperviseExitRecord {
   code: number;
@@ -41,11 +49,13 @@ export class SuperviseExitRepository implements ISuperviseExitRepository {
     }
     try {
       const raw = readFileSync(file, 'utf-8').trim();
-      // Continuity daemon may overwrite with a bare integer after a relaunch
-      // probe. That shape carries no completion evidence, so it can never
-      // certify a normal exit: a bare `0` could mask a zero-exit that left
-      // tasks unmerged. Fail loud — treat every bare-integer record as
-      // abnormal and let the operator (or run state) prove completion.
+      // Legacy shape: the continuity daemon used to overwrite this file with
+      // a bare integer after a relaunch probe (it now writes
+      // `supervise.relaunch-exit`). That shape carries no completion
+      // evidence, so it can never certify a normal exit: a bare `0` could
+      // mask a zero-exit that left tasks unmerged. Fail loud — treat every
+      // bare-integer record as abnormal and let the operator (or run state)
+      // prove completion.
       if (/^-?\d+$/.test(raw)) {
         return {
           code: Number(raw),

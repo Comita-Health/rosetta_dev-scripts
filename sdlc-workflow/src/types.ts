@@ -181,7 +181,12 @@ export type ExceptionTrigger =
   | 'envelope-breach'
   | 'budget-exhaustion'
   /** P3 T-04: a red phase gate blocked an enforced merge. */
-  | 'merge-blocked';
+  | 'merge-blocked'
+  /**
+   * Wave 0: a *declared* sandbox failed to deploy or report healthy. A repo
+   * with no sandbox contract never raises this — see the aggregator.
+   */
+  | 'sandbox-failed';
 
 /**
  * An exception-ledger entry (SPEC-PRD-0011-P2 T-06): a would-escalate
@@ -218,9 +223,39 @@ export interface SandboxRecord {
   sha: string;
   status: 'healthy' | 'failed';
   recordedAt: string; // ISO timestamp
+  /**
+   * Tree-content SHA of `sha` (SPEC-PRD-0022-P1 T-01). Recorded alongside the
+   * commit so dedup can ask "is this *content* live?" — a merge commit and the
+   * PR head it merged have different commit SHAs and the same tree.
+   */
+  contentSha?: string;
 }
 
-export type CriterionTier = 'test' | 'agent' | 'manual';
+/**
+ * What caused a sandbox deploy to be dispatched (SPEC-PRD-0022-P1 T-01).
+ *
+ * `push` covers deploys the engine did not dispatch itself — a CI workflow
+ * reacting to the push — which is exactly the trigger phase-boundary dispatch
+ * has to avoid racing.
+ */
+export type DeployTrigger = 'task' | 'merge' | 'phase-boundary' | 'push';
+
+/** One event in the deploy ledger: a dispatch, its outcome, or a skip. */
+export interface DeployRecord {
+  /** `git rev-parse <commit>^{tree}` — the dedup key. */
+  contentSha: string;
+  commitSha: string;
+  trigger: DeployTrigger;
+  taskId?: string;
+  status: 'in-flight' | 'healthy' | 'failed' | 'reused';
+  /** Commit SHA whose deploy this reuses. Set only when `status` is `reused`. */
+  reusedFrom?: string;
+  /** Workflow run URL parsed from deploy output, when the script prints one. */
+  workflowRef?: string;
+  recordedAt: string;
+}
+
+export type CriterionTier = 'test' | 'agent' | 'manual' | 'docs';
 
 export type CriterionOutcome = 'pass' | 'fail' | 'human-required';
 
@@ -240,6 +275,66 @@ export interface CriterionVerdict {
 }
 
 /**
+ * How well one acceptance criterion is covered by the run's recorded
+ * verdicts (SPEC-PRD-0023-P1 T-01). `no-verdict` is a first-class value, not
+ * an absence: closeout derives checkbox state for *every* criterion, so a
+ * criterion the run never judged has to be distinguishable from one it
+ * judged and failed, and omitting it would silently read as "unchanged".
+ */
+export type CriterionCoverage = CriterionOutcome | 'no-verdict';
+
+/** One acceptance criterion joined to whatever verdict the run recorded for it. */
+export interface CloseoutCriterion {
+  /** `<taskId>#<index>` — criteria have no IDs of their own in ADR-0008. */
+  criterionId: string;
+  taskId: string;
+  /** The gate that judges criteria. Always `verification` today. */
+  gate: string;
+  /** 1-based position within the task's acceptance criteria. */
+  index: number;
+  /** Raw criterion text, tier prefix included. */
+  criterion: string;
+  tier: CriterionTier;
+  coverage: CriterionCoverage;
+  /** Resolvable evidence link, when the verdict carried evidence. */
+  evidenceLink?: string;
+}
+
+/** One (task, gate) verdict, flattened with its evidence links resolved. */
+export interface CloseoutTaskGate {
+  taskId: string;
+  gate: string;
+  outcome: GateOutcome;
+  evidenceLinks: string[];
+  recordedAt: string;
+}
+
+/**
+ * The read-only closeout view of a run (SPEC-PRD-0023-P1 T-01): every
+ * criterion with its coverage, every (task, gate) verdict, and whether the
+ * evidence is complete enough to write `status: Done`.
+ *
+ * @remarks
+ * `fullyCovered` is the *only* input to the spec status roll-up (T-03), and
+ * it is deliberately strict: a criterion the run never judged, a task with no
+ * green phase gate, or an unmerged task all keep it false. Partial coverage
+ * never downgrades a spec — it just leaves the remainder visible.
+ */
+export interface CloseoutAggregate {
+  runId: string;
+  specId: string;
+  criteria: CloseoutCriterion[];
+  taskGates: CloseoutTaskGate[];
+  /** Every task the spec declares, in spec order. */
+  taskIds: string[];
+  /** Task IDs carrying a merge commit on the default branch. */
+  mergedTaskIds: string[];
+  /** Task IDs whose latest `phase` gate verdict passed. */
+  phasePassedTaskIds: string[];
+  fullyCovered: boolean;
+}
+
+/**
  * One completed step in the T-09 resumable step graph. The key it is stored
  * under is `<name>:<taskId>:<inputsDigest>` — a step re-executes only when
  * its inputs change or it never completed. Kill-resume at any boundary is
@@ -253,6 +348,13 @@ export interface StepResult {
   verdict?: GateVerdict;
   /** Small step-specific payload (e.g. sandbox health report). */
   detail?: string;
+  /**
+   * SPEC-PRD-0021-P1 T-03/T-04: attempt trail when the step needed retries.
+   * Absent on a first-attempt success, so its presence is itself the signal
+   * that a step was flaky — the record survives on the completed step rather
+   * than only in whichever log the operator still had open.
+   */
+  recovery?: RecoveryHistory;
   completedAt: string; // ISO timestamp
 }
 
@@ -286,7 +388,62 @@ export interface RunState {
   tokenSpendK: number;
   /** Per-task count of failing CI fix attempts (Phase-3 machinery records). */
   ciFixAttempts: Record<string, number>;
+  /**
+   * Wave 0: per-task count of gate remediation rounds (reviewer / envelope
+   * re-dispatch). Persisted so a resume cannot refill the attempt budget.
+   */
+  gateFixAttempts: Record<string, number>;
+  /**
+   * Wave 0: the latest engine remediation per task. Task re-selection uses
+   * it to reopen a task whose phase gate breached *before* a fix landed —
+   * without it, the breach would stay terminal and the fix would never be
+   * judged.
+   */
+  remediations: Record<string, RemediationRecord>;
+  /**
+   * Wave 0: count of supervisor merge-blocked retries for this run.
+   * Persisted so a relaunch cannot loop forever on the same block.
+   */
+  mergeBlockedRetries: number;
   updatedAt: string; // ISO timestamp
+}
+
+/**
+ * One attempt inside a {@link RecoveryHistory} (SPEC-PRD-0021-P1 T-03).
+ *
+ * `action` names what the engine did, not what went wrong: `attempt`,
+ * `backoff`, `escalate`. Together with `outcome` this is the durable answer
+ * to "why did this take four minutes and six tries", which previously
+ * existed only in whichever log the operator still had open.
+ */
+export interface RecoveryAttempt {
+  attempt: number;
+  action: 'attempt' | 'backoff' | 'escalate';
+  outcome: 'succeeded' | 'failed' | 'exhausted' | 'waited';
+  /** Failure message for a failed attempt; backoff duration for a wait. */
+  detail?: string;
+  at: string; // ISO timestamp
+}
+
+/**
+ * The recovery record a retried step returns (SPEC-PRD-0021-P1 T-03).
+ * `escalated` is true only once the attempt cap was reached.
+ */
+export interface RecoveryHistory {
+  /** Recovery path label, e.g. `pr:T-01` — one budget per path. */
+  path: string;
+  attempts: RecoveryAttempt[];
+  escalated: boolean;
+}
+
+/** Wave 0: one engine-driven gate remediation round for a task. */
+export interface RemediationRecord {
+  attempt: number;
+  /** Head SHA the remediation produced — the ref the gates must re-judge. */
+  sha: string;
+  /** Gate names the round was asked to address. */
+  gates: string[];
+  recordedAt: string; // ISO timestamp
 }
 
 // --- T-08 Chronicle artifact schemas (versioned from day one) ---
@@ -363,6 +520,10 @@ export type WorkflowErrorCode =
   | 'SPEC_MALFORMED'
   | 'CONTRACT_MALFORMED'
   | 'RUN_NOT_FOUND'
+  /** SPEC-PRD-0021-P1 T-02: another live writer already owns the run. */
+  | 'RUN_LOCK_HELD'
+  /** T-02: a state.json write was refused because the run is foreign-locked. */
+  | 'RUN_LOCK_NOT_HELD'
   | 'GIT_FAILED'
   | 'GH_FAILED';
 

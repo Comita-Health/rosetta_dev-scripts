@@ -278,4 +278,97 @@ describe('EscalationService (P3 T-06 + fail-loud T-04)', () => {
     expect(a).not.toBeNull();
     expect(b).toBeNull();
   });
+
+  // Wave 0: before this, a notified marker was never cleared and carried no
+  // occurrence component, so an escalation title woke a human exactly once
+  // ever — every recurrence against new content was silently swallowed.
+  it('emitOnce re-notifies for a new occurrence key and stays quiet for a repeat', () => {
+    const emit = (occurrenceKey: string): string | null =>
+      wakeRepo.emitOnce({
+        kind: 'sdlc_escalation',
+        dedupeKey: 'k',
+        prompt: 'p',
+        occurrenceKey,
+        wakeDir
+      });
+
+    expect(emit('sha-aaa')).not.toBeNull();
+    expect(emit('sha-aaa')).toBeNull(); // a resume, not new evidence
+    expect(emit('sha-bbb')).not.toBeNull(); // the fix pushed a new head
+    expect(emit('sha-bbb')).toBeNull();
+
+    // One pending file throughout: recurrence overwrites rather than
+    // piling up N inbox entries for one problem.
+    const files = readdirSync(path.join(wakeDir, 'pending')).filter(f =>
+      f.endsWith('.json')
+    );
+    expect(files).toHaveLength(1);
+  });
+
+  it('keeps occurrence keys distinct even when the dedupe key fills the slug budget and the keys share a long prefix', () => {
+    // Two length hazards at once: the title alone overflows the 96-char slug
+    // cap (so the suffix must be reserved before truncation), and the two
+    // occurrence keys differ only in their final character (so the suffix
+    // cannot itself be a truncation).
+    const longKey = `ACTION REQUIRED: SDLC ${'x'.repeat(80)} T-01 — reviewer-disagreement`;
+    const emit = (occurrenceKey: string): string | null =>
+      wakeRepo.emitOnce({
+        kind: 'sdlc_escalation',
+        dedupeKey: longKey,
+        prompt: 'p',
+        occurrenceKey,
+        wakeDir
+      });
+
+    expect(emit('0000000000000000000000000000000000000001')).not.toBeNull();
+    expect(emit('0000000000000000000000000000000000000002')).not.toBeNull();
+  });
+
+  // The engine passes `wakeDir` explicitly, but the daemon and hook scripts
+  // read the same inbox through ROSETTA_WAKE_DIR — an emit that ignored the
+  // env var would write somewhere nothing is watching.
+  it('falls back to ROSETTA_WAKE_DIR when no wake directory is passed', () => {
+    const envDir = path.join(tmpRoot, 'env-wake');
+    const prior = process.env.ROSETTA_WAKE_DIR;
+    process.env.ROSETTA_WAKE_DIR = envDir;
+    try {
+      const emitted = wakeRepo.emit({
+        kind: 'sdlc_escalation',
+        dedupeKey: 'env-k',
+        prompt: 'p'
+      });
+      expect(emitted.startsWith(path.join(envDir, 'pending'))).toBe(true);
+
+      const once = wakeRepo.emitOnce({
+        kind: 'sdlc_escalation',
+        dedupeKey: 'env-once',
+        prompt: 'p'
+      });
+      expect(once).not.toBeNull();
+      expect(
+        wakeRepo.emitOnce({
+          kind: 'sdlc_escalation',
+          dedupeKey: 'env-once',
+          prompt: 'p'
+        })
+      ).toBeNull();
+    } finally {
+      if (prior === undefined) delete process.env.ROSETTA_WAKE_DIR;
+      else process.env.ROSETTA_WAKE_DIR = prior;
+    }
+  });
+
+  it('escalation passes its occurrence key through to the wake marker', () => {
+    const post = (occurrenceKey: string) =>
+      service.post({
+        runId: 'run-1',
+        entries: [entry('reviewer-disagreement')],
+        occurrenceKey,
+        wakeDir
+      });
+
+    expect(post('head-1').wakes).toHaveLength(1);
+    expect(post('head-1').wakes).toHaveLength(0);
+    expect(post('head-2').wakes).toHaveLength(1);
+  });
 });

@@ -28,9 +28,9 @@ Every recovery mechanism in this phase depends on state.json surviving a crash m
 
 ### Acceptance criteria
 
-- [ ] test: state.json writes go through a temp-file-plus-rename sequence rather than an in-place write.
-- [ ] test: a simulated crash/kill during the write step leaves the previous valid state.json fully intact and parseable on the next read.
-- [ ] test: a reader polling state.json during a concurrent write never observes a partially written or truncated file.
+- [x] test: state.json writes go through a temp-file-plus-rename sequence rather than an in-place write.
+- [x] test: a simulated crash/kill during the write step leaves the previous valid state.json fully intact and parseable on the next read.
+- [x] test: a reader polling state.json during a concurrent write never observes a partially written or truncated file.
 
 ## Task T-02: Single-writer run lock for state.json
 
@@ -42,9 +42,9 @@ Lock acquisition must make the relaunch-vs-manual-resume race structurally impos
 
 ### Acceptance criteria
 
-- [ ] test: acquiring the run lock while it is already held by another writer fails fast with a distinct, clearly identifiable error.
-- [ ] test: state.json writes are rejected unless the caller currently holds the run lock.
-- [ ] test: a simulated continuity-layer relaunch and a simulated manual resume racing for the lock result in exactly one winner and one fast failure, never a double-write.
+- [x] test: acquiring the run lock while it is already held by another writer fails fast with a distinct, clearly identifiable error.
+- [x] test: state.json writes are rejected unless the caller currently holds the run lock.
+- [x] test: a simulated continuity-layer relaunch and a simulated manual resume racing for the lock result in exactly one winner and one fast failure, never a double-write.
 
 ## Task T-03: Shared bounded retry executor with attempt cap and recovery history
 
@@ -56,9 +56,9 @@ This is the single retry-policy surface for the engine: attempt cap, backoff, an
 
 ### Acceptance criteria
 
-- [ ] test: the executor enforces a configurable terminal attempt cap per recovery path; once exhausted it invokes escalation exactly once and never loops further.
-- [ ] test: the executor applies backoff between attempts and appends each attempt's timestamp, action, and outcome to a recovery-history structure returned to the caller.
-- [ ] test: the executor only re-invokes the supplied step callback and never itself constructs, mutates, or overrides a verdict object.
+- [x] test: the executor enforces a configurable terminal attempt cap per recovery path; once exhausted it invokes escalation exactly once and never loops further.
+- [x] test: the executor applies backoff between attempts and appends each attempt's timestamp, action, and outcome to a recovery-history structure returned to the caller.
+- [x] test: the executor only re-invokes the supplied step callback and never itself constructs, mutates, or overrides a verdict object.
 
 ## Task T-04: Non-gate step retry with backoff and step-cache resume
 
@@ -70,8 +70,8 @@ Applies to PR-open, sandbox-deploy, and Chronicle-commit steps specifically, dri
 
 ### Acceptance criteria
 
-- [ ] test: a failed non-gate step (PR open, sandbox deploy, Chronicle commit) is retried with backoff up to policy using the shared retry executor.
-- [ ] test: after a non-gate step retry succeeds, the run resumes from the step cache in state.json with zero hand-edits.
+- [x] test: a failed non-gate step (PR open, sandbox deploy, Chronicle commit) is retried with backoff up to policy using the shared retry executor.
+- [x] test: after a non-gate step retry succeeds, the run resumes from the step cache in state.json with zero hand-edits.
 - [ ] agent: resuming a retried non-gate step through the running interface produces no duplicate side effect (e.g. no duplicate PR) compared to the original failed attempt.
 
 ## Task T-05: Sanitized dispatch environment for retried agents
@@ -84,5 +84,5 @@ Strip or override CURSOR_AGENT (and equivalent inherited flags) before spawning 
 
 ### Acceptance criteria
 
-- [ ] test: agents dispatched during a retry run with CURSOR_AGENT (and equivalent inherited flags) unset or overridden, even when the outer orchestrator process has it set.
+- [x] test: agents dispatched during a retry run with CURSOR_AGENT (and equivalent inherited flags) unset or overridden, even when the outer orchestrator process has it set.
 - [ ] agent: a retry-dispatched agent observed through the running interface performs real work rather than silently no-oping due to an inherited nested-agent flag.

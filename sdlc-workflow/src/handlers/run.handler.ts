@@ -10,9 +10,12 @@ import type { ISpecDocRepository } from '../repositories/spec-doc.repository';
 import type { IAggregatorService } from '../services/aggregator.service';
 import type { IChronicleCommitService } from '../services/chronicle-commit.service';
 import type { ICiGateService } from '../services/ci-gate.service';
+import type { ICloseoutAggregateService } from '../services/closeout-aggregate.service';
+import type { ICloseoutService } from '../services/closeout.service';
 import type { IDigestService } from '../services/digest.service';
 import type { IEnvelopeGateService } from '../services/envelope-gate.service';
 import type { IEscalationService } from '../services/escalation.service';
+import type { IGateRemediationService } from '../services/gate-remediation.service';
 import type {
   ExecutorOutcome,
   IExecutorService,
@@ -25,7 +28,14 @@ import type { IReviewerGateService } from '../services/reviewer-gate.service';
 import type { IReviewerPublishService } from '../services/reviewer-publish.service';
 import { isBugSpec } from '../services/retro.service';
 import type { IRetroService } from '../services/retro.service';
-import type { ISandboxDeployService } from '../services/sandbox-deploy.service';
+import type {
+  IRetryExecutorService,
+  RetryOutcome
+} from '../services/retry-executor.service';
+import type {
+  DeployLedgerRef,
+  ISandboxDeployService
+} from '../services/sandbox-deploy.service';
 import type {
   IVerificationService,
   VerificationOutcome
@@ -33,8 +43,10 @@ import type {
 import { WORKFLOW_TOKENS } from '../tokens';
 import {
   CriterionVerdict,
+  DeployTrigger,
   ExceptionEntry,
   GateVerdict,
+  RecoveryHistory,
   RunState,
   SpecDocument,
   SpecTask,
@@ -76,6 +88,12 @@ export interface RunTaskInput extends PoolInput {
   monitorPath?: string;
   /** Override wake-inbox root for tests. */
   wakeDir?: string;
+  /**
+   * First backoff (ms) between non-gate step retries, doubling per attempt
+   * (SPEC-PRD-0021-P1 T-04). `0` disables waiting — used by tests so a retry
+   * assertion does not cost real seconds.
+   */
+  retryBackoffMs?: number;
 }
 
 export interface RunTaskResult {
@@ -141,11 +159,44 @@ export interface QueueStatusCliInput {
   runsDir: string;
 }
 
+/**
+ * The minimum an operation needs to find the run's `monitor.log` and deploy
+ * ledger. Both the task pipeline and `check-veto` deploy sandboxes, and
+ * `check-veto` has no spec or parallelism, so the shared helpers ask for the
+ * run identity rather than a whole `RunTaskInput`.
+ */
+interface MonitorTarget {
+  runsDir: string;
+  runId: string;
+  monitorPath?: string;
+}
+
+/**
+ * What generating a closeout PR needs (SPEC-PRD-0023-P1 T-02). Narrower than
+ * `RunTaskInput` so the `closeout` CLI can drive the same path as the phase
+ * boundary — a retroactive closeout is the same operation, not a second
+ * implementation of it.
+ */
+interface CloseoutTarget extends MonitorTarget {
+  repoPath: string;
+  specPath: string;
+  /** Shadow runs never merge, so they never close out. */
+  shadow?: boolean;
+}
+
 export interface CheckVetoInput {
   runsDir: string;
   runId: string;
   repoPath: string;
   chronicleRepo: string;
+}
+
+/** SPEC-PRD-0023-P1: `closeout` CLI input — one spec, one run's verdicts. */
+export interface CloseoutCliInput {
+  runsDir: string;
+  runId: string;
+  repoPath: string;
+  specPath: string;
 }
 
 export interface CheckVetoResult {
@@ -169,6 +220,17 @@ export interface IRunHandler {
    * SHA. No veto → nothing changes. The run itself never blocks on this.
    */
   checkVeto(input: CheckVetoInput): Promise<CheckVetoResult>;
+  /**
+   * SPEC-PRD-0023-P1 T-02: generate (or refresh) a spec's closeout PR from a
+   * run's recorded verdicts, outside the phase boundary.
+   *
+   * @remarks
+   * Same code path the phase boundary takes, exposed so an interrupted
+   * closeout can be re-driven and so specs that landed before this machinery
+   * existed can be closed out from their runs. Idempotent by branch: repeated
+   * invocations update one PR.
+   */
+  closeout(input: CloseoutCliInput): Promise<void>;
   /** T-02: write a durable FIFO launch record, deduped by spec path. */
   queueRun(input: QueueRunCliInput): void;
   /** T-02: list queued launch records (`status --queue`). */
@@ -222,7 +284,15 @@ export class RunHandler implements IRunHandler {
     @inject(WORKFLOW_TOKENS.SpecDocRepository)
     private readonly _specDocRepo: ISpecDocRepository,
     @inject(WORKFLOW_TOKENS.HeartbeatService)
-    private readonly _heartbeat: IHeartbeatService
+    private readonly _heartbeat: IHeartbeatService,
+    @inject(WORKFLOW_TOKENS.GateRemediationService)
+    private readonly _remediation: IGateRemediationService,
+    @inject(WORKFLOW_TOKENS.RetryExecutorService)
+    private readonly _retry: IRetryExecutorService,
+    @inject(WORKFLOW_TOKENS.CloseoutAggregateService)
+    private readonly _closeoutAggregate: ICloseoutAggregateService,
+    @inject(WORKFLOW_TOKENS.CloseoutService)
+    private readonly _closeout: ICloseoutService
   ) {}
 
   async runTask(input: RunTaskInput): Promise<RunTaskResult> {
@@ -313,7 +383,15 @@ export class RunHandler implements IRunHandler {
           const entries = state.exceptions.filter(
             entry => entry.taskId === outcome.task.id
           );
-          this.postEscalations(input, state, outcome.task.id, entries);
+          // No head SHA to key on — the task never reached the gates. Its
+          // implementation digest is the equivalent content discriminator.
+          this.postEscalations(
+            input,
+            state,
+            outcome.task.id,
+            entries,
+            outcome.implDigest
+          );
         }
       }
 
@@ -382,7 +460,15 @@ export class RunHandler implements IRunHandler {
 
     // P3 T-02: push the branch and open (or rediscover) the task PR before
     // the gates — the PR is the reviewer-gate and CI-gate subject.
-    this.prStep(input, state, task, spec, outcome.branch, worktreePath, chain);
+    await this.prStep(
+      input,
+      state,
+      task,
+      spec,
+      outcome.branch,
+      worktreePath,
+      chain
+    );
 
     // F1: diff against the task's integration tip (same tip the worktree
     // branched from), not the frozen run baseSha — otherwise merged deps
@@ -469,19 +555,45 @@ export class RunHandler implements IRunHandler {
     // on purpose until a safe shared-install contract exists (PRD-0022).
     // Test tier goes first: it is the cheaper command and shortens
     // time-to-red for plain test failures.
+    this._heartbeat.setContext({
+      taskId: task.id,
+      step: 'verification',
+      worktreePath,
+      lastLine: 'running the test tier'
+    });
+
     const precomputedTestTier = await this._verification.verifyTestTierOnly({
       worktreePath,
       runsDir: input.runsDir,
       runId: input.runId,
       task
     });
+
+    this._heartbeat.setContext({
+      taskId: task.id,
+      step: 'sandbox',
+      worktreePath,
+      lastLine: `deploying ${headSha.slice(0, 12)} to the sandbox`
+    });
+
     const sandboxOutcome = await this.sandboxStep(
       input,
       state,
       task,
       worktreePath,
-      inputsDigest({ ...chain, step: 'sandbox' })
+      inputsDigest({ ...chain, step: 'sandbox' }),
+      // SPEC-PRD-0011-P4 T-01: the deploy contract scopes itself to what this
+      // task actually changed, which is the diff against the tip it branched
+      // from — the same base the envelope and reviewer gates judge.
+      gateBaseRef
     );
+
+    this._heartbeat.setContext({
+      taskId: task.id,
+      step: 'verification',
+      worktreePath,
+      lastLine: 'evaluating acceptance criteria'
+    });
 
     const verificationVerdict = await this.verificationStep(
       input,
@@ -492,6 +604,13 @@ export class RunHandler implements IRunHandler {
       inputsDigest({ ...chain, criteria: task.acceptanceCriteria }),
       precomputedTestTier
     );
+
+    this._heartbeat.setContext({
+      taskId: task.id,
+      step: 'ci',
+      worktreePath,
+      lastLine: 'waiting on GitHub check runs'
+    });
 
     // P3 T-03: live CI gate — poll the pushed branch's checks to terminal,
     // dispatch bounded fix agents on failure, and consume the post-cycle
@@ -539,7 +658,10 @@ export class RunHandler implements IRunHandler {
           ci: ciVerdict,
           verification: verificationVerdict,
           reviewer: reviewerVerdict,
-          envelope: envelopeVerdict
+          envelope: envelopeVerdict,
+          // Wave 0: a failed deploy of a declared sandbox now blocks the
+          // merge, so "it merged" finally means "it deployed".
+          sandbox: sandboxOutcome.verdict
         },
         state,
         taskId: task.id,
@@ -569,9 +691,31 @@ export class RunHandler implements IRunHandler {
           )
         );
       }
+
+      // Wave 0: before treating a red phase as terminal, give the agent a
+      // bounded round at the findings it can actually act on. A remediated
+      // task returns here with a new head, so the gates re-judge the fix
+      // instead of the run stopping on the first objection.
+      if (
+        input.shadow !== true &&
+        phaseVerdict.outcome !== 'pass' &&
+        (await this.remediationRound(input, state, task, spec, worktreePath, [
+          reviewerVerdict,
+          envelopeVerdict
+        ]))
+      ) {
+        return;
+      }
+
       // P3 T-06: escalate — action-required queue items, then halt this
       // task (staying unmerged blocks dependents; other tasks continue).
-      this.postEscalations(input, state, task.id, aggregate.exceptions);
+      this.postEscalations(
+        input,
+        state,
+        task.id,
+        aggregate.exceptions,
+        chain.headSha
+      );
     }
 
     // P3 T-04: enforcement. Green across the board auto-merges; any red
@@ -579,6 +723,163 @@ export class RunHandler implements IRunHandler {
     await this.enforcementStep(input, state, task, chain, phaseVerdict);
 
     await this.chronicleSteps(input, state, task, spec, chain, phaseVerdict);
+  }
+
+  /**
+   * Wave 0: dispatch one bounded gate remediation round. Returns true when
+   * a fix landed and the caller must abandon this pass — the verdicts it
+   * holds now describe a superseded head SHA, and re-selection will bring
+   * the task back for a clean re-gate.
+   *
+   * @remarks
+   * Escalation is deliberately suppressed on a successful remediation:
+   * filing a needs-human issue for a finding the engine is actively fixing
+   * is exactly the noise that trained the operator to ignore escalations.
+   * A skip or a failure falls through to the normal escalation path, so an
+   * exhausted budget is still loud.
+   */
+  private async remediationRound(
+    input: RunTaskInput,
+    state: RunState,
+    task: SpecTask,
+    spec: SpecDocument,
+    worktreePath: string,
+    verdicts: GateVerdict[]
+  ): Promise<boolean> {
+    const branch = state.taskResults[task.id]?.branch;
+    if (branch === undefined) return false;
+
+    this._heartbeat.setContext({
+      taskId: task.id,
+      step: 'remediation',
+      worktreePath,
+      lastLine: 'dispatching gate remediation agent'
+    });
+
+    const outcome = await this._remediation.remediate({
+      worktreePath,
+      branch,
+      task: task,
+      envelope: spec.envelope,
+      runsDir: input.runsDir,
+      state,
+      verdicts,
+      budgetK: spec.envelope.budgetK
+    });
+
+    if (outcome.kind === 'remediated') {
+      const line = `[remediate] ${task.id} ${outcome.detail}`;
+      console.log(chalk.yellow(`  ${line}`));
+      this.noteMonitor(input, line);
+      return true;
+    }
+
+    console.log(
+      chalk.gray(`  [remediate] ${task.id} ${outcome.kind}: ${outcome.detail}`)
+    );
+    // A skip is the common, uninteresting case (most red gates have nothing
+    // remediable) — keep it out of monitor.log so a spent budget or a
+    // failed round stays easy to spot there.
+    if (outcome.kind === 'failed') {
+      this.noteMonitor(
+        input,
+        `[remediate] ${task.id} failed: ${outcome.detail}`
+      );
+    }
+    return false;
+  }
+
+  /** Append to the run's live monitor log (explicit override, else default). */
+  private noteMonitor(input: MonitorTarget, line: string): void {
+    appendMonitorLine(
+      input.monitorPath ?? path.join(input.runsDir, input.runId, 'monitor.log'),
+      line
+    );
+  }
+
+  /**
+   * SPEC-PRD-0021-P1 T-04: run a **non-gate** step through the shared retry
+   * executor, so a transient PR-open, sandbox-deploy or Chronicle-commit
+   * failure costs a backoff instead of the whole run.
+   *
+   * @remarks
+   * Only a *thrown* error is retried. A gate that returns a red verdict has
+   * judged the branch and must be honoured verbatim — retrying a verdict is
+   * how a retry layer quietly becomes a gate override, so the executor never
+   * sees one. This is also why the sandbox deploy is retried on an exception
+   * but not on an unhealthy verdict.
+   *
+   * Each attempt is logged to `monitor.log` as it happens, because the whole
+   * point is that an operator watching a slow step can tell "retrying" from
+   * "hung" without attaching to the process.
+   */
+  private async withRetry<T>(
+    input: RunTaskInput,
+    recoveryPath: string,
+    step: () => Promise<T>
+  ): Promise<RetryOutcome<T>> {
+    return this._retry.run({
+      path: recoveryPath,
+      step,
+      backoffMs: input.retryBackoffMs,
+      onAttemptFailed: attempt =>
+        this.noteMonitor(
+          input,
+          `[retry] ${recoveryPath} attempt ${attempt.attempt} failed: ${(
+            attempt.detail ?? ''
+          ).slice(0, 200)}`
+        ),
+      onExhausted: history =>
+        this.noteMonitor(
+          input,
+          `[retry] ${recoveryPath} exhausted after ${
+            history.attempts.filter(entry => entry.action === 'attempt').length
+          } attempts — escalating`
+        )
+    });
+  }
+
+  /**
+   * Every sandbox deploy in the engine resolves its ledger identity here
+   * (SPEC-PRD-0022-P1 T-01), so dedup and race avoidance in
+   * `SandboxDeployService` see a complete ledger by construction.
+   *
+   * The key is **tree content**, not commit: a merge commit's SHA always
+   * differs from the PR head it merged, so commit comparison called
+   * already-live content "not deployed" and paid for the deploy twice.
+   *
+   * @remarks
+   * Returns `undefined` when git cannot resolve the tree, which disables the
+   * ledger for that call rather than failing the run — without a content key
+   * every deploy simply dispatches as it did before. Trading a redundant
+   * deploy for a dead run would be the wrong way round.
+   */
+  private ledgerRef(
+    input: MonitorTarget,
+    dispatch: {
+      worktreePath: string;
+      sha: string;
+      trigger: DeployTrigger;
+      taskId?: string;
+    }
+  ): DeployLedgerRef | undefined {
+    let contentSha: string;
+    try {
+      contentSha = this._gitRepo.treeSha(dispatch.worktreePath, dispatch.sha);
+    } catch {
+      this.noteMonitor(
+        input,
+        `[deploy] no content SHA for ${dispatch.sha.slice(0, 12)} — deploy dedup disabled for this dispatch`
+      );
+      return undefined;
+    }
+    return {
+      runsDir: input.runsDir,
+      runId: input.runId,
+      contentSha,
+      trigger: dispatch.trigger,
+      taskId: dispatch.taskId
+    };
   }
 
   /**
@@ -612,7 +913,7 @@ export class RunHandler implements IRunHandler {
         }
       ];
       this._runStateRepo.recordExceptions(input.runsDir, state, entries);
-      this.postEscalations(input, state, task.id, entries);
+      this.postEscalations(input, state, task.id, entries, chain.headSha);
       console.log(
         chalk.red(
           `  [enforce] merge blocked for ${task.id}: ${phaseVerdict.reasons.join('; ')}`
@@ -631,6 +932,12 @@ export class RunHandler implements IRunHandler {
       return;
     }
 
+    this._heartbeat.setContext({
+      taskId: task.id,
+      step: 'merge',
+      lastLine: 'gates green — merging the task PR'
+    });
+
     const prUrl = state.taskResults[task.id]?.prUrl;
     const prNumber = prUrl?.match(/\/pull\/(\d+)$/)?.[1];
     if (prUrl === undefined || prNumber === undefined) {
@@ -643,7 +950,7 @@ export class RunHandler implements IRunHandler {
         }
       ];
       this._runStateRepo.recordExceptions(input.runsDir, state, entries);
-      this.postEscalations(input, state, task.id, entries);
+      this.postEscalations(input, state, task.id, entries, chain.headSha);
       console.log(
         chalk.red(`  [enforce] ${task.id} green but has no PR — cannot merge`)
       );
@@ -701,7 +1008,7 @@ export class RunHandler implements IRunHandler {
         }
       ];
       this._runStateRepo.recordExceptions(input.runsDir, state, entries);
-      this.postEscalations(input, state, task.id, entries);
+      this.postEscalations(input, state, task.id, entries, chain.headSha);
       console.log(
         chalk.red(
           `  [enforce] merge failed for ${task.id}: ${detail.slice(0, 300)}`
@@ -812,7 +1119,8 @@ export class RunHandler implements IRunHandler {
     input: RunTaskInput,
     state: RunState,
     taskId: string,
-    entries: ExceptionEntry[]
+    entries: ExceptionEntry[],
+    occurrenceKey?: string
   ): void {
     if (entries.length === 0) return;
     const evidenceIds = state.verdicts
@@ -828,6 +1136,10 @@ export class RunHandler implements IRunHandler {
       repoPath: input.repoPath,
       operator: input.operator,
       monitorPath,
+      // Wave 0: recurrence of the same escalation against a *new* task head
+      // must wake the human again — a resume against unchanged content must
+      // not. The head SHA is exactly that discriminator.
+      occurrenceKey,
       wakeDir: input.wakeDir
     });
     for (const title of outcome.posted) {
@@ -888,7 +1200,16 @@ export class RunHandler implements IRunHandler {
       const outcome = await this._sandboxDeploy.deploy({
         worktreePath,
         sha,
-        previous: state.sandbox
+        // The phase deploy delivers everything the wave merged, so its scope
+        // is the diff from the tip the run started at (SPEC-PRD-0011-P4 T-01).
+        baseSha: state.baseSha,
+        previous: state.sandbox,
+        ledger: this.ledgerRef(input, {
+          worktreePath,
+          sha,
+          trigger: 'phase-boundary',
+          taskId: 'phase'
+        })
       });
       outcome.verdict.taskId = 'phase';
       outcome.verdict.inputsDigest = digest;
@@ -915,6 +1236,11 @@ export class RunHandler implements IRunHandler {
       );
     }
 
+    // SPEC-PRD-0023-P1 T-02: the final task of the phase has merged, so the
+    // closeout PR is derived and opened (or refreshed) before the digest —
+    // which then links it (T-05).
+    const closeoutPrUrl = await this.closeoutStep(input, spec);
+
     // Post the phase digest with the merged SHAs and verdict evidence.
     if (input.chronicleRepo === undefined) {
       console.log(
@@ -922,7 +1248,17 @@ export class RunHandler implements IRunHandler {
       );
       return;
     }
-    const digestKey = stepKey('phase-digest', 'phase', digest);
+    // T-05: whether a closeout PR exists is part of the digest's inputs, so a
+    // phase digest posted before the closeout landed is re-posted once the
+    // link exists instead of staying cached without it. Re-posting writes the
+    // same artifact path and the queue dedupes the item, so this costs a file
+    // rewrite, not a duplicate.
+    const digestInputs = inputsDigest({
+      step: 'phase-digest',
+      mergedShas,
+      closeout: closeoutPrUrl ?? null
+    });
+    const digestKey = stepKey('phase-digest', 'phase', digestInputs);
     if (state.steps[digestKey] !== undefined) {
       console.log(chalk.gray('  [cached] phase digest already posted'));
       await this.maybeRetroStep(input, state, spec, digest);
@@ -946,12 +1282,13 @@ export class RunHandler implements IRunHandler {
       },
       verdicts: state.verdicts,
       exceptions: state.exceptions,
-      merges: merges as Array<{ taskId: string; mergedSha: string }>
+      merges: merges as Array<{ taskId: string; mergedSha: string }>,
+      ...(closeoutPrUrl !== undefined ? { closeoutPrUrl } : {})
     });
     this._runStateRepo.recordStep(input.runsDir, state, digestKey, {
       name: 'phase-digest',
       taskId: 'phase',
-      inputsDigest: digest,
+      inputsDigest: digestInputs,
       detail: posted.artifactPath,
       completedAt: new Date().toISOString()
     });
@@ -964,6 +1301,120 @@ export class RunHandler implements IRunHandler {
     // SPEC-BUG-retro-and-queued-plans-P1 T-01: same trigger as the digest
     // above, restricted to BUG-* runs.
     await this.maybeRetroStep(input, state, spec, digest);
+  }
+
+  /**
+   * SPEC-PRD-0023-P1 T-02 / T-03: derive and publish the phase's closeout PR
+   * once every task has merged. Returns the PR URL when one exists, which is
+   * what the digest links (T-05).
+   *
+   * @remarks
+   * Not step-cached, deliberately. The generator is idempotent by branch — it
+   * updates the same PR number rather than opening a second one — and the
+   * verdict set it derives from keeps changing while the phase finishes, so
+   * caching would freeze the closeout at whatever the first invocation
+   * happened to see. Shadow runs are skipped: they never merge for real, so
+   * there is nothing to close out.
+   *
+   * Failure is never fatal to the run. A closeout that cannot be generated
+   * (spec not on the default branch, `gh` refusing, verdicts unreadable)
+   * leaves a loud monitor line and no link — and because
+   * {@link phaseComplete} requires the PR, the phase then reports incomplete
+   * instead of quietly claiming otherwise.
+   */
+  private async closeoutStep(
+    input: CloseoutTarget,
+    spec: SpecDocument
+  ): Promise<string | undefined> {
+    if (input.shadow === true) {
+      console.log(
+        chalk.gray('  [skip] shadow run — no closeout PR (nothing merged)')
+      );
+      return undefined;
+    }
+
+    const specRelPath = path.relative(input.repoPath, input.specPath);
+    if (specRelPath.startsWith('..') || path.isAbsolute(specRelPath)) {
+      this.noteMonitor(
+        input,
+        `[closeout] spec ${input.specPath} is outside ${input.repoPath} — closeout skipped`
+      );
+      return undefined;
+    }
+
+    try {
+      const aggregate = this._closeoutAggregate.aggregate({
+        runsDir: input.runsDir,
+        runId: input.runId,
+        spec
+      });
+      const outcome = await this._closeout.generate({
+        repoPath: input.repoPath,
+        runsDir: input.runsDir,
+        runId: input.runId,
+        spec,
+        specRelPath: specRelPath.split(path.sep).join('/'),
+        aggregate
+      });
+
+      if (outcome.pr === undefined) {
+        this.noteMonitor(
+          input,
+          `[closeout] no closeout PR for ${spec.id} (${outcome.kind}): ${outcome.detail ?? 'no detail'}`
+        );
+        console.log(
+          chalk.yellow(
+            `  [closeout] ${outcome.kind} — ${outcome.detail ?? 'no closeout PR'}`
+          )
+        );
+        return undefined;
+      }
+
+      const status =
+        outcome.statusWritten === undefined
+          ? 'status unchanged'
+          : `status: ${outcome.statusWritten}`;
+      console.log(
+        chalk.green(
+          `  [closeout] ${outcome.kind} ${outcome.pr.url} — ` +
+            `${outcome.tickedCount} criteria ticked, ${outcome.remainderCount} remaining, ${status}`
+        )
+      );
+      this.noteMonitor(
+        input,
+        `[closeout] ${outcome.kind} ${outcome.pr.url} for ${spec.id} (${status})`
+      );
+      return outcome.pr.url;
+    } catch (err) {
+      const detail =
+        err instanceof WorkflowError
+          ? [err.message, ...err.details].join(': ')
+          : err instanceof Error
+            ? err.message
+            : String(err);
+      this.noteMonitor(
+        input,
+        `[closeout] WARNING: closeout generation failed for ${spec.id} — the phase will report incomplete: ${detail.slice(0, 500)}`
+      );
+      console.log(
+        chalk.red(`  [closeout] failed: ${detail.slice(0, 300)}`)
+      );
+      return undefined;
+    }
+  }
+
+  async closeout(input: CloseoutCliInput): Promise<void> {
+    const spec = this._specDocRepo.read(input.specPath);
+    const url = await this.closeoutStep(input, spec);
+    if (url === undefined) {
+      console.log(
+        chalk.yellow(
+          `  No closeout PR for ${spec.id} — see the monitor log for why.`
+        )
+      );
+      return;
+    }
+    console.log(chalk.green(`  Closeout PR for ${spec.id}: ${url}`));
   }
 
   /** SPEC-BUG-retro-and-queued-plans-P1 T-01: dispatch the retro only for `BUG-*` specs. */
@@ -1129,7 +1580,14 @@ export class RunHandler implements IRunHandler {
     const outcome = await this._sandboxDeploy.deploy({
       worktreePath,
       sha: revertSha,
-      previous: state.sandbox
+      baseSha,
+      previous: state.sandbox,
+      ledger: this.ledgerRef(input, {
+        worktreePath,
+        sha: revertSha,
+        trigger: 'merge',
+        taskId: 'phase-revert'
+      })
     });
     outcome.verdict.taskId = 'phase-revert';
     this._runStateRepo.appendVerdict(input.runsDir, state, outcome.verdict);
@@ -1312,7 +1770,9 @@ export class RunHandler implements IRunHandler {
 
     if (result.deduped) {
       console.log(
-        chalk.yellow(`  [queue] already queued (dedup by spec path): ${specPath}`)
+        chalk.yellow(
+          `  [queue] already queued (dedup by spec path): ${specPath}`
+        )
       );
       console.log(`  record: ${result.path}`);
       return;
@@ -1371,7 +1831,7 @@ export class RunHandler implements IRunHandler {
    * either way, and the pipeline continues so the remaining gates still
    * report honestly (CI will be blocked without a pushed branch).
    */
-  private prStep(
+  private async prStep(
     input: RunTaskInput,
     state: RunState,
     task: SpecTask,
@@ -1379,7 +1839,7 @@ export class RunHandler implements IRunHandler {
     branch: string,
     worktreePath: string,
     chain: { implDigest?: string; headSha: string }
-  ): void {
+  ): Promise<void> {
     const digest = inputsDigest({ ...chain, step: 'pr' });
     const key = stepKey('pr', task.id, digest);
     const cached = state.steps[key];
@@ -1390,33 +1850,25 @@ export class RunHandler implements IRunHandler {
       return;
     }
 
-    try {
-      const pr = this._prLifecycle.openTaskPr({
+    // T-04: `openTaskPr` is find-or-create, so an attempt that pushed but
+    // failed before the PR call is resumed rather than duplicated — the
+    // retry finds the branch's existing PR instead of opening a second one.
+    const attempt = await this.withRetry(input, `pr:${task.id}`, async () =>
+      this._prLifecycle.openTaskPr({
         worktreePath,
         branch,
         runId: input.runId,
         spec,
         task,
         verdicts: state.verdicts.filter(verdict => verdict.taskId === task.id)
-      });
-      this._runStateRepo.recordTaskPrUrl(input.runsDir, state, task.id, pr.url);
-      this._runStateRepo.recordStep(input.runsDir, state, key, {
-        name: 'pr',
-        taskId: task.id,
-        inputsDigest: digest,
-        detail: pr.url,
-        completedAt: new Date().toISOString()
-      });
-      console.log(
-        chalk.green(
-          `  [pr] ${pr.created ? 'opened' : 'reusing'} ${pr.url} for ${branch}`
-        )
-      );
-    } catch (err) {
+      })
+    );
+
+    if (attempt.kind === 'exhausted') {
       const detail =
-        err instanceof WorkflowError
-          ? [err.message, ...err.details].join(': ')
-          : String(err);
+        attempt.error instanceof WorkflowError
+          ? [attempt.error.message, ...attempt.error.details].join(': ')
+          : attempt.error.message;
       this._runStateRepo.appendVerdict(input.runsDir, state, {
         gate: 'pr',
         outcome: 'blocked',
@@ -1431,7 +1883,24 @@ export class RunHandler implements IRunHandler {
           `  [pr] push/PR failed for ${branch}: ${detail.slice(0, 300)}`
         )
       );
+      return;
     }
+
+    const pr = attempt.value;
+    this._runStateRepo.recordTaskPrUrl(input.runsDir, state, task.id, pr.url);
+    this._runStateRepo.recordStep(input.runsDir, state, key, {
+      name: 'pr',
+      taskId: task.id,
+      inputsDigest: digest,
+      detail: pr.url,
+      recovery: retried(attempt.history),
+      completedAt: new Date().toISOString()
+    });
+    console.log(
+      chalk.green(
+        `  [pr] ${pr.created ? 'opened' : 'reusing'} ${pr.url} for ${branch}`
+      )
+    );
   }
 
   /**
@@ -1458,23 +1927,42 @@ export class RunHandler implements IRunHandler {
     const recordDigest = inputsDigest({ ...chain, step: 'chronicle-record' });
     const recordKey = stepKey('chronicle-record', task.id, recordDigest);
     if (state.steps[recordKey] === undefined) {
-      const recorded = await this._chronicle.record({
-        chronicleRepo: input.chronicleRepo,
-        spec,
-        state
-      });
-      this._runStateRepo.recordStep(input.runsDir, state, recordKey, {
-        name: 'chronicle-record',
-        taskId: task.id,
-        inputsDigest: recordDigest,
-        detail: `${recorded.artifactPaths.length} artifacts`,
-        completedAt: new Date().toISOString()
-      });
-      console.log(
-        chalk.gray(
-          `  [chronicle] ${recorded.artifactPaths.length} artifacts committed`
-        )
+      // T-04: a Chronicle commit is a git push against a separate ledger
+      // repo — the most network-flaky step in the pipeline, and one whose
+      // failure used to cost the whole task. Re-committing an already
+      // written artifact is a no-op on a clean tree, so retrying is safe.
+      const attempt = await this.withRetry(
+        input,
+        `chronicle-record:${task.id}`,
+        async () =>
+          this._chronicle.record({
+            chronicleRepo: input.chronicleRepo as string,
+            spec,
+            state
+          })
       );
+      if (attempt.kind === 'exhausted') {
+        console.log(
+          chalk.red(
+            `  [chronicle] artifact commit failed after retries: ${attempt.error.message.slice(0, 300)}`
+          )
+        );
+      } else {
+        const recorded = attempt.value;
+        this._runStateRepo.recordStep(input.runsDir, state, recordKey, {
+          name: 'chronicle-record',
+          taskId: task.id,
+          inputsDigest: recordDigest,
+          detail: `${recorded.artifactPaths.length} artifacts`,
+          recovery: retried(attempt.history),
+          completedAt: new Date().toISOString()
+        });
+        console.log(
+          chalk.gray(
+            `  [chronicle] ${recorded.artifactPaths.length} artifacts committed`
+          )
+        );
+      }
     } else {
       console.log(
         chalk.gray('  [cached] chronicle artifacts already committed')
@@ -1549,7 +2037,8 @@ export class RunHandler implements IRunHandler {
     state: RunState,
     task: SpecTask,
     worktreePath: string,
-    digest: string
+    digest: string,
+    baseSha?: string
   ): Promise<{ verdict: GateVerdict; healthReport?: string }> {
     const key = stepKey('sandbox', task.id, digest);
     const cached = state.steps[key];
@@ -1558,11 +2047,46 @@ export class RunHandler implements IRunHandler {
       return { verdict: cached.verdict, healthReport: cached.detail };
     }
 
-    const sandbox = await this._sandboxDeploy.deploy({
-      worktreePath,
-      sha: this._gitRepo.headSha(worktreePath),
-      previous: state.sandbox
-    });
+    // T-04: only a *thrown* deploy error is retried. An unhealthy sandbox
+    // returns a red verdict, and re-running the deploy to see if the gate
+    // changes its mind would make the sandbox gate advisory.
+    const attempt = await this.withRetry(
+      input,
+      `sandbox:${task.id}`,
+      async () => {
+        const sha = this._gitRepo.headSha(worktreePath);
+        return this._sandboxDeploy.deploy({
+          worktreePath,
+          sha,
+          baseSha,
+          previous: state.sandbox,
+          ledger: this.ledgerRef(input, {
+            worktreePath,
+            sha,
+            trigger: 'task',
+            taskId: task.id
+          })
+        });
+      }
+    );
+    if (attempt.kind === 'exhausted') {
+      const verdict: GateVerdict = {
+        gate: 'sandbox',
+        outcome: 'blocked',
+        wouldEscalate: true,
+        reasons: [
+          `sandbox deploy failed after retries: ${attempt.error.message.slice(0, 400)}`
+        ],
+        recordedAt: new Date().toISOString(),
+        taskId: task.id,
+        inputsDigest: digest
+      };
+      this._runStateRepo.appendVerdict(input.runsDir, state, verdict);
+      this.printVerdict(verdict);
+      return { verdict };
+    }
+
+    const sandbox = attempt.value;
     sandbox.verdict.taskId = task.id;
     sandbox.verdict.inputsDigest = digest;
     if (sandbox.healthReport !== undefined) {
@@ -1585,6 +2109,7 @@ export class RunHandler implements IRunHandler {
       inputsDigest: digest,
       verdict: sandbox.verdict,
       detail: sandbox.healthReport,
+      recovery: retried(attempt.history),
       completedAt: new Date().toISOString()
     });
     this.printVerdict(sandbox.verdict);
@@ -1653,7 +2178,8 @@ export class RunHandler implements IRunHandler {
         runId: input.runId,
         task,
         healthReport,
-        precomputedTestTier
+        precomputedTestTier,
+        progress: { set: ctx => this._heartbeat.setContext(ctx) }
       });
     } catch (err) {
       if (err instanceof WorkflowError && err.code === 'SPEC_MALFORMED') {
@@ -1687,3 +2213,17 @@ export class RunHandler implements IRunHandler {
     }
   }
 }
+
+/**
+ * The recovery history worth persisting on a step, or `undefined` when the
+ * step succeeded first try.
+ *
+ * A history on every step would make "this step was flaky" invisible — the
+ * signal is the presence of the record, so a clean run must not carry one.
+ */
+const retried = (history: RecoveryHistory): RecoveryHistory | undefined =>
+  history.attempts.some(
+    entry => entry.action !== 'attempt' || entry.outcome !== 'succeeded'
+  )
+    ? history
+    : undefined;

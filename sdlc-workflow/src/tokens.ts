@@ -11,6 +11,7 @@ export const WORKFLOW_TOKENS = {
   GitRepository: Symbol.for('GitRepository'),
   AgentRunnerRepository: Symbol.for('AgentRunnerRepository'),
   RunStateRepository: Symbol.for('RunStateRepository'),
+  RunLockRepository: Symbol.for('RunLockRepository'),
   SurfaceMapRepository: Symbol.for('SurfaceMapRepository'),
   ReviewChecklistRepository: Symbol.for('ReviewChecklistRepository'),
   ContractRepository: Symbol.for('ContractRepository'),
@@ -38,11 +39,18 @@ export const WORKFLOW_TOKENS = {
   WakeInboxRepository: Symbol.for('WakeInboxRepository'),
   PrLifecycleService: Symbol.for('PrLifecycleService'),
   EscalationService: Symbol.for('EscalationService'),
+  GateRemediationService: Symbol.for('GateRemediationService'),
+  RetryExecutorService: Symbol.for('RetryExecutorService'),
   HeartbeatService: Symbol.for('HeartbeatService'),
   HeartbeatWatchService: Symbol.for('HeartbeatWatchService'),
   ProcessDetachRepository: Symbol.for('ProcessDetachRepository'),
   SuperviseExitRepository: Symbol.for('SuperviseExitRepository'),
   SuperviseService: Symbol.for('SuperviseService'),
   // SPEC-BUG-retro-and-queued-plans T-02
-  RunQueueRepository: Symbol.for('RunQueueRepository')
+  RunQueueRepository: Symbol.for('RunQueueRepository'),
+  // SPEC-PRD-0022-P1 T-01
+  DeployRecordRepository: Symbol.for('DeployRecordRepository'),
+  // SPEC-PRD-0023-P1 T-01 / T-02
+  CloseoutAggregateService: Symbol.for('CloseoutAggregateService'),
+  CloseoutService: Symbol.for('CloseoutService')
 } as const;
