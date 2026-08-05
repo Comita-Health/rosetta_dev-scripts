@@ -77,6 +77,16 @@ describe('GitRepository', () => {
     expect(execMock.mock.calls[1][0]).toContain('rev-parse "origin/main"');
   });
 
+  it('resolves a ref to the tree it points at (SPEC-PRD-0022-P1 T-01)', () => {
+    // Content, not commit: this is the deploy-dedup key, so a merge commit and
+    // the PR head it merged have to land on the same answer.
+    execMock.mockReturnValue('tree789\n');
+    expect(repo.treeSha('/repo', 'merge-commit')).toBe('tree789');
+    expect(execMock.mock.calls[0][0]).toContain(
+      'rev-parse "merge-commit^{tree}"'
+    );
+  });
+
   it('reads the default branch from origin/HEAD, falling back to main', () => {
     execMock.mockReturnValue('refs/remotes/origin/trunk\n');
     expect(repo.defaultBranch('/repo')).toBe('trunk');
@@ -94,10 +104,36 @@ describe('GitRepository', () => {
     expect(repo.defaultBranch('/repo')).toBe('build-env/dev');
   });
 
+  it('falls back to main when origin/HEAD points somewhere unexpected', () => {
+    execMock.mockReturnValue('refs/heads/something-else\n');
+    expect(repo.defaultBranch('/repo')).toBe('main');
+
+    execMock.mockReturnValue('refs/remotes/origin/\n');
+    expect(repo.defaultBranch('/repo')).toBe('main');
+  });
+
+  it('pushes a branch and sets its upstream', () => {
+    execMock.mockReturnValue('');
+    repo.push('/wt', 'sdlc/run-1/T-01');
+    expect(execMock.mock.calls[0][0]).toContain(
+      'push -u origin "sdlc/run-1/T-01"'
+    );
+  });
+
+  it('lists tracked and unignored files, dropping blank lines', () => {
+    execMock.mockReturnValue('src/a.ts\n  src/b.ts  \n\n');
+    expect(repo.listFiles('/repo')).toEqual(['src/a.ts', 'src/b.ts']);
+    expect(execMock.mock.calls[0][0]).toContain('--exclude-standard');
+  });
+
   it('returns file contents at a ref, or null when absent', () => {
     execMock.mockReturnValue('# spec\n');
-    expect(repo.fileAtRef('/repo', 'origin/main', 'specs/x.md')).toBe('# spec\n');
-    expect(execMock.mock.calls[0][0]).toContain('show "origin/main:specs/x.md"');
+    expect(repo.fileAtRef('/repo', 'origin/main', 'specs/x.md')).toBe(
+      '# spec\n'
+    );
+    expect(execMock.mock.calls[0][0]).toContain(
+      'show "origin/main:specs/x.md"'
+    );
 
     execMock.mockImplementation(() => {
       throw new Error('fatal: path does not exist');
@@ -206,7 +242,9 @@ describe('GitRepository', () => {
       const child = new FakeChild();
       spawnMock.mockReturnValue(child);
 
-      expect(() => repo.removeWorktreeAsync('/repo', worktreePath)).not.toThrow();
+      expect(() =>
+        repo.removeWorktreeAsync('/repo', worktreePath)
+      ).not.toThrow();
       child.stderr.emit('data', Buffer.from('fatal: worktree is locked'));
       child.emit('close', 1);
 
@@ -219,12 +257,12 @@ describe('GitRepository', () => {
       const child = new FakeChild();
       spawnMock.mockReturnValue(child);
 
-      expect(() => repo.removeWorktreeAsync('/repo', worktreePath)).not.toThrow();
+      expect(() =>
+        repo.removeWorktreeAsync('/repo', worktreePath)
+      ).not.toThrow();
       child.emit('error', new Error('ENOENT'));
 
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('ENOENT')
-      );
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('ENOENT'));
     });
   });
 });

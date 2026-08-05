@@ -223,6 +223,36 @@ export interface SandboxRecord {
   sha: string;
   status: 'healthy' | 'failed';
   recordedAt: string; // ISO timestamp
+  /**
+   * Tree-content SHA of `sha` (SPEC-PRD-0022-P1 T-01). Recorded alongside the
+   * commit so dedup can ask "is this *content* live?" — a merge commit and the
+   * PR head it merged have different commit SHAs and the same tree.
+   */
+  contentSha?: string;
+}
+
+/**
+ * What caused a sandbox deploy to be dispatched (SPEC-PRD-0022-P1 T-01).
+ *
+ * `push` covers deploys the engine did not dispatch itself — a CI workflow
+ * reacting to the push — which is exactly the trigger phase-boundary dispatch
+ * has to avoid racing.
+ */
+export type DeployTrigger = 'task' | 'merge' | 'phase-boundary' | 'push';
+
+/** One event in the deploy ledger: a dispatch, its outcome, or a skip. */
+export interface DeployRecord {
+  /** `git rev-parse <commit>^{tree}` — the dedup key. */
+  contentSha: string;
+  commitSha: string;
+  trigger: DeployTrigger;
+  taskId?: string;
+  status: 'in-flight' | 'healthy' | 'failed' | 'reused';
+  /** Commit SHA whose deploy this reuses. Set only when `status` is `reused`. */
+  reusedFrom?: string;
+  /** Workflow run URL parsed from deploy output, when the script prints one. */
+  workflowRef?: string;
+  recordedAt: string;
 }
 
 export type CriterionTier = 'test' | 'agent' | 'manual';

@@ -132,6 +132,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
   let prCreate: jest.Mock;
   let gitPush: jest.Mock;
   let gitFetch: jest.Mock;
+  let treeSha: jest.Mock;
   let removeWorktreeAsync: jest.Mock;
   let specRead: jest.Mock;
   let escalationPost: jest.Mock;
@@ -278,6 +279,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
     revertMerge = jest.fn();
     gitPush = jest.fn();
     gitFetch = jest.fn();
+    treeSha = jest.fn().mockReturnValue('tree-sha');
     removeWorktreeAsync = jest.fn();
     prCreate = jest.fn().mockReturnValue({
       url: 'https://github.com/org/repo/pull/99',
@@ -374,6 +376,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
         push: gitPush,
         fetch: gitFetch,
         resolveSha: jest.fn().mockReturnValue('main-sha'),
+        treeSha,
         defaultBranch: jest.fn().mockReturnValue('main'),
         fileAtRef: jest.fn(),
         pathDiffersFromRef: jest.fn(),
@@ -493,7 +496,18 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
     expect(deploy).toHaveBeenCalledWith({
       worktreePath: '/runs/run-1/worktrees/T-01',
       sha: 'head-sha',
-      previous: undefined
+      // SPEC-PRD-0011-P4 T-01: the deploy scope is the task's integration tip,
+      // the same base the envelope and reviewer gates diff against.
+      baseSha: 'base-sha',
+      previous: undefined,
+      // SPEC-PRD-0022-P1 T-01: the tree the commit points at is the dedup key.
+      ledger: {
+        runsDir: '/runs',
+        runId: 'run-1',
+        contentSha: 'tree-sha',
+        trigger: 'task',
+        taskId: 'T-01'
+      }
     });
     expect(verify).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -508,6 +522,20 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
       'run-1',
       'T-01-sandbox-health',
       'sha=head-sha ok'
+    );
+  });
+
+  it('disables deploy dedup for a dispatch whose tree it cannot resolve', async () => {
+    // A missing content key costs a possibly redundant deploy. Failing the run
+    // instead would trade that for no delivery at all.
+    treeSha.mockImplementation(() => {
+      throw new Error('fatal: not a tree object');
+    });
+
+    await handler.runTask(INPUT);
+
+    expect(deploy).toHaveBeenCalledWith(
+      expect.objectContaining({ ledger: undefined })
     );
   });
 
@@ -1253,7 +1281,22 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
       // dedicated _phase worktree — not a task branch.
       const calls = phaseDeployCalls();
       expect(calls).toHaveLength(1);
-      expect(calls[0][0]).toEqual(expect.objectContaining({ sha: 'main-sha' }));
+      expect(calls[0][0]).toEqual(
+        expect.objectContaining({
+          sha: 'main-sha',
+          // The phase ships everything the wave merged, so its deploy range
+          // starts at the tip the run began from (SPEC-PRD-0011-P4 T-01)...
+          baseSha: 'base-sha',
+          // ...and it enters the ledger as a phase-boundary trigger, which is
+          // what lets it stand down for a push deploy of the same content
+          // (SPEC-PRD-0022-P1 T-03).
+          ledger: expect.objectContaining({
+            contentSha: 'tree-sha',
+            trigger: 'phase-boundary',
+            taskId: 'phase'
+          })
+        })
+      );
       // The phase digest carries the merged SHAs and the recorded verdicts.
       const phasePost = digestPost.mock.calls.find(
         ([arg]) => arg.taskId === 'phase'
@@ -1391,6 +1434,8 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
         );
         expect(revertDeploys).toHaveLength(1);
         expect(Object.keys(revertDeploys[0][0]).sort()).toEqual([
+          'baseSha',
+          'ledger',
           'previous',
           'sha',
           'worktreePath'

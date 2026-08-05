@@ -66,11 +66,11 @@ when known.
 
 ### Acceptance criteria
 
-- [ ] test: deploy + health `run()` calls include `SDLC_SANDBOX_BASE_SHA` when
+- [x] test: deploy + health `run()` calls include `SDLC_SANDBOX_BASE_SHA` when
       `baseSha` is provided on the input.
-- [ ] test: when `baseSha` is omitted, only `SDLC_SANDBOX_SHA` is exported
+- [x] test: when `baseSha` is omitted, only `SDLC_SANDBOX_SHA` is exported
       (scripts may fall back to `git merge-base`).
-- [ ] test: existing SHA-idempotent “already healthy” behavior is unchanged.
+- [x] test: existing SHA-idempotent “already healthy” behavior is unchanged.
 
 ## Task T-02: Admissions ignore list + path decision helper (companion PR)
 
@@ -139,9 +139,9 @@ vars.
 
 ### Acceptance criteria
 
-- [ ] docs: README states both `SDLC_SANDBOX_SHA` and `SDLC_SANDBOX_BASE_SHA`
+- [x] docs: README states both `SDLC_SANDBOX_SHA` and `SDLC_SANDBOX_BASE_SHA`
       and that path skip/thin-dispatch is repo-owned.
-- [ ] docs: CHANGELOG mentions SPEC-PRD-0011-P4 / path-aware sandbox.
+- [x] docs: CHANGELOG mentions SPEC-PRD-0011-P4 / path-aware sandbox.
 
 ## Out of scope
 

@@ -109,6 +109,34 @@
   printed "detached", exited 0, and the operator walked away from a run that
   died a second later. It now watches for up to 8s and stops early on evidence
   either way: the child's own `supervise.exit` record, or a dead pid.
+- **sdlc-workflow:** the sandbox contract is now **path-aware**
+  (SPEC-PRD-0011-P4 T-01/T-04). Deploy and health commands both receive
+  `SDLC_SANDBOX_BASE_SHA` alongside `SDLC_SANDBOX_SHA` — the task's integration
+  tip for a task deploy, the run's starting tip at the phase boundary, the
+  default-branch tip for a veto revert — so a repo-owned script can decide from
+  `base..head` whether anything deployable changed. Observed cost of not having
+  it: a task that touched only an inventory doc and shared unit tests still
+  dispatched both application stacks and waited for the live app to serve that
+  SHA. Path policy stays repo-owned; the engine publishes the range and no
+  filter. The variable is exported only when non-empty, because an empty value
+  looks "set" to a shell test and would make a script conclude nothing changed
+  and skip a real deploy.
+- **sdlc-workflow:** deploys are recorded in an append-only ledger keyed by
+  **tree content**, and three kinds of redundant deploy are now skipped
+  (SPEC-PRD-0022-P1 T-01/T-02/T-03). `<runsDir>/<runId>/deploys.jsonl` captures
+  each dispatch's content SHA, commit, trigger, workflow run URL and terminal
+  outcome, with the in-flight marker written before dispatch. Content already
+  live under a different commit is **reused** rather than redeployed — a merge
+  commit's SHA always differs from the PR head it merged even when the tree is
+  byte-identical, which is why commit comparison kept paying twice, and why the
+  reuse path skips the health probe too (the live app answers with the commit it
+  was deployed from). A content SHA another trigger is already deploying is
+  never dispatched a second time: the phase boundary stands down for an
+  in-flight push deploy and only probes health, so a lost race costs a retry on
+  a later wave instead of two jobs fighting over one target. Reuse and skip
+  decisions are recorded as their own events, because "no deploy happened" must
+  be distinguishable from a dedup bug that lost the dispatch. An unresolvable
+  tree SHA disables the ledger for that dispatch rather than failing the run.
 
 - **sdlc-workflow:** `queue-run --spec <path> --repo <path> …` writes a
   durable FIFO launch record (`<runsDir>/queue/<n>.json`, deduped by spec

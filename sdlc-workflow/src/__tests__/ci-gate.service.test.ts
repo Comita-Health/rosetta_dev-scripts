@@ -108,6 +108,7 @@ describe('CiGateService (P3 T-03 live monitor + bounded fix cycle)', () => {
         diffText: jest.fn(),
         fetch: jest.fn(),
         resolveSha: jest.fn(),
+        treeSha: jest.fn(),
         defaultBranch: jest.fn(),
         fileAtRef: jest.fn(),
         pathDiffersFromRef: jest.fn(),

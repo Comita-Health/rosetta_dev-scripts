@@ -55,6 +55,7 @@ describe('PrLifecycleService (P3 T-02)', () => {
         diffText: jest.fn(),
         fetch: jest.fn(),
         resolveSha: jest.fn(),
+        treeSha: jest.fn(),
         defaultBranch: jest.fn(),
         fileAtRef: jest.fn(),
         pathDiffersFromRef: jest.fn(),

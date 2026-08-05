@@ -388,7 +388,9 @@ declares them:
 ```jsonc
 // .sdlc/environments.json — only the "sandbox" entry is ever read (S-04:
 // no code path can reach any other environment). Commands receive the
-// deployed SHA as SDLC_SANDBOX_SHA; health output must echo it.
+// deployed SHA as SDLC_SANDBOX_SHA and, when the engine knows it, the base
+// of the change as SDLC_SANDBOX_BASE_SHA; health output must echo the
+// deployed SHA.
 {
   "sandbox": {
     "deployCommand": "git push origin HEAD:build-env/dev && gh run watch --exit-status",
@@ -428,6 +430,68 @@ second, fail-closed exception is synthesis time: `decompose` refuses to
 write a spec whose `forbiddenSurfaces` cannot all resolve against
 `surfaces.json` (a missing map resolves no labels), because a label no gate
 can enforce is a silent compliance hole, not a degradable check.
+
+### Path-aware deploy: `SDLC_SANDBOX_BASE_SHA` (SPEC-PRD-0011-P4)
+
+Both sandbox commands receive two variables:
+
+| Variable                | Meaning                                                                              |
+| ----------------------- | ------------------------------------------------------------------------------------ |
+| `SDLC_SANDBOX_SHA`      | The commit being delivered. Health output **must** contain it verbatim.              |
+| `SDLC_SANDBOX_BASE_SHA` | The base that commit is a change _against_, when the engine knows it. May be absent. |
+
+The base is the task's integration tip for a task deploy (the same ref the
+envelope and reviewer gates diff against), the run's starting tip for the
+phase-boundary deploy, and the default-branch tip for a veto revert. It is
+exported only when non-empty: an empty value looks "set" to
+`[ -n "$SDLC_SANDBOX_BASE_SHA" ]`, so a script would take the range path with
+no range, conclude nothing changed, and silently skip a real deploy. When it
+is absent a script should fall back to its own `git merge-base`.
+
+**Path policy is repo-owned, deliberately.** The engine publishes the range
+and nothing more. What counts as deployable differs per repo — a filter baked
+into the engine would be wrong for the next consumer, and a repo's own
+`.github/path-filters.yml` applies to `push`, not to a `workflow_dispatch` the
+engine triggers. A consumer that wants a fast-pass for docs-only or test-only
+changes decides that in its deploy script, exits 0 without dispatching, and
+has its health script print `SDLC_SANDBOX_SHA` with a skip marker so the SHA
+echo contract still holds.
+
+### Deploy ledger: content-keyed dedup and race avoidance (SPEC-PRD-0022-P1)
+
+Every deploy is recorded in `<runsDir>/<runId>/deploys.jsonl`, an append-only
+ledger keyed by the **tree-content SHA** (`git rev-parse <commit>^{tree}`)
+rather than the commit. A merge commit's SHA always differs from the PR head
+it merged even when the tree is byte-identical, so commit comparison reported
+"never deployed" for content that was already live and paid for the deploy
+twice.
+
+Each record carries the content SHA, the commit, the trigger (`task`, `merge`,
+`phase-boundary`, `push`), the workflow run URL when the deploy script printed
+one, and a status of `in-flight`, `healthy`, `failed`, or `reused`. The
+in-flight marker is written _before_ dispatch, because the window a concurrent
+trigger needs to see is exactly the one where a deploy is running.
+
+Three skips come out of it:
+
+- **Content live under another commit → reuse.** Neither deploy nor health
+  runs, and a `reused` record names what it reused. The health probe is
+  skipped on purpose: the live app answers with the commit it was deployed
+  from, so probing it for the new SHA would fail on identical content. The
+  ledger record is the evidence.
+- **A deploy of this content is in flight → dispatch skipped, health probed.**
+  This is the phase-boundary-versus-push race. A second dispatch cannot make
+  the target converge sooner and can thrash it; if health has not caught up
+  the verdict is red and a later wave retries.
+- **This exact commit already healthy → deploy skipped, health verified.** The
+  pre-existing SHA idempotency, now also satisfied from the ledger rather than
+  only from run state — run state keeps just the latest deploy, so a later
+  deploy overwriting the record used to force a redundant redeploy.
+
+Ledger records survive restart and are readable by run ID after the run ends.
+When git cannot resolve a tree SHA the ledger is skipped for that dispatch and
+the deploy proceeds as it did before: a missing content key costs at most one
+redundant deploy, which is a better trade than failing delivery outright.
 
 ### Tree-resolution rule for evaluation-time `.sdlc/` reads
 

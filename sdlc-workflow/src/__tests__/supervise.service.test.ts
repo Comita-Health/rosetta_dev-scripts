@@ -141,6 +141,7 @@ describe('SuperviseService', () => {
       diffText: jest.fn(),
       push: jest.fn(),
       resolveSha: jest.fn(),
+      treeSha: jest.fn(),
       revertMerge: jest.fn(),
       stageAll: jest.fn(),
       commit: jest.fn(),

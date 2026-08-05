@@ -40,6 +40,17 @@ export interface IGitRepository {
   /** Resolve any ref (e.g. `origin/main`) to a SHA. */
   resolveSha(repoPath: string, ref: string): string;
   /**
+   * SHA of the *tree* a ref points at — what the commit would deploy, with
+   * no history, author or message in it (SPEC-PRD-0022-P1 T-01).
+   *
+   * @remarks
+   * This is the deploy-dedup key. A merge commit's SHA always differs from the
+   * PR head it merged, but a fast-forward-equivalent merge produces the same
+   * tree, so commit-SHA comparison reports "not deployed" for content that is
+   * already live and pays for the deploy twice.
+   */
+  treeSha(repoPath: string, ref: string): string;
+  /**
    * Repo-relative paths of every tracked and untracked-but-not-ignored file
    * in the checkout — the tree envelope grounding runs against (#35).
    */
@@ -131,6 +142,10 @@ export class GitRepository implements IGitRepository {
 
   resolveSha(repoPath: string, ref: string): string {
     return git(repoPath, `rev-parse "${ref}"`).trim();
+  }
+
+  treeSha(repoPath: string, ref: string): string {
+    return git(repoPath, `rev-parse "${ref}^{tree}"`).trim();
   }
 
   listFiles(repoPath: string): string[] {

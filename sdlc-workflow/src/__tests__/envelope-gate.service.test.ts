@@ -47,6 +47,7 @@ describe('EnvelopeGateService (T-02)', () => {
         push: jest.fn(),
         fetch: jest.fn(),
         resolveSha: jest.fn(),
+        treeSha: jest.fn(),
         defaultBranch: jest.fn(),
         fileAtRef: jest.fn(),
         pathDiffersFromRef: jest.fn(),

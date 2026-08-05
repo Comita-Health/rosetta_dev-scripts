@@ -140,6 +140,10 @@ import {
   IRetryExecutorService
 } from './services/retry-executor.service';
 import {
+  DeployRecordRepository,
+  IDeployRecordRepository
+} from './repositories/deploy-record.repository';
+import {
   HeartbeatService,
   IHeartbeatService
 } from './services/heartbeat.service';
@@ -291,6 +295,9 @@ container
 container
   .bind<IRetryExecutorService>(WORKFLOW_TOKENS.RetryExecutorService)
   .to(RetryExecutorService);
+container
+  .bind<IDeployRecordRepository>(WORKFLOW_TOKENS.DeployRecordRepository)
+  .to(DeployRecordRepository);
 container
   .bind<IHeartbeatService>(WORKFLOW_TOKENS.HeartbeatService)
   .to(HeartbeatService);

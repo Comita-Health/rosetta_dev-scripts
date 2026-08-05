@@ -47,5 +47,7 @@ export const WORKFLOW_TOKENS = {
   SuperviseExitRepository: Symbol.for('SuperviseExitRepository'),
   SuperviseService: Symbol.for('SuperviseService'),
   // SPEC-BUG-retro-and-queued-plans T-02
-  RunQueueRepository: Symbol.for('RunQueueRepository')
+  RunQueueRepository: Symbol.for('RunQueueRepository'),
+  // SPEC-PRD-0022-P1 T-01
+  DeployRecordRepository: Symbol.for('DeployRecordRepository')
 } as const;

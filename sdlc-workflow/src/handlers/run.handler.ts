@@ -30,7 +30,10 @@ import type {
   IRetryExecutorService,
   RetryOutcome
 } from '../services/retry-executor.service';
-import type { ISandboxDeployService } from '../services/sandbox-deploy.service';
+import type {
+  DeployLedgerRef,
+  ISandboxDeployService
+} from '../services/sandbox-deploy.service';
 import type {
   IVerificationService,
   VerificationOutcome
@@ -38,6 +41,7 @@ import type {
 import { WORKFLOW_TOKENS } from '../tokens';
 import {
   CriterionVerdict,
+  DeployTrigger,
   ExceptionEntry,
   GateVerdict,
   RecoveryHistory,
@@ -151,6 +155,18 @@ export interface QueueRunCliInput {
 
 export interface QueueStatusCliInput {
   runsDir: string;
+}
+
+/**
+ * The minimum an operation needs to find the run's `monitor.log` and deploy
+ * ledger. Both the task pipeline and `check-veto` deploy sandboxes, and
+ * `check-veto` has no spec or parallelism, so the shared helpers ask for the
+ * run identity rather than a whole `RunTaskInput`.
+ */
+interface MonitorTarget {
+  runsDir: string;
+  runId: string;
+  monitorPath?: string;
 }
 
 export interface CheckVetoInput {
@@ -527,7 +543,11 @@ export class RunHandler implements IRunHandler {
       state,
       task,
       worktreePath,
-      inputsDigest({ ...chain, step: 'sandbox' })
+      inputsDigest({ ...chain, step: 'sandbox' }),
+      // SPEC-PRD-0011-P4 T-01: the deploy contract scopes itself to what this
+      // task actually changed, which is the diff against the tip it branched
+      // from — the same base the envelope and reviewer gates judge.
+      gateBaseRef
     );
 
     this._heartbeat.setContext({
@@ -732,7 +752,7 @@ export class RunHandler implements IRunHandler {
   }
 
   /** Append to the run's live monitor log (explicit override, else default). */
-  private noteMonitor(input: RunTaskInput, line: string): void {
+  private noteMonitor(input: MonitorTarget, line: string): void {
     appendMonitorLine(
       input.monitorPath ?? path.join(input.runsDir, input.runId, 'monitor.log'),
       line
@@ -779,6 +799,49 @@ export class RunHandler implements IRunHandler {
           } attempts — escalating`
         )
     });
+  }
+
+  /**
+   * Every sandbox deploy in the engine resolves its ledger identity here
+   * (SPEC-PRD-0022-P1 T-01), so dedup and race avoidance in
+   * `SandboxDeployService` see a complete ledger by construction.
+   *
+   * The key is **tree content**, not commit: a merge commit's SHA always
+   * differs from the PR head it merged, so commit comparison called
+   * already-live content "not deployed" and paid for the deploy twice.
+   *
+   * @remarks
+   * Returns `undefined` when git cannot resolve the tree, which disables the
+   * ledger for that call rather than failing the run — without a content key
+   * every deploy simply dispatches as it did before. Trading a redundant
+   * deploy for a dead run would be the wrong way round.
+   */
+  private ledgerRef(
+    input: MonitorTarget,
+    dispatch: {
+      worktreePath: string;
+      sha: string;
+      trigger: DeployTrigger;
+      taskId?: string;
+    }
+  ): DeployLedgerRef | undefined {
+    let contentSha: string;
+    try {
+      contentSha = this._gitRepo.treeSha(dispatch.worktreePath, dispatch.sha);
+    } catch {
+      this.noteMonitor(
+        input,
+        `[deploy] no content SHA for ${dispatch.sha.slice(0, 12)} — deploy dedup disabled for this dispatch`
+      );
+      return undefined;
+    }
+    return {
+      runsDir: input.runsDir,
+      runId: input.runId,
+      contentSha,
+      trigger: dispatch.trigger,
+      taskId: dispatch.taskId
+    };
   }
 
   /**
@@ -1099,7 +1162,16 @@ export class RunHandler implements IRunHandler {
       const outcome = await this._sandboxDeploy.deploy({
         worktreePath,
         sha,
-        previous: state.sandbox
+        // The phase deploy delivers everything the wave merged, so its scope
+        // is the diff from the tip the run started at (SPEC-PRD-0011-P4 T-01).
+        baseSha: state.baseSha,
+        previous: state.sandbox,
+        ledger: this.ledgerRef(input, {
+          worktreePath,
+          sha,
+          trigger: 'phase-boundary',
+          taskId: 'phase'
+        })
       });
       outcome.verdict.taskId = 'phase';
       outcome.verdict.inputsDigest = digest;
@@ -1340,7 +1412,14 @@ export class RunHandler implements IRunHandler {
     const outcome = await this._sandboxDeploy.deploy({
       worktreePath,
       sha: revertSha,
-      previous: state.sandbox
+      baseSha,
+      previous: state.sandbox,
+      ledger: this.ledgerRef(input, {
+        worktreePath,
+        sha: revertSha,
+        trigger: 'merge',
+        taskId: 'phase-revert'
+      })
     });
     outcome.verdict.taskId = 'phase-revert';
     this._runStateRepo.appendVerdict(input.runsDir, state, outcome.verdict);
@@ -1790,7 +1869,8 @@ export class RunHandler implements IRunHandler {
     state: RunState,
     task: SpecTask,
     worktreePath: string,
-    digest: string
+    digest: string,
+    baseSha?: string
   ): Promise<{ verdict: GateVerdict; healthReport?: string }> {
     const key = stepKey('sandbox', task.id, digest);
     const cached = state.steps[key];
@@ -1805,12 +1885,21 @@ export class RunHandler implements IRunHandler {
     const attempt = await this.withRetry(
       input,
       `sandbox:${task.id}`,
-      async () =>
-        this._sandboxDeploy.deploy({
+      async () => {
+        const sha = this._gitRepo.headSha(worktreePath);
+        return this._sandboxDeploy.deploy({
           worktreePath,
-          sha: this._gitRepo.headSha(worktreePath),
-          previous: state.sandbox
-        })
+          sha,
+          baseSha,
+          previous: state.sandbox,
+          ledger: this.ledgerRef(input, {
+            worktreePath,
+            sha,
+            trigger: 'task',
+            taskId: task.id
+          })
+        });
+      }
     );
     if (attempt.kind === 'exhausted') {
       const verdict: GateVerdict = {
