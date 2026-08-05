@@ -1047,7 +1047,7 @@ export class RunHandler implements IRunHandler {
     mergedSha: string
   ): Promise<void> {
     // Bring the merge commit into the local object store before the next
-    // wave's worktree add (Comita Phase 0b: gh merge SHA is remote-only).
+    // wave's worktree add (Phase 0b: gh merge SHA is remote-only).
     this._gitRepo.fetch(input.repoPath);
     this._runStateRepo.recordTaskMerged(
       input.runsDir,
@@ -1396,9 +1396,7 @@ export class RunHandler implements IRunHandler {
         input,
         `[closeout] WARNING: closeout generation failed for ${spec.id} — the phase will report incomplete: ${detail.slice(0, 500)}`
       );
-      console.log(
-        chalk.red(`  [closeout] failed: ${detail.slice(0, 300)}`)
-      );
+      console.log(chalk.red(`  [closeout] failed: ${detail.slice(0, 300)}`));
       return undefined;
     }
   }

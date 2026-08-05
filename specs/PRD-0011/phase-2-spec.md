@@ -7,7 +7,14 @@ date: 2026-07-31
 owner: Russ Watson
 envelope:
   allowedPaths: ['sdlc-workflow/**', 'specs/PRD-0011/**']
-  forbiddenSurfaces: ['migrations', 'auth', 'ci-config', 'production-deploy', 'personal-queue-schema']
+  forbiddenSurfaces:
+    [
+      'migrations',
+      'auth',
+      'ci-config',
+      'production-deploy',
+      'personal-queue-schema'
+    ]
   maxDiffLines: 2500
   budgetK: 200
 ---
@@ -92,7 +99,7 @@ Parse the spec's per-task criteria by verification-tier prefix (test:/agent:/man
 > returned a structured pass whose transcript is attached as evidence
 > (`~/.rosetta/sdlc-runs/<run>/evidence/T-01-agent-criterion-2.txt`,
 > referenced from the committed verdict artifact). Validation against a
-> real deployed cloud sandbox is planned via external adoption (Comita).
+> real deployed cloud sandbox is planned via external consumer adoption.
 
 ## Task T-05: Independent reviewer-agent concurrence gate in shadow mode
 
@@ -187,6 +194,6 @@ Persist run state as a step graph where each step's result is cached under a key
 > step. `sdlc-workflow status --run-id live-val-1` showed exactly four
 > cached steps (implementation, envelope, reviewer, sandbox) and no
 > verification step. On resume, all four cached steps were reused (`[cached]
-> ... reused (step cache)`, agents not re-invoked, sandbox not redeployed)
+... reused (step cache)`, agents not re-invoked, sandbox not redeployed)
 > and only verification, ci, and phase executed; the run completed to the
 > human gate with one digest post and one Chronicle artifact commit.

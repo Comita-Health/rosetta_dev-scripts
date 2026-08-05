@@ -16,7 +16,7 @@ envelope:
 
 ## Context
 
-PRD-0024 introduces three planning-side skills (/strategize, /design-ux, and a right-sizing checkpoint) that must be generic templates driven by a workspace-declared grounding config rather than hardcoded consumer paths. Phase 1 scopes to the grounding config itself and /strategize only (stories S-01 and the /strategize-relevant slice of S-05); /design-ux, the right-sizing checkpoint, and the spec-template UX section (S-02, S-03, S-04) are explicitly deferred to later phases and must not be modified here. The grounding config schema is built out fully (objective docs, design method, design tokens) so later phases can consume it without rework, but this phase only wires /strategize to the objectives portion. All deliverables live in team-setup (skill templates under `team-setup/templates/root/.cursor/skills/` and `.claude/skills/`, config template and loader convention alongside them, distribution via the existing sync manifest); the populated Comita config is instantiated in the Comita workspace root as the first real consumer and validated live. /strategize remains assistive: it reads and reports, never writes objectives, and never autonomously advances an idea past the spec + envelope Approve step.
+PRD-0024 introduces three planning-side skills (/strategize, /design-ux, and a right-sizing checkpoint) that must be generic templates driven by a workspace-declared grounding config rather than hardcoded consumer paths. Phase 1 scopes to the grounding config itself and /strategize only (stories S-01 and the /strategize-relevant slice of S-05); /design-ux, the right-sizing checkpoint, and the spec-template UX section (S-02, S-03, S-04) are explicitly deferred to later phases and must not be modified here. The grounding config schema is built out fully (objective docs, design method, design tokens) so later phases can consume it without rework, but this phase only wires /strategize to the objectives portion. All deliverables live in team-setup (skill templates under `team-setup/templates/root/.cursor/skills/` and `.claude/skills/`, config template and loader convention alongside them, distribution via the existing sync manifest); a populated grounding config is instantiated in a consumer workspace root as the first real consumer and validated live. /strategize remains assistive: it reads and reports, never writes objectives, and never autonomously advances an idea past the spec + envelope Approve step.
 
 ## Task T-01: Define workspace grounding config schema and loader convention
 
@@ -78,19 +78,19 @@ Add an explicit branch in the /strategize skill body for the zero-objective-docs
 - [ ] agent: Running /strategize in a workspace with no objectives declared produces an assessment whose first finding flags the missing-objectives gap.
 - [ ] agent: Running /strategize in a workspace with no objectives declared produces no fabricated objective statements anywhere in the output.
 
-## Task T-05: Instantiate the Comita workspace grounding config as first consumer
+## Task T-05: Instantiate a consumer workspace grounding config as first consumer
 
 - **Story:** S-05
 - **Complexity:** S
 - **Depends on:** [T-01]
 
-Prove the schema against non-fixture data with Comita as the first real consumer. The in-repo deliverable is a documented population example (realistic field values in the template docs, no Comita-specific values in the synced template itself); the populated instance is created in the Comita workspace root — outside this repo — with objectiveDocs pointing at its workbook and foundations docs and designMethod pointing at its design-method doc (unconsumed until /design-ux ships), and validated live.
+Prove the schema against non-fixture data with a consumer workspace as the first real consumer. The in-repo deliverable is a documented population example (realistic field values in the template docs, no consumer-specific values in the synced template itself); the populated instance is created in a consumer workspace root — outside this repo — with objectiveDocs pointing at its workbook and foundations docs and designMethod pointing at its design-method doc (unconsumed until /design-ux ships), and validated live.
 
 ### Acceptance criteria
 
 - [ ] test: The template documentation includes a worked population example covering objectiveDocs and designMethod fields.
-- [ ] agent: The Comita workspace root contains a populated grounding config declaring objectiveDocs paths for its workbook and foundations docs and a designMethod path, conforming to the T-01 schema.
-- [ ] agent: Running /strategize in the Comita workspace with this config produces an assessment citing the Comita workbook and/or foundations docs by name.
+- [ ] agent: A consumer workspace root contains a populated grounding config declaring objectiveDocs paths for its workbook and foundations docs and a designMethod path, conforming to the T-01 schema.
+- [ ] agent: Running /strategize in a consumer workspace with this config produces an assessment citing the consumer workbook and/or foundations docs by name.
 
 ## Task T-06: Sync /strategize and grounding config template to consumer workspaces
 
@@ -98,10 +98,10 @@ Prove the schema against non-fixture data with Comita as the first real consumer
 - **Complexity:** M
 - **Depends on:** [T-02, T-05]
 
-Add the /strategize skill file and the grounding config template (not the populated Comita instance) to the existing team-setup sync manifest so both the Claude and Cursor skill layouts pick it up. Design-ux and the right-sizing checkpoint are not part of this sync yet since they ship in a later phase.
+Add the /strategize skill file and the grounding config template (not the populated consumer instance) to the existing team-setup sync manifest so both the Claude and Cursor skill layouts pick it up. Design-ux and the right-sizing checkpoint are not part of this sync yet since they ship in a later phase.
 
 ### Acceptance criteria
 
 - [ ] test: The team-setup sync manifest includes the /strategize skill file and the grounding config template among synced assets.
-- [ ] test: The synced grounding config template contains only placeholder values, with no Comita-specific paths.
+- [ ] test: The synced grounding config template contains only placeholder values, with no consumer-specific paths.
 - [ ] agent: Running the team-setup sync against a fresh consumer workspace produces a /strategize skill file present in both the Claude skill layout and the Cursor skill layout.

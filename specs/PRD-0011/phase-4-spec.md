@@ -34,7 +34,7 @@ Phases 1–3 shipped a full-loop SDLC with a sandbox gate that deploys the task
 branch (or merged tip) via the repo-owned `.sdlc/environments.json` contract
 and requires health output to echo `SDLC_SANDBOX_SHA`.
 
-Live pain (Comita Admissions `PR #302` / run `prd-0004-p1a-2026-08-02` T-01):
+Live pain (consumer app `PR #302` / run `prd-0004-p1a-2026-08-02` T-01):
 the task changed only an inventory doc and shared **unit tests**. The sandbox
 gate still dispatched `deploy-organization.yml` with `backend=true` and
 `frontend=true` and waited for the live app to serve that SHA — many minutes
@@ -48,8 +48,8 @@ files. Skip policy must treat docs / `__tests__` / `*.test.ts` as
 non-deployable even under otherwise deployable trees.
 
 **Engine stays path-agnostic** except for exporting `SDLC_SANDBOX_BASE_SHA`
-(task gate base). **Path policy is repo-owned** (first consumer:
-`comita_admissions`). Companion implementation in admissions is out of this
+(task gate base). **Path policy is repo-owned** (first consumer: consumer app
+repo). Companion implementation in the consumer app is out of this
 envelope’s allowedPaths and lands as a parallel PR referenced from T-02/T-03.
 
 ## Task T-01: Pass `SDLC_SANDBOX_BASE_SHA` from the engine
@@ -72,13 +72,13 @@ when known.
       (scripts may fall back to `git merge-base`).
 - [x] test: existing SHA-idempotent “already healthy” behavior is unchanged.
 
-## Task T-02: Admissions ignore list + path decision helper (companion PR)
+## Task T-02: Consumer app ignore list + path decision helper (companion PR)
 
 - **Story:** S-01
 - **Complexity:** M
 - **Depends on:** []
 
-In `comita_admissions` (parallel PR, not this envelope):
+In the consumer app repo (parallel PR, not this envelope):
 
 1. Add `.sdlc/sandbox-deploy-ignore.yml` with globs that never require a
    sandbox ship (at minimum: `docs/**`, `specs/**`, `**/*.md`,
@@ -103,7 +103,7 @@ In `comita_admissions` (parallel PR, not this envelope):
       `test_empty_diff_ships_rather_than_skipping`. A real diff of only
       ignorable files is the legitimate skip and is covered.
 
-## Task T-03: Wire admissions sandbox-deploy / sandbox-health (companion PR)
+## Task T-03: Wire consumer app sandbox-deploy / sandbox-health (companion PR)
 
 - **Story:** S-01
 - **Complexity:** M
@@ -154,4 +154,4 @@ vars.
 - Changing PR Checks / dorny filters (CI should still run unit tests for
   test-file edits).
 - Skipping local `verification.json` `testCommand`.
-- Rewriting historical run state for prior Comita Phase 1a tasks.
+- Rewriting historical run state for prior Phase 1a tasks.

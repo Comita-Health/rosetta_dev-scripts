@@ -392,7 +392,7 @@
 - **addi-authorship rule:** documented a recurring false-positive permission
   error. `gh pr create`/`gh issue create` without an explicit `--repo`
   default to targeting a forked repo's upstream parent, not `origin` — on
-  `Comita-Health/rosetta_dev-scripts` (forked from
+  a consumer fork of `rosetta_dev-scripts` (forked from
   `Rosetta-Foundation/rosetta_dev-scripts`) this produced `GraphQL: Resource
 not accessible by integration (createPullRequest)`, indistinguishable
   from Addi genuinely lacking `pull_requests: write`, which it does not.
@@ -468,8 +468,8 @@ prd-lint --prd <id> --docs-dir <dir>` — validates a PRD parses cleanly with
   `state.json` exists that early, so the continuity daemon skipped the run too.
   The parent now probes the child after a startup grace and, if it is gone,
   surfaces the tail of the child's own log and exits 1.
-- **team-setup:** deploy dual-tenant `addi-merge-webhook` to AWS Lambda Function
-  URL (`comita-dev`); Comita + Rosetta org webhooks deliver
+- **team-setup:** deploy dual-tenant `addi-merge-webhook` to an AWS Lambda Function
+  URL; consumer-org and Rosetta org webhooks deliver
   `pull_request_review` → `repository_dispatch` (`addi-merge-on-approve`).
 - **team-setup:** remove `attribution` from project `.cursor/cli.json` — Cursor
   only allows `permissions` at project scope; `attribution` belongs in
@@ -489,7 +489,7 @@ prd-lint --prd <id> --docs-dir <dir>` — validates a PRD parses cleanly with
   `docs/addi-pr-automation-standard.md` + hardened
   `addi-merge-on-approve.yml` (repository_dispatch / workflow_run / schedule)
   - `addi-merge-webhook` bridge; `pr-approve-watch` demoted to triage when GHA
-    is enabled. Comita and Rosetta each use their own Addi App Client ID + PEM
+  is enabled. Each organization uses its own Addi App Client ID + PEM
     under the same Action variable names.
 - **team-setup:** add `addi-authorship` rule — agent PRs/issues must be created
   as the workspace GitHub App (Addi); verify `viewer.login` before create; never
@@ -522,8 +522,8 @@ prd-lint --prd <id> --docs-dir <dir>` — validates a PRD parses cleanly with
   via `gh pr edit` if the client still appends it.
 - **team-setup:** add `pr-approve-watch` skill/rule/command — background-watch
   PRs for a human GitHub Approve proceed signal (`AGENT_LOOP_WAKE_pr_approve`),
-  then merge and continue. Works for Rosetta (`~/.config/rosetta/…`) and Comita
-  (`~/.config/comita/…`) activate scripts.
+  then merge and continue. Works for Rosetta (`~/.config/rosetta/…`) and consumer
+  workspace (`~/.config/<workspace>/…`) activate scripts.
 - **sdlc-workflow:** supervise fails fast on enforce `merge-blocked` (no spurious
   "no ready task" wave); gate logs label `[enforce]` vs `[shadow]`; monitor notes
   when the heartbeat watch stops.

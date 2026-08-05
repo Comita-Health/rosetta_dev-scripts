@@ -1,6 +1,6 @@
 # Addi PR automation — gold standard
 
-**Status:** canonical (Rosetta + Comita)  
+**Status:** canonical (Rosetta + consumer orgs)
 **Merge authority for human-Approved Addi PRs:** GitHub Actions workflow
 `Addi merge on Approve` (`.github/workflows/addi-merge-on-approve.yml`),
 acting as the org Addi GitHub App.
@@ -21,9 +21,9 @@ which path owns what.
 | Human **Requests changes**                                                | **Agent / `pr-approve-watch`** | Fix, push, reply; **do not merge** until Approve                                |
 | Review-comment triage (Copilot / human threads)                           | **Agent / `pr-approve-watch`** | Reply + resolve; GHA does not triage comments                                   |
 | Agent opens a PR                                                          | **Addi identity**              | `addi-github-identity` / `addi-authorship` — activate App before `gh pr create` |
-| Comita **Jira ticket → code → PR → merge** (no human Approve)             | **`process-ticket.yml`**       | Separate automation; keep. Not replaceable by merge-on-approve                  |
-| Comita merge to `build-env/dev` → Jira Done                               | **`ticket-done-on-merge.yml`** | Keep. Orthogonal                                                                |
-| Comita promote / deploy                                                   | **deploy / promote workflows** | Keep. Orthogonal                                                                |
+| Consumer **Jira ticket → code → PR → merge** (no human Approve)           | **`process-ticket.yml`**       | Separate automation; keep. Not replaceable by merge-on-approve                  |
+| Consumer merge to `build-env/dev` → Jira Done                             | **`ticket-done-on-merge.yml`** | Keep. Orthogonal                                                                |
+| Consumer promote / deploy                                                 | **deploy / promote workflows** | Keep. Orthogonal                                                                |
 
 ## What is deprecated / demoted
 
@@ -113,7 +113,7 @@ Planner tests: `node --test team-setup/scripts/emit-sdlc-run-launch.test.mjs`.
 ## Credentials
 
 Each org has **its own** Addi GitHub App (separate Client ID + PEM). Do not
-cross-wire Rosetta credentials into Comita Actions (or the reverse).
+cross-wire Rosetta credentials into consumer-org Actions (or the reverse).
 
 | Name                    | Kind     | Purpose                                                                                         |
 | ----------------------- | -------- | ----------------------------------------------------------------------------------------------- |
@@ -122,32 +122,32 @@ cross-wire Rosetta credentials into Comita Actions (or the reverse).
 | `ADDI_MERGE_ON_APPROVE` | variable | `true` to enable the job                                                                        |
 | `ADDI_MERGE_ANY_AUTHOR` | variable | optional test override                                                                          |
 
-| Org                | App slug / bot login                         | Local activate                             | Org Actions vars/secrets                           |
-| ------------------ | -------------------------------------------- | ------------------------------------------ | -------------------------------------------------- |
-| Rosetta-Foundation | `rosetta-s-addi-m` → `rosetta-s-addi-m[bot]` | `~/.config/rosetta/github-app-activate.sh` | `ADDI_CLIENT_ID` + `ADDI_APP_PRIVATE_KEY`          |
-| Comita-Health      | `addi-m` → `addi-m[bot]`                     | `~/.config/comita/github-app-activate.sh`  | same **names**, Comita App values (already on org) |
+| Org                | App slug / bot login                         | Local activate                                 | Org Actions vars/secrets                  |
+| ------------------ | -------------------------------------------- | ---------------------------------------------- | ----------------------------------------- |
+| Rosetta-Foundation | `rosetta-s-addi-m` → `rosetta-s-addi-m[bot]` | `~/.config/rosetta/github-app-activate.sh`     | `ADDI_CLIENT_ID` + `ADDI_APP_PRIVATE_KEY` |
+| Consumer org       | `addi-m` → `addi-m[bot]`                     | `~/.config/<workspace>/github-app-activate.sh` | same **names**, consumer App values       |
 
 Author logins accepted by the workflow: `app/addi-m`, `addi-m[bot]`,
 `app/rosetta-s-addi-m`, `rosetta-s-addi-m[bot]` (and bare slug forms).
 
-**Not the same as** Comita `COMITA_APP_*` used by `process-ticket.yml` (Jira →
-agent → auto-merge). Keep both; merge-on-approve only handles human Approve of
-Addi topic PRs.
+**Not the same as** consumer-specific credentials used by `process-ticket.yml`
+(Jira → agent → auto-merge). Keep both; merge-on-approve only handles human
+Approve of Addi topic PRs.
 
 ## Webhook bridge (required for reliable Approve delivery)
 
 GitHub App webhooks cannot start Actions by themselves. Run
-`team-setup/addi-merge-webhook` (AWS Lambda Function URL in `comita-dev`)
-and deliver **`pull_request_review`** events to it.
+`team-setup/addi-merge-webhook` behind an AWS Lambda Function URL and deliver
+**`pull_request_review`** events to it.
 
 **Preferred delivery (current):** org webhooks created by the Addi App
 installation (`organization_hooks: write`) — App webhook config stays 404
 until “Active” is toggled in the App settings UI.
 
-| Org                | Webhook path       |
-| ------------------ | ------------------ |
-| Rosetta-Foundation | `/webhook/rosetta` |
-| Comita-Health      | `/webhook/comita`  |
+| Org                | Webhook path        |
+| ------------------ | ------------------- |
+| Rosetta-Foundation | `/webhook/rosetta`  |
+| Consumer org       | `/webhook/consumer` |
 
 Bridge duties:
 
@@ -160,16 +160,15 @@ Bridge duties:
 Deploy: `cd team-setup/addi-merge-webhook && bun run deploy`
 (see `team-setup/addi-merge-webhook/README.md`).
 
-Production Function URL (`comita-dev` / `us-east-1`):
-`https://kfjifzn4cza53dmr4xqdcrgk4m0ugopm.lambda-url.us-east-1.on.aws`
+Production Function URL: configure the consumer deployment endpoint.
 
-## Comita vs Rosetta
+## Consumer org vs Rosetta
 
-|                     | Rosetta-Foundation                         | Comita-Health                                             |
+|                     | Rosetta-Foundation                         | Consumer org                                              |
 | ------------------- | ------------------------------------------ | --------------------------------------------------------- |
 | App                 | `rosetta-s-addi-m` / `addi-m`              | `addi-m`                                                  |
-| Activate            | `~/.config/rosetta/github-app-activate.sh` | `~/.config/comita/github-app-activate.sh`                 |
-| Pilot repos         | `rosetta_dev-scripts`                      | `rosetta_dev-scripts`, then `comita_admissions`           |
+| Activate            | `~/.config/rosetta/github-app-activate.sh` | `~/.config/<workspace>/github-app-activate.sh`            |
+| Pilot repos         | `rosetta_dev-scripts`                      | `rosetta_dev-scripts`, then `consumer-app`                |
 | Default branch      | `main`                                     | admissions: `build-env/dev` (workflow is branch-agnostic) |
 | Extra PR automation | —                                          | Keep `process-ticket` / `ticket-done-on-merge` / deploy   |
 
@@ -179,7 +178,7 @@ Production Function URL (`comita-dev` / `us-east-1`):
    `ADDI_MERGE_ON_APPROVE=true`.
 2. Land `addi-merge-on-approve.yml` on the repo default branch.
 3. Deploy webhook bridge (`bun run deploy` in `addi-merge-webhook`); ensure org
-   hooks for **Pull request reviews** point at `/webhook/{rosetta|comita}`.
+   hooks for **Pull request reviews** point at `/webhook/{rosetta|consumer}`.
 4. Update agent rules via team-setup so `pr-approve-watch` does not merge when
    GHA is enabled.
 5. Proof: Addi PR → Approve → merge as Addi without manual `workflow_dispatch`.

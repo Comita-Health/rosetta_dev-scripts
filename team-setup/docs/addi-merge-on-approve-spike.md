@@ -7,7 +7,7 @@
 identity for GitHub writes. Official identity is `cursor` (comments/reviews/team
 PRs) or the creating user’s personal OAuth (private automations). There is no
 supported “run as GitHub App X” switch. Therefore the unattended Approve →
-merge path that preserves Addi (`rosetta-s-addi-m[bot]` / Comita
+merge path that preserves Addi (`rosetta-s-addi-m[bot]` / consumer-org
 `addi-m[bot]`) is GHA + installation token, not Cursor Automations.
 
 Local `pr-approve-watch` is demoted to Request-changes + comment triage when
@@ -103,7 +103,7 @@ cron further.
 ## Follow-ups
 
 - Extract reusable workflow under `.github/workflows/reusable-*.yml` and
-  enable in `rosetta_docs` / Comita repos.
+  enable in `rosetta_docs` / consumer repos.
 - Optional second job: on `CONFLICTING`, open a tracking comment that pings
   Slack or files a short issue.
 - Keep IDE `pr-approve-watch` for comment triage until that logic is ported

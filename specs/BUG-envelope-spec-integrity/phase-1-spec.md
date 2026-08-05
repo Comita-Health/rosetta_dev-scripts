@@ -53,7 +53,7 @@ regression tests where the guarantee already holds.**
 **Why now / blast radius:** The envelope is the compliance boundary; for a
 healthcare consumer a silently-dropped PHI surface label is a categorical
 guardrail failure. Engine-internal only; consumer surface _contents_ stay
-consumer-owned (`payments-phi-boundary` remains a Comita label in Comita's
+consumer-owned (`payments-phi-boundary` remains a consumer label in the consumer's
 `surfaces.json`).
 
 ## Task T-01: Ground synthesized `allowedPaths` in the target repo tree (#35)
