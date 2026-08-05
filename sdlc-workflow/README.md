@@ -256,6 +256,17 @@ declares them:
 { "migrations": ["**/migrations/**"] }
 ```
 
+```markdown
+<!-- .sdlc/review-checklist.md — optional; a flat checkbox list the reviewer
+     evaluates item by item (T-01). Trailing "(mandatory)" is a hard bar: a
+     failed mandatory item overrides a concurring verdict. Absent file →
+     unchanged pre-checklist prompt/verdict shape. The engine ships no
+     content — the workspace's HSR/inline-docs bar lands here via
+     team-setup; other consumers declare their own. -->
+- [ ] Every new HSR class has TSDoc (mandatory)
+- [ ] Prefer readability over cleverness
+```
+
 A missing contract never fails the run: the corresponding gate records
 itself `blocked` (sandbox) or degrades the criteria to `human-required`
 (verification), keeping the shadow-mode phase verdict honest. The one
@@ -285,6 +296,11 @@ Audit of evaluation-time `.sdlc/` call sites and how each complies:
   `forbiddenSurfaces` declared → breach reason naming the contract path
   and the judged ref. `SurfaceMapRepository.load` (working-tree read)
   remains for synthesis-time use only; gates must not call it.
+- **Reviewer gate → `review-checklist.md`** — resolved as a git blob at
+  the gate's `headRef` via `ReviewChecklistRepository.loadAtRef` (T-01,
+  same pattern as the surface map). Missing at that ref is not an error —
+  the contract is optional, so a missing file degrades to the
+  pre-checklist prompt/verdict shape rather than blocking the run.
 - **Sandbox gate → `environments.json`** — loaded from the task
   **worktree**, which is the engine-owned checkout of the judged branch
   tip (commands must execute from a filesystem checkout). Compliant: the
@@ -396,7 +412,10 @@ Handler / Service / Repository with InversifyJS (workspace rule):
   (commit status context `sdlc/reviewer` + overview comment); best-effort
 - `services/reviewer-gate.service.ts` — independent reviewer agent over the
   diff + task + envelope only; concur/disagree with cited reasons and the
-  full transcript attached (T-05).
+  full transcript attached (T-05). When the target repo declares
+  `.sdlc/review-checklist.md`, the prompt includes it and the verdict
+  carries per-item `checklistFindings`; a failed `mandatory` item overrides
+  a model concur to disagree (SPEC-BUG-reviewer-house-bar-P1 T-01).
 - `services/aggregator.service.ts` — combines ci / verification / reviewer /
   envelope into one phase verdict and derives exception-ledger entries
   (reviewer disagreement, third CI fix attempt, envelope breach, budget
@@ -431,14 +450,16 @@ Handler / Service / Repository with InversifyJS (workspace rule):
   (`spec-file`), spec reads (`spec-doc`), git worktrees/diffs (`git`),
   workspace-mutating agent runs (`agent-runner`), resumable run state with
   the step graph (`run-state`), protected-surface map (`surface-map`),
-  `.sdlc/` contracts (`contract`), contract command execution
+  the optional review checklist (`review-checklist`), `.sdlc/` contracts
+  (`contract`), contract command execution
   (`shell-command`), evidence artifacts (`evidence`), PRD-0007 queue
   appends (`queue`), Chronicle ledger artifacts + ADR-0007 commits
   (`chronicle-artifact`), GitHub check-run status (`ci-status`).
 - `utils/` — pure functions: PRD parser, JSON-schema validator, spec renderer,
   ADR-0008 format validator, spec parser (round-trip of the renderer), spec
   format lint (`spec-lint`, the hook/CI-safe pre-intake guard), glob
-  matcher, criterion-tier parser, inputs digest (`digest`), and the
+  matcher, criterion-tier parser, inputs digest (`digest`), the optional
+  review-checklist markdown parser (`review-checklist`), and the
   implementation / reviewer / verifier agent prompt builders.
 
 ## Testing

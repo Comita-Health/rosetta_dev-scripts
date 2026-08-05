@@ -419,6 +419,65 @@ describe('ChronicleCommitService + GatePolicyQueryService (T-08)', () => {
     });
   });
 
+  it('BUG-reviewer-house-bar-P1 T-02: a multi-task revert where two tasks share a gate name writes an outcome for both tasks, not just one', async () => {
+    // Regression for a dedup bug: the outcome-writer's collapse map was
+    // keyed by gate name alone, so two reverted tasks sharing a gate name
+    // (the common case — most tasks in a phase run through 'envelope' and
+    // 'verification') silently dropped all but one task's outcome record.
+    const revertedVerdicts = [
+      {
+        gate: 'envelope',
+        taskId: 'T-01',
+        outcome: 'pass' as const,
+        wouldEscalate: false,
+        reasons: [],
+        inputsDigest: 'env-digest-t01',
+        recordedAt: 'x'
+      },
+      {
+        gate: 'envelope',
+        taskId: 'T-02',
+        outcome: 'pass' as const,
+        wouldEscalate: false,
+        reasons: [],
+        inputsDigest: 'env-digest-t02',
+        recordedAt: 'x'
+      }
+    ];
+
+    await service.recordRevert({
+      chronicleRepo: ledger,
+      runId: 'run-1',
+      specId: 'SPEC-X',
+      revertedShas: ['merge-1', 'merge-2'],
+      revertSha: 'revert-sha-abc',
+      prUrl: 'https://github.com/org/repo/pull/42',
+      revertedVerdicts
+    });
+
+    const repo = new ChronicleArtifactRepository();
+    const outcomes = repo
+      .readArtifacts(ledger, 'run-1')
+      .filter(artifact => artifact.schema === 'sdlc.outcome.v1');
+    expect(outcomes).toHaveLength(2); // one per (taskId, gate), not one per gate
+    expect(outcomes.map(o => o.payload)).toEqual(
+      expect.arrayContaining([
+        {
+          taskId: 'T-01',
+          gate: 'envelope',
+          verdictInputsDigest: 'env-digest-t01',
+          outcome: 'vetoed'
+        },
+        {
+          taskId: 'T-02',
+          gate: 'envelope',
+          verdictInputsDigest: 'env-digest-t02',
+          outcome: 'vetoed'
+        }
+      ])
+    );
+  });
+
   it('BUG-reviewer-house-bar-P1 T-02: revert outcome records are idempotent across resume (no duplicates for the same run/task/gate)', async () => {
     const revertedVerdicts = makeState().verdicts;
     const input = {

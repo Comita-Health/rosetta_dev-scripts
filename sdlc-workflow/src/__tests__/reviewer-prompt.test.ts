@@ -16,4 +16,42 @@ describe('buildReviewerPrompt', () => {
     expect(prompt).toContain('HARD RULE');
     expect(prompt).toContain('specs/**');
   });
+
+  // T-01 no-regression: omitting the checklist reproduces the pre-checklist
+  // prompt byte-for-byte.
+  it('is byte-identical with no checklist argument', () => {
+    const args = [
+      makeTask(),
+      makeEnvelope(),
+      'diff --git a/src/a.ts b/src/a.ts\n+added line'
+    ] as const;
+
+    expect(buildReviewerPrompt(...args)).toBe(
+      buildReviewerPrompt(...args, undefined)
+    );
+    expect(buildReviewerPrompt(...args)).not.toContain('Repo review checklist');
+  });
+
+  it('includes checklist items and finding instructions when a checklist is present', () => {
+    const prompt = buildReviewerPrompt(
+      makeTask(),
+      makeEnvelope(),
+      'diff --git a/src/a.ts b/src/a.ts\n+added line',
+      {
+        items: [
+          { text: 'Every new HSR class has TSDoc', mandatory: true },
+          { text: 'Prefer readability over cleverness', mandatory: false }
+        ]
+      }
+    );
+
+    expect(prompt).toContain('## Repo review checklist');
+    expect(prompt).toContain('1. Every new HSR class has TSDoc (mandatory)');
+    expect(prompt).toContain('2. Prefer readability over cleverness');
+    expect(prompt).not.toContain(
+      'Prefer readability over cleverness (mandatory)'
+    );
+    expect(prompt).toContain('checklistFindings');
+    expect(prompt).toContain('itemIndex');
+  });
 });

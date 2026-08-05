@@ -249,11 +249,19 @@ export class ChronicleCommitService implements IChronicleCommitService {
   }
 
   /**
-   * T-02: write one `sdlc.outcome.v1` artifact per gate present in
-   * `verdicts`, keyed by `outcome-<taskId>-<gate>` so re-recording the same
-   * outcome (e.g. a resumed run replaying a cached step) overwrites the
-   * same file instead of appending a duplicate. When a gate recorded more
-   * than one verdict for this task (retries), the most recent one wins.
+   * T-02: write one `sdlc.outcome.v1` artifact per (taskId, gate) pair
+   * present in `verdicts`, keyed by `outcome-<taskId>-<gate>` so
+   * re-recording the same outcome (e.g. a resumed run replaying a cached
+   * step) overwrites the same file instead of appending a duplicate. When
+   * a gate recorded more than one verdict for the same task (retries), the
+   * most recent one wins.
+   *
+   * The dedup key must include `taskId`, not just `gate`: `verdicts` can
+   * span every task in a reverted phase (see {@link recordRevert}), and
+   * multiple tasks routinely share generic gate names like `envelope` or
+   * `verification`. Keying on `gate` alone would collapse those distinct
+   * tasks' verdicts into a single outcome record and silently drop the
+   * rest — defeating the point of a per-task, per-gate ledger.
    */
   private writeOutcomes(
     chronicleRepo: string,
@@ -263,11 +271,12 @@ export class ChronicleCommitService implements IChronicleCommitService {
     outcome: VerdictOutcome
   ): void {
     const now = new Date().toISOString();
-    const latestByGate = new Map<string, GateVerdict>();
+    const latestByTaskGate = new Map<string, GateVerdict>();
     for (const verdict of verdicts) {
-      latestByGate.set(verdict.gate, verdict);
+      const taskId = verdict.taskId ?? 'run';
+      latestByTaskGate.set(`${taskId}:${verdict.gate}`, verdict);
     }
-    for (const verdict of latestByGate.values()) {
+    for (const verdict of latestByTaskGate.values()) {
       const taskId = verdict.taskId ?? 'run';
       const payload: OutcomeArtifactPayload = {
         taskId,
