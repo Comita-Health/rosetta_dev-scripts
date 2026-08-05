@@ -1,6 +1,6 @@
 # Design: post-merge integration tip (#42 + F1)
 
-Live-val finding from Comita admissions (`phase-1-spec-2026-08-01`): after
+Live-val finding from a consumer app (`phase-1-spec-2026-08-01`): after
 human merges + `record-merge --task`, dependents must **see dependency
 code** and gates must measure **only the task's own blast radius**.
 
@@ -38,7 +38,7 @@ After `record-merge --sha <tip> --task T-xx`:
 
 - Rebasing in-flight worktrees created before this fix (operator salvage /
   delete worktree + resume).
-- Changing product scope of PRD-0003 or Comita merge policy.
+- Changing product scope of PRD-0003 or consumer merge policy.
 - Replacing human `record-merge` in shadow mode.
 
 ## Related

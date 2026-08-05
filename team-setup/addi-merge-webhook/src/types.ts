@@ -1,4 +1,4 @@
-export type TenantId = 'rosetta' | 'comita';
+export type TenantId = string;
 
 export type TenantConfig = {
   id: TenantId;

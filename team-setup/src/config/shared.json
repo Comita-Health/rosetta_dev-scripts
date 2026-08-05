@@ -1,40 +1,27 @@
 {
-  "org": "Comita-Health",
-  "baseDir": "~/projects/comita",
+  "org": "Rosetta-Foundation",
+  "baseDir": "~/projects/rosetta",
   "sharedRepos": [],
   "flatRepos": [
     {
       "name": "rosetta_docs",
       "ghRepo": "rosetta_docs",
-      "org": "Rosetta-Foundation",
       "label": "Docs — PRDs, ADRs & Cross-Cutting Knowledge"
     },
     {
       "name": "rosetta_dev-scripts",
       "ghRepo": "rosetta_dev-scripts",
-      "label": "Dev Scripts — Workspace Tooling (Comita fork)"
+      "label": "Dev Scripts — Workspace Tooling"
     },
     {
       "name": "rosetta_chronicle",
       "ghRepo": "rosetta_chronicle",
-      "org": "Rosetta-Foundation",
       "label": "Chronicle — Memory Engine"
     },
     {
       "name": "rosetta_wayfinder",
       "ghRepo": "rosetta_wayfinder",
-      "org": "Rosetta-Foundation",
       "label": "Wayfinder — Knowledge Guide"
-    },
-    {
-      "name": "comita_docs",
-      "ghRepo": "comita_docs",
-      "label": "Comita — Company Docs & Brand"
-    },
-    {
-      "name": "comita_admissions",
-      "ghRepo": "comita_admissions",
-      "label": "Comita Admissions — Referral Management"
     }
   ],
   "personalChronicle": {

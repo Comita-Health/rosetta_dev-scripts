@@ -67,16 +67,18 @@ or linked PR should have triggered work and nothing happens.
 ```bash
 bash .cursor/skills/issue-resolve-watch/scripts/watch-issue-resolve.sh \
   --interval 30 \
-  --activate ~/.config/comita/github-app-activate.sh \
+  --activate ~/.config/rosetta/github-app-activate.sh \
   --kickoff \
   Owner/repo#123
 ```
 
-Optional activate: `~/.config/rosetta/github-app-activate.sh` (Rosetta).
+For a consumer workspace, use
+`~/.config/<workspace>/github-app-activate.sh`.
 
 ## On wake
 
-1. `eval "$(bash ~/.config/<rosetta|comita>/github-app-activate.sh)"`.
+1. `eval "$(bash ~/.config/rosetta/github-app-activate.sh)"` by default, or
+   use the consumer workspace's `~/.config/<workspace>/github-app-activate.sh`.
 2. `gh issue view <n> -R <owner/repo>` — title, body, Done-when, comments.
 3. Act by reason:
    - `kickoff` / `human_comment`: plan next step; implement or ask one crisp

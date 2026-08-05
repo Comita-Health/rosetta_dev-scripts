@@ -28,21 +28,21 @@ describe('dispatchHttp', () => {
   });
 
   it('routes to the matching tenant handler', async () => {
-    const comita = makeHandler();
+    const acme = makeHandler();
     const registry: HandlerRegistry = {
-      byTenant: new Map([['comita', comita]]),
+      byTenant: new Map([['acme', acme]]),
       legacy: undefined
     };
     const rawBody = Buffer.from('{}');
     const sig = `sha256=${createHmac('sha256', secret).update(rawBody).digest('hex')}`;
     await dispatchHttp(registry, {
       method: 'POST',
-      pathname: '/webhook/comita',
+      pathname: '/webhook/acme',
       rawBody,
       signatureHeader: sig,
       eventName: 'ping'
     });
-    expect(comita.handleHttp).toHaveBeenCalled();
+    expect(acme.handleHttp).toHaveBeenCalled();
   });
 
   it('returns 404 when tenant is not configured', async () => {
@@ -67,7 +67,7 @@ describe('dispatchHttp', () => {
     };
     const res = await dispatchHttp(registry, {
       method: 'PUT',
-      pathname: '/webhook/comita',
+      pathname: '/webhook/acme',
       rawBody: Buffer.alloc(0),
       signatureHeader: undefined,
       eventName: undefined
@@ -75,7 +75,7 @@ describe('dispatchHttp', () => {
     expect(res.status).toBe(404);
   });
 
-  it('returns 404 for unknown webhook paths', async () => {
+  it('returns 404 for unconfigured tenant slugs', async () => {
     const registry: HandlerRegistry = {
       byTenant: new Map(),
       legacy: undefined
@@ -88,7 +88,7 @@ describe('dispatchHttp', () => {
       eventName: 'ping'
     });
     expect(res.status).toBe(404);
-    expect(res.body.error).toBe('not found');
+    expect(res.body.error).toBe('tenant not configured: unknown');
   });
 
   it('routes legacy /webhook when configured', async () => {

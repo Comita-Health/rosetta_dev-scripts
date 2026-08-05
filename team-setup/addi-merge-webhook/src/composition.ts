@@ -113,17 +113,26 @@ const legacyFromEnv = (): TenantConfig | undefined => {
     );
   }
   return {
-    id: 'comita',
+    id: 'legacy',
     webhookSecret,
     clientId,
     privateKeyPem
   };
 };
 
-/** Load tenant handlers from process env (local / dual-prefix). */
+/** Tenant ids to load from `${ID}_*` env prefixes (default: rosetta only). */
+export const tenantIdsFromEnv = (): TenantId[] => {
+  const raw = process.env.ADDI_TENANTS ?? 'rosetta';
+  return raw
+    .split(',')
+    .map(s => s.trim())
+    .filter(s => s.length > 0);
+};
+
+/** Load tenant handlers from process env (local / prefixed). */
 export const loadHandlerRegistryFromEnv = (): HandlerRegistry => {
   const byTenant = new Map<TenantId, IWebhookHandler>();
-  for (const id of ['rosetta', 'comita'] as const) {
+  for (const id of tenantIdsFromEnv()) {
     const cfg = tenantFromPrefixedEnv(id);
     if (cfg !== undefined) {
       byTenant.set(id, createWebhookHandler(cfg));
@@ -135,7 +144,7 @@ export const loadHandlerRegistryFromEnv = (): HandlerRegistry => {
 
   if (byTenant.size === 0 && legacy === undefined) {
     throw new Error(
-      'No tenants configured. Set ROSETTA_* / COMITA_* or ADDI_* env vars.'
+      'No tenants configured. Set ADDI_TENANTS with matching ${TENANT}_* env vars, or ADDI_* for legacy /webhook.'
     );
   }
   return { byTenant, legacy };
@@ -143,7 +152,7 @@ export const loadHandlerRegistryFromEnv = (): HandlerRegistry => {
 
 export type SecretBundle = {
   tenants: Record<
-    TenantId,
+    string,
     {
       webhookSecret: string;
       clientId: string;
@@ -156,7 +165,7 @@ export const loadHandlerRegistryFromSecretBundle = (
   bundle: SecretBundle
 ): HandlerRegistry => {
   const byTenant = new Map<TenantId, IWebhookHandler>();
-  for (const id of ['rosetta', 'comita'] as const) {
+  for (const id of Object.keys(bundle.tenants)) {
     const t = bundle.tenants[id];
     if (t === undefined) {
       continue;

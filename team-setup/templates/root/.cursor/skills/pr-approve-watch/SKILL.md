@@ -80,8 +80,9 @@ bash .cursor/skills/pr-approve-watch/scripts/watch-pr-approve.sh --interval 30 \
 ```
 
 Optional: `--activate ~/.config/rosetta/github-app-activate.sh` (Rosetta) or
-`~/.config/comita/github-app-activate.sh` (Comita). If omitted, the script
-picks from cwd / `ROSETTA_GH_ACTIVATE` / those defaults, else ambient `gh` auth.
+`~/.config/<workspace>/github-app-activate.sh` (consumer workspace). If
+omitted, the script uses `ROSETTA_GH_ACTIVATE`, then the Rosetta default, then
+the first available workspace activation script, else ambient `gh` auth.
 
 Cursor agent loop: background the command with
 `notify_on_output` pattern `^AGENT_LOOP_WAKE_pr_approve`.
@@ -99,7 +100,8 @@ Cursor agent loop: background the command with
 
 ## On wake — `signal: approved`
 
-1. `eval "$(bash ~/.config/<rosetta|comita>/github-app-activate.sh)"` when present.
+1. `eval "$(bash ~/.config/rosetta/github-app-activate.sh)"` by default, or
+   use the consumer workspace's `~/.config/<workspace>/github-app-activate.sh`.
 2. `gh pr view <n> -R <owner/repo> --json state,reviewDecision,statusCheckRollup,mergeable`.
 3. If `mergeable` is `CONFLICTING` (or merge fails on conflicts): update the PR
    branch onto its base (merge `origin/<base>` into the head, or rebase when

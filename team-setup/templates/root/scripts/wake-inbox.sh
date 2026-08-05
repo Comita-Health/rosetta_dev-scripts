@@ -14,7 +14,7 @@
 # Source it, then call wake_emit:
 #
 #   source "$(dirname "$0")/wake-inbox.sh"
-#   wake_emit pr_approve "Comita-Health/repo#12" "Approve fired for …" '{"pr":12}'
+#   wake_emit pr_approve "consumer-org/repo#12" "Approve fired for …" '{"pr":12}'
 #
 # Layout:
 #   $ROSETTA_WAKE_DIR/pending/*.json    unread wakes

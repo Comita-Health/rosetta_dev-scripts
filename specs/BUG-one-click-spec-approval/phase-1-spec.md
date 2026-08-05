@@ -121,4 +121,4 @@ regression against this spec.
   `sdlc-workflow run` (PRD-0020 Phase 1/3).
 - Changing enforce intake's `status: Approved` requirement (correct as-is).
 - Distributing the workflow change to consumer orgs' repos (team-setup sync
-  is the existing mechanism; Comita adoption is a consumer-side act).
+  is the existing mechanism; consumer adoption is a consumer-side act).

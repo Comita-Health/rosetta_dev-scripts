@@ -1,6 +1,6 @@
 # Operator background supervise
 
-Live-val roots: [rosetta_dev-scripts#38](https://github.com/Rosetta-Foundation/rosetta_dev-scripts/issues/38) (nohup/detach), [#39](https://github.com/Rosetta-Foundation/rosetta_dev-scripts/issues/39) (heartbeat), Comita Phase 0b enforce resume loop.
+Live-val roots: [rosetta_dev-scripts#38](https://github.com/Rosetta-Foundation/rosetta_dev-scripts/issues/38) (nohup/detach), [#39](https://github.com/Rosetta-Foundation/rosetta_dev-scripts/issues/39) (heartbeat), Phase 0b enforce resume loop.
 
 ## Why
 

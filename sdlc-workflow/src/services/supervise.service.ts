@@ -163,7 +163,7 @@ export interface SuperviseResult {
 /**
  * Operator supervise loop: auto-resume dependency waves after enforce merges,
  * mirror heartbeats into a live monitor log, and optionally detach so agent
- * shells cannot kill the run (Comita live-val / #38 / #39).
+ * shells cannot kill the run (consumer live-val / #38 / #39).
  */
 export interface ISuperviseService {
   run(input: SuperviseInput): Promise<SuperviseResult>;
@@ -443,7 +443,7 @@ export class SuperviseService implements ISuperviseService {
         }
 
         // Enforce: completed-but-unmerged after a red phase is a hard stop —
-        // do not spin another "no ready task" wave (Comita Phase 0b lesson).
+        // do not spin another "no ready task" wave (Phase 0b lesson).
         if (
           input.shadow !== true &&
           hasMergeBlockedHalt(
