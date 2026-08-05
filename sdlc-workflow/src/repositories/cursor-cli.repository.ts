@@ -2,6 +2,7 @@ import { spawnSync } from 'child_process';
 import { injectable } from 'inversify';
 import os from 'os';
 import { WorkflowError } from '../types';
+import { sanitizedAgentEnv } from '../utils/agent-env';
 import type { IModelRepository } from './model.repository';
 
 const DEFAULT_BIN = 'cursor-agent';
@@ -12,6 +13,13 @@ const MAX_BUFFER = 32 * 1024 * 1024;
  * session (`cursor-agent -p`), the same operator-auth pattern team-setup
  * uses with `gh`. Runs from the OS temp dir so `--trust` grants the agent
  * nothing beyond an empty scratch directory.
+ *
+ * @remarks
+ * Dispatches with a sanitized environment (SPEC-PRD-0021-P1 T-05) for the same
+ * reason the workspace-mutating runner does: this transport carries the
+ * reviewer, verifier, and decompose prompts, and an inherited nested-agent
+ * marker surfaces here as an empty completion — reported as `INFERENCE_FAILED`
+ * with nothing to distinguish it from a real model failure.
  */
 @injectable()
 export class CursorCliRepository implements IModelRepository {
@@ -26,7 +34,8 @@ export class CursorCliRepository implements IModelRepository {
     const result = spawnSync(bin, args, {
       encoding: 'utf-8',
       cwd: os.tmpdir(),
-      maxBuffer: MAX_BUFFER
+      maxBuffer: MAX_BUFFER,
+      env: sanitizedAgentEnv()
     });
 
     if (result.error !== undefined) {

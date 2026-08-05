@@ -1,6 +1,7 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
-import { injectable } from 'inversify';
+import { existsSync, mkdirSync, readFileSync } from 'fs';
+import { inject, injectable } from 'inversify';
 import path from 'path';
+import { WORKFLOW_TOKENS } from '../tokens';
 import {
   CriterionVerdict,
   ExceptionEntry,
@@ -8,8 +9,11 @@ import {
   RunState,
   SandboxRecord,
   StepResult,
-  TaskRunResult
+  TaskRunResult,
+  WorkflowError
 } from '../types';
+import { writeFileAtomic } from '../utils/atomic-write';
+import type { IRunLockRepository } from './run-lock.repository';
 
 /**
  * Persists run state as JSON under `<runsDir>/<runId>/state.json` so a
@@ -117,6 +121,11 @@ const stateFile = (runsDir: string, runId: string): string =>
 
 @injectable()
 export class RunStateRepository implements IRunStateRepository {
+  constructor(
+    @inject(WORKFLOW_TOKENS.RunLockRepository)
+    private readonly _lockRepo: IRunLockRepository
+  ) {}
+
   load(runsDir: string, runId: string): RunState | null {
     const file = stateFile(runsDir, runId);
     if (!existsSync(file)) return null;
@@ -137,11 +146,58 @@ export class RunStateRepository implements IRunStateRepository {
     return state;
   }
 
+  /**
+   * T-01 / T-02: every write is atomic (temp file + `fsync` + `rename`) and
+   * happens under the run lock, so a crash cannot tear the file and a second
+   * writer cannot interleave with the first.
+   *
+   * @remarks
+   * Callers that own a run for its whole lifetime (`run`, `supervise`) hold
+   * the lock across the session. Short-lived mutators that did not acquire
+   * one still write under a *momentary* lock taken here, so there is no path
+   * to an unlocked write — the difference is only how long the lock is held.
+   *
+   * @throws `WorkflowError` `RUN_LOCK_NOT_HELD` when another live process
+   * owns the run. That is a refusal to clobber, not a transient failure:
+   * retrying it without stopping the other writer will fail the same way.
+   */
   save(runsDir: string, state: RunState): string {
     const file = stateFile(runsDir, state.runId);
     mkdirSync(path.dirname(file), { recursive: true });
     state.updatedAt = new Date().toISOString();
-    writeFileSync(file, JSON.stringify(state, null, 2));
+    const contents = `${JSON.stringify(state, null, 2)}\n`;
+
+    if (this._lockRepo.heldByThisProcess(runsDir, state.runId)) {
+      writeFileAtomic(file, contents);
+      return file;
+    }
+
+    let lock;
+    try {
+      lock = this._lockRepo.acquire(runsDir, state.runId, 'state-write');
+    } catch (err) {
+      const holder = this._lockRepo.holder(runsDir, state.runId);
+      throw new WorkflowError(
+        `refusing to write state.json for run ${state.runId}: the run lock is held by another writer`,
+        'RUN_LOCK_NOT_HELD',
+        [
+          holder === null
+            ? 'lock holder could not be identified'
+            : `held by pid ${holder.pid} on ${holder.host} (${holder.owner}) since ${holder.acquiredAt}`,
+          // The acquisition's own details, not just its summary: when no
+          // holder can be named, they carry the only concrete thing left —
+          // the lock path an operator has to go look at.
+          ...(err instanceof WorkflowError
+            ? err.details
+            : [err instanceof Error ? err.message : String(err)])
+        ]
+      );
+    }
+    try {
+      writeFileAtomic(file, contents);
+    } finally {
+      this._lockRepo.release(lock);
+    }
     return file;
   }
 

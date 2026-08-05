@@ -15,6 +15,10 @@ import type {
   IRunQueueRepository,
   QueuedLaunchRecord
 } from '../repositories/run-queue.repository';
+import type {
+  IRunLockRepository,
+  RunLock
+} from '../repositories/run-lock.repository';
 import type { IRunStateRepository } from '../repositories/run-state.repository';
 import type { ISpecDocRepository } from '../repositories/spec-doc.repository';
 import type {
@@ -44,11 +48,20 @@ import {
 import type { IHeartbeatWatchService } from './heartbeat-watch.service';
 
 /**
- * How long to let a detached child prove it survived startup. Startup failures
- * throw within milliseconds (file reads and spec parsing), so this only has to
- * clear process spawn — it is not a health check.
+ * How long to watch a detached child before claiming it started. Startup
+ * failures throw within milliseconds of the child's *own* start, but the child
+ * is `node`/`tsx` booting a TypeScript entry point, which on a loaded machine
+ * can take seconds before it reaches the throw.
+ *
+ * @remarks
+ * A single sample at 1.5s used to decide this, and under load it sampled while
+ * the child was still booting — alive, so the parent printed "detached" and
+ * exited 0 for a run that died a second later. The window is watched, not
+ * sampled, and it ends the moment there is evidence either way, so a healthy
+ * launch is not slowed by the larger budget.
  */
-const DETACH_STARTUP_GRACE_MS = 1_500;
+const DETACH_STARTUP_GRACE_MS = 8_000;
+const DETACH_STARTUP_POLL_MS = 150;
 const DETACH_FAILURE_LOG_LINES = 20;
 
 /**
@@ -127,6 +140,11 @@ export interface SuperviseInput extends RunTaskInput {
    * per attempt). Tests pass 0.
    */
   mergeBlockedBackoffMs?: number;
+  /**
+   * How long to watch a detached child for a startup death before reporting
+   * it as launched. Tests shorten it; production leaves it unset.
+   */
+  detachVerifyMs?: number;
 }
 
 export interface SuperviseResult {
@@ -168,22 +186,57 @@ export class SuperviseService implements ISuperviseService {
     @inject(WORKFLOW_TOKENS.WakeInboxRepository)
     private readonly _wakeRepo: IWakeInboxRepository,
     @inject(WORKFLOW_TOKENS.RunQueueRepository)
-    private readonly _runQueueRepo: IRunQueueRepository
+    private readonly _runQueueRepo: IRunQueueRepository,
+    @inject(WORKFLOW_TOKENS.RunLockRepository)
+    private readonly _runLockRepo: IRunLockRepository
   ) {}
 
   async run(input: SuperviseInput): Promise<SuperviseResult> {
     if (input.detach === true) {
+      // The parent only spawns and reports; the child holds the lock for the
+      // life of the run. Taking it here would make every detached launch race
+      // its own child.
       return this.detach(input);
     }
-    if (input.supervise !== true) {
-      const lastWave = await this._runHandler.runTask(input);
-      return {
-        kind: this.mapWaveKind(lastWave, input),
-        waves: 1,
-        lastWave
-      };
+
+    // SPEC-PRD-0021-P1 T-02. Held for the whole session, not per write: the
+    // race this closes is a continuity-layer relaunch starting a second engine
+    // over a live one, and two processes taking turns writing valid states
+    // still interleave waves and double-dispatch agents.
+    const lock = this.acquireSession(input);
+    try {
+      if (input.supervise !== true) {
+        const lastWave = await this._runHandler.runTask(input);
+        return {
+          kind: this.mapWaveKind(lastWave, input),
+          waves: 1,
+          lastWave
+        };
+      }
+      return await this.loop(input);
+    } finally {
+      if (lock !== undefined) this._runLockRepo.release(lock);
     }
-    return this.loop(input);
+  }
+
+  /**
+   * Take the run lock, or fail fast naming the live holder.
+   *
+   * @remarks
+   * Returns `undefined` only when this process already holds the lock, which
+   * happens when a resume re-enters through the same process — releasing a
+   * lock we did not take here would hand the run to a waiting relaunch
+   * mid-wave.
+   */
+  private acquireSession(input: SuperviseInput): RunLock | undefined {
+    if (this._runLockRepo.heldByThisProcess(input.runsDir, input.runId)) {
+      return undefined;
+    }
+    return this._runLockRepo.acquire(
+      input.runsDir,
+      input.runId,
+      input.supervise === true ? 'supervise' : 'run'
+    );
   }
 
   private async detach(input: SuperviseInput): Promise<SuperviseResult> {
@@ -215,8 +268,7 @@ export class SuperviseService implements ISuperviseService {
     // printing a cheerful "detached" and exiting 0, so the operator walks away
     // from a run that never began. Confirm the child actually survived before
     // claiming success.
-    await sleep(DETACH_STARTUP_GRACE_MS);
-    if (!this._detachRepo.isAlive(pid)) {
+    if (!(await this.survivedStartup(pid, runDir, input.detachVerifyMs))) {
       const detail = tailFile(logPath, DETACH_FAILURE_LOG_LINES);
       console.error(
         chalk.red(`\n[supervise] detached child exited during startup`)
@@ -249,6 +301,32 @@ export class SuperviseService implements ISuperviseService {
       monitorPath,
       logPath
     };
+  }
+
+  /**
+   * Watch a freshly detached child until there is evidence it started, or
+   * evidence it did not.
+   *
+   * @remarks
+   * Two independent proofs of failure, because either alone has a blind spot:
+   * the child's own `supervise.exit` record is deterministic but only exists
+   * once it reached its terminal handler, and pid liveness catches a child that
+   * died too hard to record anything. Returning `true` on deadline is the only
+   * optimistic branch, and by then the child has had the whole window to fail.
+   */
+  private async survivedStartup(
+    pid: number,
+    runDir: string,
+    verifyMs: number | undefined
+  ): Promise<boolean> {
+    const budgetMs = verifyMs ?? DETACH_STARTUP_GRACE_MS;
+    const deadline = Date.now() + budgetMs;
+    do {
+      await sleep(Math.min(DETACH_STARTUP_POLL_MS, budgetMs));
+      if (this._exitRepo.read(runDir) !== null) return false;
+      if (!this._detachRepo.isAlive(pid)) return false;
+    } while (Date.now() < deadline);
+    return true;
   }
 
   private async loop(input: SuperviseInput): Promise<SuperviseResult> {
@@ -613,7 +691,10 @@ export class SuperviseService implements ISuperviseService {
     );
 
     try {
-      const launch = await this.launchQueuedRecord(record);
+      const launch = await this.launchQueuedRecord(
+        record,
+        input.detachVerifyMs
+      );
       if (launch.alive) {
         this._runQueueRepo.remove(input.runsDir, seq);
         this._hbWatch.note(
@@ -663,7 +744,8 @@ export class SuperviseService implements ISuperviseService {
    * repository, and confirm the child survives the startup grace window.
    */
   private async launchQueuedRecord(
-    record: QueuedLaunchRecord
+    record: QueuedLaunchRecord,
+    verifyMs: number | undefined
   ): Promise<{ pid: number; alive: boolean; runId: string; detail: string }> {
     const runId = record.runId ?? this.deriveQueuedRunId(record.specPath);
     const runDir = path.join(record.runsDir, runId);
@@ -690,8 +772,7 @@ export class SuperviseService implements ISuperviseService {
     });
     writeFileSync(path.join(runDir, 'supervise.pid'), `${pid}\n`);
 
-    await sleep(DETACH_STARTUP_GRACE_MS);
-    const alive = this._detachRepo.isAlive(pid);
+    const alive = await this.survivedStartup(pid, runDir, verifyMs);
     return {
       pid,
       alive,

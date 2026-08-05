@@ -26,6 +26,10 @@ import type { IReviewerGateService } from '../services/reviewer-gate.service';
 import type { IReviewerPublishService } from '../services/reviewer-publish.service';
 import { isBugSpec } from '../services/retro.service';
 import type { IRetroService } from '../services/retro.service';
+import type {
+  IRetryExecutorService,
+  RetryOutcome
+} from '../services/retry-executor.service';
 import type { ISandboxDeployService } from '../services/sandbox-deploy.service';
 import type {
   IVerificationService,
@@ -36,6 +40,7 @@ import {
   CriterionVerdict,
   ExceptionEntry,
   GateVerdict,
+  RecoveryHistory,
   RunState,
   SpecDocument,
   SpecTask,
@@ -77,6 +82,12 @@ export interface RunTaskInput extends PoolInput {
   monitorPath?: string;
   /** Override wake-inbox root for tests. */
   wakeDir?: string;
+  /**
+   * First backoff (ms) between non-gate step retries, doubling per attempt
+   * (SPEC-PRD-0021-P1 T-04). `0` disables waiting — used by tests so a retry
+   * assertion does not cost real seconds.
+   */
+  retryBackoffMs?: number;
 }
 
 export interface RunTaskResult {
@@ -225,7 +236,9 @@ export class RunHandler implements IRunHandler {
     @inject(WORKFLOW_TOKENS.HeartbeatService)
     private readonly _heartbeat: IHeartbeatService,
     @inject(WORKFLOW_TOKENS.GateRemediationService)
-    private readonly _remediation: IGateRemediationService
+    private readonly _remediation: IGateRemediationService,
+    @inject(WORKFLOW_TOKENS.RetryExecutorService)
+    private readonly _retry: IRetryExecutorService
   ) {}
 
   async runTask(input: RunTaskInput): Promise<RunTaskResult> {
@@ -393,7 +406,15 @@ export class RunHandler implements IRunHandler {
 
     // P3 T-02: push the branch and open (or rediscover) the task PR before
     // the gates — the PR is the reviewer-gate and CI-gate subject.
-    this.prStep(input, state, task, spec, outcome.branch, worktreePath, chain);
+    await this.prStep(
+      input,
+      state,
+      task,
+      spec,
+      outcome.branch,
+      worktreePath,
+      chain
+    );
 
     // F1: diff against the task's integration tip (same tip the worktree
     // branched from), not the frozen run baseSha — otherwise merged deps
@@ -716,6 +737,48 @@ export class RunHandler implements IRunHandler {
       input.monitorPath ?? path.join(input.runsDir, input.runId, 'monitor.log'),
       line
     );
+  }
+
+  /**
+   * SPEC-PRD-0021-P1 T-04: run a **non-gate** step through the shared retry
+   * executor, so a transient PR-open, sandbox-deploy or Chronicle-commit
+   * failure costs a backoff instead of the whole run.
+   *
+   * @remarks
+   * Only a *thrown* error is retried. A gate that returns a red verdict has
+   * judged the branch and must be honoured verbatim — retrying a verdict is
+   * how a retry layer quietly becomes a gate override, so the executor never
+   * sees one. This is also why the sandbox deploy is retried on an exception
+   * but not on an unhealthy verdict.
+   *
+   * Each attempt is logged to `monitor.log` as it happens, because the whole
+   * point is that an operator watching a slow step can tell "retrying" from
+   * "hung" without attaching to the process.
+   */
+  private async withRetry<T>(
+    input: RunTaskInput,
+    recoveryPath: string,
+    step: () => Promise<T>
+  ): Promise<RetryOutcome<T>> {
+    return this._retry.run({
+      path: recoveryPath,
+      step,
+      backoffMs: input.retryBackoffMs,
+      onAttemptFailed: attempt =>
+        this.noteMonitor(
+          input,
+          `[retry] ${recoveryPath} attempt ${attempt.attempt} failed: ${(
+            attempt.detail ?? ''
+          ).slice(0, 200)}`
+        ),
+      onExhausted: history =>
+        this.noteMonitor(
+          input,
+          `[retry] ${recoveryPath} exhausted after ${
+            history.attempts.filter(entry => entry.action === 'attempt').length
+          } attempts — escalating`
+        )
+    });
   }
 
   /**
@@ -1521,7 +1584,7 @@ export class RunHandler implements IRunHandler {
    * either way, and the pipeline continues so the remaining gates still
    * report honestly (CI will be blocked without a pushed branch).
    */
-  private prStep(
+  private async prStep(
     input: RunTaskInput,
     state: RunState,
     task: SpecTask,
@@ -1529,7 +1592,7 @@ export class RunHandler implements IRunHandler {
     branch: string,
     worktreePath: string,
     chain: { implDigest?: string; headSha: string }
-  ): void {
+  ): Promise<void> {
     const digest = inputsDigest({ ...chain, step: 'pr' });
     const key = stepKey('pr', task.id, digest);
     const cached = state.steps[key];
@@ -1540,33 +1603,25 @@ export class RunHandler implements IRunHandler {
       return;
     }
 
-    try {
-      const pr = this._prLifecycle.openTaskPr({
+    // T-04: `openTaskPr` is find-or-create, so an attempt that pushed but
+    // failed before the PR call is resumed rather than duplicated — the
+    // retry finds the branch's existing PR instead of opening a second one.
+    const attempt = await this.withRetry(input, `pr:${task.id}`, async () =>
+      this._prLifecycle.openTaskPr({
         worktreePath,
         branch,
         runId: input.runId,
         spec,
         task,
         verdicts: state.verdicts.filter(verdict => verdict.taskId === task.id)
-      });
-      this._runStateRepo.recordTaskPrUrl(input.runsDir, state, task.id, pr.url);
-      this._runStateRepo.recordStep(input.runsDir, state, key, {
-        name: 'pr',
-        taskId: task.id,
-        inputsDigest: digest,
-        detail: pr.url,
-        completedAt: new Date().toISOString()
-      });
-      console.log(
-        chalk.green(
-          `  [pr] ${pr.created ? 'opened' : 'reusing'} ${pr.url} for ${branch}`
-        )
-      );
-    } catch (err) {
+      })
+    );
+
+    if (attempt.kind === 'exhausted') {
       const detail =
-        err instanceof WorkflowError
-          ? [err.message, ...err.details].join(': ')
-          : String(err);
+        attempt.error instanceof WorkflowError
+          ? [attempt.error.message, ...attempt.error.details].join(': ')
+          : attempt.error.message;
       this._runStateRepo.appendVerdict(input.runsDir, state, {
         gate: 'pr',
         outcome: 'blocked',
@@ -1581,7 +1636,24 @@ export class RunHandler implements IRunHandler {
           `  [pr] push/PR failed for ${branch}: ${detail.slice(0, 300)}`
         )
       );
+      return;
     }
+
+    const pr = attempt.value;
+    this._runStateRepo.recordTaskPrUrl(input.runsDir, state, task.id, pr.url);
+    this._runStateRepo.recordStep(input.runsDir, state, key, {
+      name: 'pr',
+      taskId: task.id,
+      inputsDigest: digest,
+      detail: pr.url,
+      recovery: retried(attempt.history),
+      completedAt: new Date().toISOString()
+    });
+    console.log(
+      chalk.green(
+        `  [pr] ${pr.created ? 'opened' : 'reusing'} ${pr.url} for ${branch}`
+      )
+    );
   }
 
   /**
@@ -1608,23 +1680,42 @@ export class RunHandler implements IRunHandler {
     const recordDigest = inputsDigest({ ...chain, step: 'chronicle-record' });
     const recordKey = stepKey('chronicle-record', task.id, recordDigest);
     if (state.steps[recordKey] === undefined) {
-      const recorded = await this._chronicle.record({
-        chronicleRepo: input.chronicleRepo,
-        spec,
-        state
-      });
-      this._runStateRepo.recordStep(input.runsDir, state, recordKey, {
-        name: 'chronicle-record',
-        taskId: task.id,
-        inputsDigest: recordDigest,
-        detail: `${recorded.artifactPaths.length} artifacts`,
-        completedAt: new Date().toISOString()
-      });
-      console.log(
-        chalk.gray(
-          `  [chronicle] ${recorded.artifactPaths.length} artifacts committed`
-        )
+      // T-04: a Chronicle commit is a git push against a separate ledger
+      // repo — the most network-flaky step in the pipeline, and one whose
+      // failure used to cost the whole task. Re-committing an already
+      // written artifact is a no-op on a clean tree, so retrying is safe.
+      const attempt = await this.withRetry(
+        input,
+        `chronicle-record:${task.id}`,
+        async () =>
+          this._chronicle.record({
+            chronicleRepo: input.chronicleRepo as string,
+            spec,
+            state
+          })
       );
+      if (attempt.kind === 'exhausted') {
+        console.log(
+          chalk.red(
+            `  [chronicle] artifact commit failed after retries: ${attempt.error.message.slice(0, 300)}`
+          )
+        );
+      } else {
+        const recorded = attempt.value;
+        this._runStateRepo.recordStep(input.runsDir, state, recordKey, {
+          name: 'chronicle-record',
+          taskId: task.id,
+          inputsDigest: recordDigest,
+          detail: `${recorded.artifactPaths.length} artifacts`,
+          recovery: retried(attempt.history),
+          completedAt: new Date().toISOString()
+        });
+        console.log(
+          chalk.gray(
+            `  [chronicle] ${recorded.artifactPaths.length} artifacts committed`
+          )
+        );
+      }
     } else {
       console.log(
         chalk.gray('  [cached] chronicle artifacts already committed')
@@ -1708,11 +1799,37 @@ export class RunHandler implements IRunHandler {
       return { verdict: cached.verdict, healthReport: cached.detail };
     }
 
-    const sandbox = await this._sandboxDeploy.deploy({
-      worktreePath,
-      sha: this._gitRepo.headSha(worktreePath),
-      previous: state.sandbox
-    });
+    // T-04: only a *thrown* deploy error is retried. An unhealthy sandbox
+    // returns a red verdict, and re-running the deploy to see if the gate
+    // changes its mind would make the sandbox gate advisory.
+    const attempt = await this.withRetry(
+      input,
+      `sandbox:${task.id}`,
+      async () =>
+        this._sandboxDeploy.deploy({
+          worktreePath,
+          sha: this._gitRepo.headSha(worktreePath),
+          previous: state.sandbox
+        })
+    );
+    if (attempt.kind === 'exhausted') {
+      const verdict: GateVerdict = {
+        gate: 'sandbox',
+        outcome: 'blocked',
+        wouldEscalate: true,
+        reasons: [
+          `sandbox deploy failed after retries: ${attempt.error.message.slice(0, 400)}`
+        ],
+        recordedAt: new Date().toISOString(),
+        taskId: task.id,
+        inputsDigest: digest
+      };
+      this._runStateRepo.appendVerdict(input.runsDir, state, verdict);
+      this.printVerdict(verdict);
+      return { verdict };
+    }
+
+    const sandbox = attempt.value;
     sandbox.verdict.taskId = task.id;
     sandbox.verdict.inputsDigest = digest;
     if (sandbox.healthReport !== undefined) {
@@ -1735,6 +1852,7 @@ export class RunHandler implements IRunHandler {
       inputsDigest: digest,
       verdict: sandbox.verdict,
       detail: sandbox.healthReport,
+      recovery: retried(attempt.history),
       completedAt: new Date().toISOString()
     });
     this.printVerdict(sandbox.verdict);
@@ -1838,3 +1956,17 @@ export class RunHandler implements IRunHandler {
     }
   }
 }
+
+/**
+ * The recovery history worth persisting on a step, or `undefined` when the
+ * step succeeded first try.
+ *
+ * A history on every step would make "this step was flaky" invisible — the
+ * signal is the presence of the record, so a clean run must not carry one.
+ */
+const retried = (history: RecoveryHistory): RecoveryHistory | undefined =>
+  history.attempts.some(
+    entry => entry.action !== 'attempt' || entry.outcome !== 'succeeded'
+  )
+    ? history
+    : undefined;

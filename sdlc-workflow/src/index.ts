@@ -60,6 +60,10 @@ import {
   IRunStateRepository
 } from './repositories/run-state.repository';
 import {
+  RunLockRepository,
+  IRunLockRepository
+} from './repositories/run-lock.repository';
+import {
   SpecDocRepository,
   ISpecDocRepository
 } from './repositories/spec-doc.repository';
@@ -132,6 +136,10 @@ import {
   IGateRemediationService
 } from './services/gate-remediation.service';
 import {
+  RetryExecutorService,
+  IRetryExecutorService
+} from './services/retry-executor.service';
+import {
   HeartbeatService,
   IHeartbeatService
 } from './services/heartbeat.service';
@@ -200,6 +208,9 @@ container.bind<IGitRepository>(WORKFLOW_TOKENS.GitRepository).to(GitRepository);
 container
   .bind<IAgentRunnerRepository>(WORKFLOW_TOKENS.AgentRunnerRepository)
   .to(AgentRunnerRepository);
+container
+  .bind<IRunLockRepository>(WORKFLOW_TOKENS.RunLockRepository)
+  .to(RunLockRepository);
 container
   .bind<IRunStateRepository>(WORKFLOW_TOKENS.RunStateRepository)
   .to(RunStateRepository);
@@ -277,6 +288,9 @@ container
 container
   .bind<IGateRemediationService>(WORKFLOW_TOKENS.GateRemediationService)
   .to(GateRemediationService);
+container
+  .bind<IRetryExecutorService>(WORKFLOW_TOKENS.RetryExecutorService)
+  .to(RetryExecutorService);
 container
   .bind<IHeartbeatService>(WORKFLOW_TOKENS.HeartbeatService)
   .to(HeartbeatService);

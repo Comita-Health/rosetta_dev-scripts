@@ -7,6 +7,7 @@ import type { IAgentRunnerRepository } from '../repositories/agent-runner.reposi
 import type { IGitRepository } from '../repositories/git.repository';
 import type { IRunStateRepository } from '../repositories/run-state.repository';
 import { RunStateRepository } from '../repositories/run-state.repository';
+import { RunLockRepository } from '../repositories/run-lock.repository';
 import type { ISpecDocRepository } from '../repositories/spec-doc.repository';
 import {
   ExecutorService,
@@ -951,7 +952,7 @@ describe('fail-loud T-01 launch record (#37)', () => {
 
   beforeEach(() => {
     runsDir = mkdtempSync(path.join(os.tmpdir(), 'sdlc-launch-'));
-    stateRepo = new RunStateRepository();
+    stateRepo = new RunStateRepository(new RunLockRepository());
     specRead = jest.fn().mockReturnValue(makeSpec());
     specReadAtRef = jest.fn().mockReturnValue(makeSpec());
     gitMock = {

@@ -258,6 +258,13 @@ export interface StepResult {
   verdict?: GateVerdict;
   /** Small step-specific payload (e.g. sandbox health report). */
   detail?: string;
+  /**
+   * SPEC-PRD-0021-P1 T-03/T-04: attempt trail when the step needed retries.
+   * Absent on a first-attempt success, so its presence is itself the signal
+   * that a step was flaky — the record survives on the completed step rather
+   * than only in whichever log the operator still had open.
+   */
+  recovery?: RecoveryHistory;
   completedAt: string; // ISO timestamp
 }
 
@@ -309,6 +316,34 @@ export interface RunState {
    */
   mergeBlockedRetries: number;
   updatedAt: string; // ISO timestamp
+}
+
+/**
+ * One attempt inside a {@link RecoveryHistory} (SPEC-PRD-0021-P1 T-03).
+ *
+ * `action` names what the engine did, not what went wrong: `attempt`,
+ * `backoff`, `escalate`. Together with `outcome` this is the durable answer
+ * to "why did this take four minutes and six tries", which previously
+ * existed only in whichever log the operator still had open.
+ */
+export interface RecoveryAttempt {
+  attempt: number;
+  action: 'attempt' | 'backoff' | 'escalate';
+  outcome: 'succeeded' | 'failed' | 'exhausted' | 'waited';
+  /** Failure message for a failed attempt; backoff duration for a wait. */
+  detail?: string;
+  at: string; // ISO timestamp
+}
+
+/**
+ * The recovery record a retried step returns (SPEC-PRD-0021-P1 T-03).
+ * `escalated` is true only once the attempt cap was reached.
+ */
+export interface RecoveryHistory {
+  /** Recovery path label, e.g. `pr:T-01` — one budget per path. */
+  path: string;
+  attempts: RecoveryAttempt[];
+  escalated: boolean;
 }
 
 /** Wave 0: one engine-driven gate remediation round for a task. */
@@ -395,6 +430,10 @@ export type WorkflowErrorCode =
   | 'SPEC_MALFORMED'
   | 'CONTRACT_MALFORMED'
   | 'RUN_NOT_FOUND'
+  /** SPEC-PRD-0021-P1 T-02: another live writer already owns the run. */
+  | 'RUN_LOCK_HELD'
+  /** T-02: a state.json write was refused because the run is foreign-locked. */
+  | 'RUN_LOCK_NOT_HELD'
   | 'GIT_FAILED'
   | 'GH_FAILED';
 

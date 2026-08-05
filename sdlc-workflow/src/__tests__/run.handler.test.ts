@@ -15,6 +15,10 @@ import type { IRunStateRepository } from '../repositories/run-state.repository';
 import type { ISpecDocRepository } from '../repositories/spec-doc.repository';
 import type { IEscalationService } from '../services/escalation.service';
 import type { IGateRemediationService } from '../services/gate-remediation.service';
+import {
+  RetryExecutorService,
+  type IRetryExecutorService
+} from '../services/retry-executor.service';
 import type { IAggregatorService } from '../services/aggregator.service';
 import type { IChronicleCommitService } from '../services/chronicle-commit.service';
 import type { ICiGateService } from '../services/ci-gate.service';
@@ -423,6 +427,11 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
     container
       .bind<IGateRemediationService>(WORKFLOW_TOKENS.GateRemediationService)
       .toConstantValue({ remediate });
+    // The real executor: retry policy is behavior under test here, not a
+    // collaborator to stub out. Backoff is zeroed per call via input.
+    container
+      .bind<IRetryExecutorService>(WORKFLOW_TOKENS.RetryExecutorService)
+      .to(RetryExecutorService);
     container.bind<IRunHandler>(WORKFLOW_TOKENS.RunHandler).to(RunHandler);
     handler = container.get<IRunHandler>(WORKFLOW_TOKENS.RunHandler);
     jest.spyOn(console, 'log').mockImplementation(() => undefined);
@@ -751,12 +760,57 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
     expect(openTaskPr).toHaveBeenCalledTimes(1);
   });
 
-  it('records a blocked pr verdict on push/PR failure, keeps state intact, and retries on the next run (P3 T-02)', async () => {
+  // SPEC-PRD-0021-P1 T-04: a transient PR-open failure used to cost the whole
+  // task — it recorded a blocked verdict and waited for a hand relaunch. Now
+  // the shared retry executor absorbs it in-process.
+  it('recovers from a transient push/PR failure without blocking the task', async () => {
     openTaskPr.mockImplementationOnce(() => {
       throw new WorkflowError('gh pr failed', 'GH_FAILED', ['boom']);
     });
 
-    const result = await handler.runTask(INPUT);
+    const result = await handler.runTask({ ...INPUT, retryBackoffMs: 0 });
+
+    expect(result.outcome).toBe('executed');
+    expect(openTaskPr).toHaveBeenCalledTimes(2);
+    expect(state.verdicts).not.toContainEqual(
+      expect.objectContaining({ gate: 'pr', outcome: 'blocked' })
+    );
+    expect(recordTaskPrUrl).toHaveBeenCalledTimes(1);
+
+    // The attempt trail survives on the step, so a flaky step is visible
+    // afterwards rather than only in a log the operator no longer has.
+    const prStep = Object.entries(state.steps).find(([key]) =>
+      key.startsWith('pr:')
+    )?.[1];
+    expect(prStep?.recovery).toMatchObject({
+      path: 'pr:T-01',
+      escalated: false
+    });
+    expect(prStep?.recovery?.attempts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ attempt: 1, outcome: 'failed' }),
+        expect.objectContaining({ attempt: 2, outcome: 'succeeded' })
+      ])
+    );
+  });
+
+  it('does not stamp a recovery record on a step that succeeded first try', async () => {
+    await handler.runTask(INPUT);
+
+    const prStep = Object.entries(state.steps).find(([key]) =>
+      key.startsWith('pr:')
+    )?.[1];
+    // Presence of the record is the "this was flaky" signal — a history on
+    // every step would erase it.
+    expect(prStep?.recovery).toBeUndefined();
+  });
+
+  it('records a blocked pr verdict once retries are exhausted, keeping state intact for the next run (P3 T-02)', async () => {
+    openTaskPr.mockImplementation(() => {
+      throw new WorkflowError('gh pr failed', 'GH_FAILED', ['boom']);
+    });
+
+    const result = await handler.runTask({ ...INPUT, retryBackoffMs: 0 });
 
     // The failure is recorded honestly and the pipeline continues.
     expect(result.outcome).toBe('executed');
@@ -774,10 +828,6 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
       false
     );
     expect(evaluate).toHaveBeenCalledTimes(1); // gates still ran
-
-    await handler.runTask(INPUT);
-    expect(openTaskPr).toHaveBeenCalledTimes(2);
-    expect(recordTaskPrUrl).toHaveBeenCalledTimes(1);
   });
 
   describe('P3 T-04 gate enforcement', () => {
@@ -1105,7 +1155,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
         throw new WorkflowError('gh unavailable', 'GH_FAILED');
       });
 
-      await handler.runTask(INPUT);
+      await handler.runTask({ ...INPUT, retryBackoffMs: 0 });
 
       expect(prMerge).not.toHaveBeenCalled();
       expect(state.exceptions).toContainEqual(
@@ -1580,28 +1630,136 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
   });
 
   it('resumes mid-pipeline from cached steps after a kill between gates (T-09)', async () => {
-    // First pass killed after the reviewer gate: run with sandbox deploy
-    // failing hard to stop the pipeline there.
-    deploy.mockRejectedValueOnce(new Error('killed'));
+    // First pass killed at the verification gate. A gate throw is a genuine
+    // stop — unlike a non-gate step failure, which the T-04 retry executor
+    // now absorbs rather than letting it end the run.
+    verify.mockRejectedValueOnce(new Error('killed'));
     await expect(handler.runTask(INPUT)).rejects.toThrow('killed');
     expect(evaluate).toHaveBeenCalledTimes(1);
     expect(review).toHaveBeenCalledTimes(1);
+    expect(deploy).toHaveBeenCalledTimes(1);
 
-    // Resume: envelope and reviewer verdicts come from the step cache;
-    // the remaining steps execute exactly once.
-    deploy.mockResolvedValue({
-      verdict: sandboxVerdict,
-      record: { sha: 'head-sha', status: 'healthy', recordedAt: 'x' },
-      healthReport: 'sha=head-sha ok'
-    });
+    // Resume: envelope, reviewer and sandbox come from the step cache; only
+    // the killed step and everything after it executes.
     const result = await handler.runTask(INPUT);
 
     expect(result.outcome).toBe('executed');
     expect(evaluate).toHaveBeenCalledTimes(1);
     expect(review).toHaveBeenCalledTimes(1);
-    expect(deploy).toHaveBeenCalledTimes(2); // first call was the kill
-    expect(verify).toHaveBeenCalledTimes(1);
+    expect(deploy).toHaveBeenCalledTimes(1);
+    expect(verify).toHaveBeenCalledTimes(2); // first call was the kill
     expect(aggregate).toHaveBeenCalledTimes(1);
+  });
+
+  // T-04: the sandbox deploy is retried on a *thrown* error, but an unhealthy
+  // deploy is a verdict — retrying that would make the gate advisory.
+  it('retries a throwing sandbox deploy and blocks the gate once exhausted', async () => {
+    deploy.mockRejectedValue(new Error('deploy host unreachable'));
+
+    await handler.runTask({ ...INPUT, retryBackoffMs: 0 });
+
+    expect(deploy).toHaveBeenCalledTimes(3);
+    expect(state.verdicts).toContainEqual(
+      expect.objectContaining({
+        gate: 'sandbox',
+        outcome: 'blocked',
+        reasons: [expect.stringContaining('deploy host unreachable')]
+      })
+    );
+  });
+
+  it('never retries an unhealthy sandbox verdict', async () => {
+    deploy.mockResolvedValue({
+      verdict: verdictOf('sandbox', 'breach', ['health check never echoed']),
+      record: { sha: 'head-sha', status: 'unhealthy', recordedAt: 'x' }
+    });
+
+    await handler.runTask({ ...INPUT, retryBackoffMs: 0 });
+
+    expect(deploy).toHaveBeenCalledTimes(1);
+  });
+
+  // T-04's third non-gate step: a git push against a separate ledger repo,
+  // the most network-flaky operation in the pipeline.
+  it('retries a failing Chronicle commit and records the recovery', async () => {
+    chronicleRecord.mockRejectedValueOnce(new Error('remote hung up'));
+
+    await handler.runTask({
+      ...INPUT,
+      chronicleRepo: '/chronicle',
+      retryBackoffMs: 0
+    });
+
+    expect(chronicleRecord).toHaveBeenCalledTimes(2);
+    const step = Object.entries(state.steps).find(([key]) =>
+      key.startsWith('chronicle-record:')
+    )?.[1];
+    expect(step?.recovery).toMatchObject({
+      path: 'chronicle-record:T-01',
+      escalated: false
+    });
+  });
+
+  it('leaves the Chronicle step uncached when its retries are exhausted', async () => {
+    chronicleRecord.mockRejectedValue(new Error('remote hung up'));
+
+    await handler.runTask({
+      ...INPUT,
+      chronicleRepo: '/chronicle',
+      retryBackoffMs: 0
+    });
+
+    expect(chronicleRecord).toHaveBeenCalledTimes(3);
+    // Caching a step that never happened would silently skip the artifact
+    // commit on resume, losing the run's evidence for good.
+    expect(
+      Object.keys(state.steps).some(key => key.startsWith('chronicle-record:'))
+    ).toBe(false);
+  });
+
+  // T-04 AC: after a retry succeeds the run resumes from the step cache in
+  // state.json with zero hand-edits, and the recovered step is not repeated.
+  it('resumes from the step cache after a retry, with no duplicate side effect', async () => {
+    openTaskPr.mockImplementationOnce(() => {
+      throw new WorkflowError('gh pr failed', 'GH_FAILED', ['boom']);
+    });
+    deploy.mockRejectedValueOnce(new Error('deploy host unreachable'));
+    chronicleRecord.mockRejectedValueOnce(new Error('remote hung up'));
+
+    const first = await handler.runTask({
+      ...INPUT,
+      chronicleRepo: '/chronicle',
+      retryBackoffMs: 0
+    });
+    expect(first.outcome).toBe('executed');
+    // One recovered call each: the failure plus the successful retry.
+    expect(openTaskPr).toHaveBeenCalledTimes(2);
+    expect(deploy).toHaveBeenCalledTimes(2);
+    expect(chronicleRecord).toHaveBeenCalledTimes(2);
+
+    const savedSteps = { ...state.steps };
+    await handler.runTask({
+      ...INPUT,
+      chronicleRepo: '/chronicle',
+      retryBackoffMs: 0
+    });
+
+    // Nothing re-executed on resume — a second PR, deploy, or ledger commit
+    // is the duplicate side effect this acceptance criterion is about.
+    expect(openTaskPr).toHaveBeenCalledTimes(2);
+    expect(deploy).toHaveBeenCalledTimes(2);
+    expect(chronicleRecord).toHaveBeenCalledTimes(2);
+    // Resume read the recovered steps as-is: same keys, same recovery trail.
+    expect(Object.keys(state.steps).sort()).toEqual(
+      Object.keys(savedSteps).sort()
+    );
+    // Every cached step was persisted by the engine, not patched in by hand.
+    expect(recordStep).toHaveBeenCalledWith(
+      '/runs',
+      expect.anything(),
+      expect.stringMatching(/^pr:T-01:/),
+      expect.objectContaining({ recovery: expect.anything() })
+    );
   });
 
   it('shows run status: tasks, cached steps, verdicts, exceptions (T-09)', async () => {

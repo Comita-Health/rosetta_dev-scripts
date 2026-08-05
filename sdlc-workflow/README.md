@@ -195,6 +195,50 @@ overstating reviewer time by roughly 3.5 minutes a segment. `sandbox`,
 `verification` (including per-criterion verifier-agent progress), `ci` and
 `merge` now set their own labels.
 
+### Crash-safe, single-writer runs (Wave 1)
+
+Wave 0's retry loops are only trustworthy if the state they resume from
+survived the last crash, so `state.json` became durable and exclusively
+owned (SPEC-PRD-0021-P1):
+
+- **Atomic writes.** Every save goes to a temp file in the same directory,
+  `fsync`s, then `rename`s over the target. A reader polling during a write
+  sees one complete document or the previous one — never a truncated prefix —
+  and a kill mid-write leaves the previous state fully parseable.
+- **One writer per run.** `run.lock` in the run directory is taken by
+  exclusive file create, so the kernel picks the winner. `run` / `supervise`
+  hold it for the whole session; short-lived mutators take a momentary lock
+  around their write. A second engine fails immediately with `RUN_LOCK_HELD`
+  naming the live pid, host, owner and start time rather than blocking or
+  clobbering. A lock whose owner is dead **on this host** is reclaimable —
+  otherwise a SIGKILLed run would be permanently unresumable — but a pid
+  recorded on another host never is, because it cannot be probed from here.
+- **Shared retry policy.** `RetryExecutorService` is the single place the
+  attempt cap, the backoff curve (doubling, capped at 30s) and the
+  `RecoveryHistory` schema are defined. It re-invokes the caller's step and
+  nothing else: it has no reference to a verdict type and no branch that can
+  construct or soften one, because a retry layer able to do that would make
+  every gate advisory.
+- **Non-gate steps retry, gates do not.** PR open, sandbox deploy and
+  Chronicle commit are retried through the executor and record their attempt
+  trail on the step (`steps[key].recovery`), so a flaky step is visible
+  afterwards instead of only in a log. Only a _thrown_ sandbox error retries;
+  an unhealthy deploy is a verdict. Recovered steps land in the step cache
+  like any other, so a resume reuses them with no hand-edits and no duplicate
+  PR, deploy, or ledger commit.
+- **Sanitized agent dispatch.** Nested-agent markers (`CURSOR_AGENT`,
+  `CLAUDECODE`, the askpass pair, …) are stripped before spawning any agent.
+  A child that inherits them can decide it is re-entrant and exit without
+  doing the work — a silent no-op indistinguishable from "nothing to change",
+  after which every gate judges an unmodified branch. The list is a denylist,
+  not a `CURSOR_*` wildcard, because the engine dispatches _with_
+  `CURSOR_AGENT_BIN` and `CURSOR_MODEL`.
+- **Detached launches are verified, not assumed.** The parent used to sample
+  child liveness once at 1.5s; on a loaded machine it sampled mid-boot, so it
+  printed "detached" and exited 0 for a run that died a second later. It now
+  watches for up to 8s and stops early on evidence either way — the child's
+  own `supervise.exit` record, or a dead pid.
+
 ### Spec-format lint and the single-writer rule (#40)
 
 The spec file is the one artifact humans and the machine must agree on

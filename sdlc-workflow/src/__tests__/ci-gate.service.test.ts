@@ -47,7 +47,11 @@ describe('CiGateService (P3 T-03 live monitor + bounded fix cycle)', () => {
   let commit: jest.Mock;
   let recordCiFixAttempt: jest.Mock;
 
-  const input = () => ({
+  // `checksAppearTimeoutMs` is deliberately tiny by default: most cases here
+  // assert what happens when the window *expires*, which cannot race. Cases
+  // that assert checks arriving in time pass a window wide enough that a
+  // loaded machine cannot expire it between two mocked polls.
+  const input = (over: Record<string, unknown> = {}) => ({
     repoPath: '/repo',
     worktreePath: '/runs/run-1/worktrees/T-01',
     branch: 'sdlc/run-1/T-01',
@@ -59,7 +63,8 @@ describe('CiGateService (P3 T-03 live monitor + bounded fix cycle)', () => {
     pollIntervalMs: 1,
     timeoutMs: 5_000,
     checksAppearTimeoutMs: 20,
-    checksAppearPollIntervalMs: 1
+    checksAppearPollIntervalMs: 1,
+    ...over
   });
 
   beforeEach(() => {
@@ -182,7 +187,9 @@ describe('CiGateService (P3 T-03 live monitor + bounded fix cycle)', () => {
       .mockReturnValueOnce({ total: 2, failed: [], pending: ['ci'] }) // registered
       .mockReturnValue(green);
 
-    const verdict = await gate.monitor(input());
+    const verdict = await gate.monitor(
+      input({ checksAppearTimeoutMs: 30_000 })
+    );
 
     expect(verdict.outcome).toBe('pass');
     expect(verdict.transcript).toContain('waiting for check runs to register');
@@ -196,7 +203,9 @@ describe('CiGateService (P3 T-03 live monitor + bounded fix cycle)', () => {
       .mockReturnValueOnce(null) // fixed sha not yet visible
       .mockReturnValue(green); // then green
 
-    const verdict = await gate.monitor(input());
+    const verdict = await gate.monitor(
+      input({ checksAppearTimeoutMs: 30_000 })
+    );
 
     expect(verdict.outcome).toBe('pass');
     expect(verdict.reasons[0]).toContain('fixed-sha-1');

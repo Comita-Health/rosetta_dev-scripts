@@ -21,6 +21,10 @@ import {
   WakeInboxRepository,
   type IWakeInboxRepository
 } from '../repositories/wake-inbox.repository';
+import {
+  RunLockRepository,
+  type IRunLockRepository
+} from '../repositories/run-lock.repository';
 import { WORKFLOW_TOKENS } from '../tokens';
 import type { RunState, SpecDocument } from '../types';
 import {
@@ -174,6 +178,9 @@ describe('SuperviseService', () => {
         remove: queueRemove
       });
     container
+      .bind<IRunLockRepository>(WORKFLOW_TOKENS.RunLockRepository)
+      .to(RunLockRepository);
+    container
       .bind<ISuperviseService>(WORKFLOW_TOKENS.SuperviseService)
       .to(SuperviseService);
     supervise = container.get(WORKFLOW_TOKENS.SuperviseService);
@@ -192,6 +199,8 @@ describe('SuperviseService', () => {
     wakeDir,
     // Wave 0 retries back off before the next wave — never in tests.
     mergeBlockedBackoffMs: 0,
+    // Production watches a detached child for seconds; tests need one poll.
+    detachVerifyMs: 1,
     ...over
   });
 
@@ -288,6 +297,194 @@ describe('SuperviseService', () => {
 
     expect(result.kind).toBe('detached');
     expect(result.detail).toBeUndefined();
+  });
+
+  // A single liveness sample used to decide this, and on a loaded machine it
+  // landed while the child was still booting `tsx` — alive, so the parent
+  // printed "detached" and exited 0 for a run that died a moment later.
+  it('catches a child that dies later in the startup window', async () => {
+    // Alive for the first sample, dead later in the window — the exact shape
+    // of a `tsx` child that is still booting when the old single sample ran.
+    isAlive
+      .mockReturnValueOnce(true)
+      .mockReturnValueOnce(true)
+      .mockReturnValue(false);
+
+    const result = await supervise.run(
+      input({
+        detach: true,
+        detachVerifyMs: 2_000,
+        detachArgv: ['node', 'src/index.ts', 'run', '--detach']
+      })
+    );
+
+    expect(result.kind).toBe('failed');
+    expect(isAlive.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  it('trusts the child own exit record over its liveness', async () => {
+    // The pid may still be winding down, or already reused. The record the
+    // child wrote about itself is the deterministic evidence.
+    isAlive.mockReturnValue(true);
+    exitRepo.write(path.join(runsDir, 'run-1'), {
+      code: 1,
+      reason: 'SPEC_MALFORMED',
+      abnormal: true,
+      at: '2026-08-05T00:00:00Z'
+    });
+
+    const result = await supervise.run(
+      input({
+        detach: true,
+        detachVerifyMs: 400,
+        detachArgv: ['node', 'src/index.ts', 'run', '--detach']
+      })
+    );
+
+    expect(result.kind).toBe('failed');
+  });
+
+  it('stops watching as soon as the child proves it died', async () => {
+    isAlive.mockReturnValue(false);
+    const started = Date.now();
+
+    await supervise.run(
+      input({
+        detach: true,
+        // No explicit budget: the production default is seconds long, and the
+        // point is that a decided outcome ends the watch instead of burning
+        // the whole window.
+        detachVerifyMs: undefined,
+        detachArgv: ['node', 'src/index.ts', 'run', '--detach']
+      })
+    );
+
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
+  // SPEC-PRD-0021-P1 T-02. The lock lives at the session boundary because the
+  // race being closed is two *engines* on one run, not two writes.
+  describe('single-writer session lock (Wave 1)', () => {
+    const lockPath = (): string => path.join(runsDir, 'run-1', 'run.lock');
+
+    const writeLiveForeignLock = (): void => {
+      mkdirSync(path.join(runsDir, 'run-1'), { recursive: true });
+      writeFileSync(
+        lockPath(),
+        `${JSON.stringify({
+          pid: process.ppid,
+          host: os.hostname(),
+          owner: 'supervise',
+          token: 'held',
+          acquiredAt: '2026-08-05T00:00:00Z'
+        })}\n`
+      );
+    };
+
+    it('holds the lock while waves run and releases it afterwards', async () => {
+      runTask.mockImplementation(async () => {
+        expect(existsSync(lockPath())).toBe(true);
+        return wave('executed');
+      });
+      load.mockReturnValue({
+        taskResults: {
+          'T-01': {
+            taskId: 'T-01',
+            status: 'completed',
+            mergedSha: 'a',
+            recordedAt: 't'
+          },
+          'T-02': {
+            taskId: 'T-02',
+            status: 'completed',
+            mergedSha: 'b',
+            recordedAt: 't'
+          }
+        }
+      } as unknown as RunState);
+
+      await supervise.run(input());
+
+      expect(runTask).toHaveBeenCalled();
+      // A lock left behind would make the *next* launch fail for no reason.
+      expect(existsSync(lockPath())).toBe(false);
+    });
+
+    it('refuses to start a second engine over a live one', async () => {
+      writeLiveForeignLock();
+
+      await expect(supervise.run(input())).rejects.toMatchObject({
+        code: 'RUN_LOCK_HELD'
+      });
+      // Failing fast is the point: no wave may run, not even one.
+      expect(runTask).not.toHaveBeenCalled();
+    });
+
+    it('names the live holder and what to do about it', async () => {
+      writeLiveForeignLock();
+
+      await expect(supervise.run(input())).rejects.toMatchObject({
+        details: expect.arrayContaining([
+          expect.stringContaining(String(process.ppid)),
+          expect.stringContaining('already running')
+        ])
+      });
+    });
+
+    it('releases the lock when a wave throws', async () => {
+      runTask.mockRejectedValue(new Error('worktree gone'));
+
+      await expect(supervise.run(input())).rejects.toThrow('worktree gone');
+
+      // Without this, a crashed run could only be resumed by hand-deleting a
+      // lock file — the class of manual surgery this phase exists to remove.
+      expect(existsSync(lockPath())).toBe(false);
+    });
+
+    it('takes the lock for a single unsupervised wave too', async () => {
+      runTask.mockImplementation(async () => {
+        expect(existsSync(lockPath())).toBe(true);
+        return wave('executed');
+      });
+
+      await supervise.run(input({ supervise: false }));
+
+      expect(existsSync(lockPath())).toBe(false);
+    });
+
+    it('leaves the lock to the child on a detached launch', async () => {
+      await supervise.run(
+        input({
+          detach: true,
+          detachArgv: ['node', 'src/index.ts', 'run', '--detach']
+        })
+      );
+
+      // The parent exits immediately; a lock taken here would be released
+      // out from under the child, or worse, block it.
+      expect(existsSync(lockPath())).toBe(false);
+    });
+
+    it('reclaims a lock whose owner is dead', async () => {
+      mkdirSync(path.join(runsDir, 'run-1'), { recursive: true });
+      writeFileSync(
+        lockPath(),
+        `${JSON.stringify({
+          // Never a live pid: pid 0 is not addressable by kill(2) as a process.
+          pid: 2 ** 30,
+          host: os.hostname(),
+          owner: 'supervise',
+          token: 'crashed',
+          acquiredAt: '2026-08-05T00:00:00Z'
+        })}\n`
+      );
+      runTask.mockResolvedValue(wave('executed'));
+
+      await supervise.run(input({ supervise: false }));
+
+      // A SIGKILLed supervisor must not make its run permanently unresumable.
+      expect(runTask).toHaveBeenCalled();
+    });
   });
 
   it('loops until all tasks are merged', async () => {

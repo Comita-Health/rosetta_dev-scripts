@@ -11,6 +11,10 @@ import {
   RunStateRepository
 } from '../repositories/run-state.repository';
 import {
+  IRunLockRepository,
+  RunLockRepository
+} from '../repositories/run-lock.repository';
+import {
   ChronicleCommitService,
   IChronicleCommitService
 } from '../services/chronicle-commit.service';
@@ -106,6 +110,9 @@ describe('ChronicleCommitService + GatePolicyQueryService (T-08)', () => {
       )
       .to(ChronicleArtifactRepository);
     container
+      .bind<IRunLockRepository>(WORKFLOW_TOKENS.RunLockRepository)
+      .to(RunLockRepository);
+    container
       .bind<IRunStateRepository>(WORKFLOW_TOKENS.RunStateRepository)
       .to(RunStateRepository);
     container
@@ -120,7 +127,7 @@ describe('ChronicleCommitService + GatePolicyQueryService (T-08)', () => {
     query = container.get<IGatePolicyQueryService>(
       WORKFLOW_TOKENS.GatePolicyQueryService
     );
-    stateRepo = new RunStateRepository();
+    stateRepo = new RunStateRepository(new RunLockRepository());
   });
 
   afterEach(() => {

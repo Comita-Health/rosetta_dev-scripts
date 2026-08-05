@@ -64,6 +64,51 @@
   unmerged. The daemon's relaunch probe writes `supervise.relaunch-exit`
   instead; `SuperviseExitRepository.read` still parses the legacy bare form
   as `abnormal: true` so existing run directories stay readable.
+- **sdlc-workflow:** `state.json` writes are now **atomic and single-writer**
+  (SPEC-PRD-0021-P1 T-01/T-02). Every save goes through a temp file in the
+  same directory, `fsync`, then `rename`, so a crash mid-write leaves the
+  previous state fully parseable and a concurrent reader never observes a
+  truncated file. A `run.lock` in the run directory, taken by exclusive file
+  create, makes the continuity-relaunch-versus-manual-resume race structurally
+  impossible instead of merely unlikely: `run` / `supervise` hold it for the
+  session, short-lived mutators take a momentary lock around their write, and
+  a second engine fails immediately with `RUN_LOCK_HELD` naming the live pid,
+  host, owner and start time. A lock whose owner is dead on this host is
+  reclaimable so a SIGKILLed run stays resumable; a pid on another host never
+  is, since it cannot be probed from here.
+- **sdlc-workflow:** `retry-executor.service` is the engine's single
+  retry-policy surface (T-03): attempt cap, doubling backoff capped at 30s,
+  and the `RecoveryHistory` record schema defined exactly once for the later
+  gate-retry and breaker consumers. It re-invokes the caller's step and
+  nothing else — it holds no reference to a verdict type and has no branch
+  that can construct or soften one, because a retry layer able to do that
+  would make every gate advisory. Exhaustion escalates once and returns; it
+  never loops past the cap.
+- **sdlc-workflow:** the three non-gate steps — PR open, sandbox deploy and
+  Chronicle commit — are retried through that executor with their attempt
+  trail recorded on the step (`steps[<key>].recovery`), so a flaky step is
+  visible after the fact rather than only in a log the operator no longer has
+  (T-04). Only a *thrown* sandbox error retries; an unhealthy deploy is a
+  verdict. Recovered steps land in the step cache like any other, so a resume
+  reuses them with zero hand-edits and no duplicate PR, deploy or ledger
+  commit. Gates themselves are deliberately not retried in this phase.
+- **sdlc-workflow:** agent dispatches run with a **sanitized environment**
+  (T-05). Nested-agent markers — `CURSOR_AGENT`, `CURSOR_INVOKED_AS`,
+  `CURSOR_CONVERSATION_ID`, the askpass socket/secret pair, `AGENT_TRANSCRIPTS`
+  and the Claude Code equivalents — are stripped before spawning, for both the
+  workspace-mutating runner and the `cursor-agent -p` completion transport
+  that carries the reviewer, verifier and decompose prompts. A child that
+  inherits them can decide it is re-entrant and exit without doing the work, a
+  silent no-op indistinguishable from "nothing to change", after which every
+  gate judges an unmodified branch. Deliberately a denylist rather than a
+  `CURSOR_*` wildcard, since the engine dispatches *with* `CURSOR_AGENT_BIN`
+  and `CURSOR_MODEL`.
+- **sdlc-workflow:** a detached launch is now verified rather than assumed.
+  The parent sampled child liveness exactly once at 1.5s, and on a loaded
+  machine that sample landed while the child was still booting `tsx` — so it
+  printed "detached", exited 0, and the operator walked away from a run that
+  died a second later. It now watches for up to 8s and stops early on evidence
+  either way: the child's own `supervise.exit` record, or a dead pid.
 
 - **sdlc-workflow:** `queue-run --spec <path> --repo <path> …` writes a
   durable FIFO launch record (`<runsDir>/queue/<n>.json`, deduped by spec
