@@ -65,11 +65,11 @@ front of the operator and future intake.
 
 ### Acceptance criteria
 
-- [ ] test: a completed `BUG-*` run produces exactly one `sdlc.retro.v1`
+- [x] test: a completed `BUG-*` run produces exactly one `sdlc.retro.v1`
       artifact with stage-attributed recommendations, idempotent across
       resume.
-- [ ] test: non-bug runs produce no retro artifact and no behavior change.
-- [ ] test: retro inference failure degrades loud-but-nonblocking: the run
+- [x] test: non-bug runs produce no retro artifact and no behavior change.
+- [x] test: retro inference failure degrades loud-but-nonblocking: the run
       still completes, and `monitor.log` carries a visible warning.
 
 ## Task T-02: Durable run-launch queue consumed at run completion
@@ -90,14 +90,14 @@ same queue via its watch registry, so the record format is the contract.
 
 ### Acceptance criteria
 
-- [ ] test: `queue-run` writes a well-formed FIFO record and dedups on the
+- [x] test: `queue-run` writes a well-formed FIFO record and dedups on the
       same spec path; `status` lists queued entries.
-- [ ] test: a completing supervised run launches the head queued record
+- [x] test: a completing supervised run launches the head queued record
       detached when its spec is Approved, and leaves it queued (with a
       visible monitor line) when it is not.
-- [ ] test: a failed queued launch surfaces as an escalation, never a
+- [x] test: a failed queued launch surfaces as an escalation, never a
       silent drop; the record is retained for retry.
-- [ ] agent: diff confined to the queue feature, retro step, and tests —
+- [x] agent: diff confined to the queue feature, retro step, and tests —
       no changes to gate or merge semantics.
 
 ## Out of scope
