@@ -131,6 +131,70 @@ P3 T-04 the gates enforce by default: green across the board merges the
 task PR automatically; any red gate blocks and escalates (`--shadow`
 disables enforcement for calibration).
 
+The **sandbox gate is part of that aggregate.** A declared sandbox that
+deployed unhealthily blocks the merge, so "it merged" means "it deployed".
+A repo with no `.sdlc/environments.json` contract is not a failure — the
+absence of a contract is not evidence of a broken deploy — and does not
+block.
+
+### Recoverable stops instead of terminal ones (Wave 0)
+
+A postmortem over 23 real runs found **62.7% of elapsed time had no
+supervisor process running at all** (1,560 of 2,487 minutes). Almost none of
+that was slow work; it was the engine stopping on conditions that were
+recoverable and then waiting for a human to relaunch it. Four behaviors
+changed:
+
+| Stop                     | Old behavior                                  | Now                                                                              |
+| ------------------------ | --------------------------------------------- | -------------------------------------------------------------------------------- |
+| CI has no check runs yet | `blocked` on the first poll → escalate → exit | Poll a bounded **appear window** first; absence is a wait, not a verdict         |
+| Reviewer disagreement    | terminal                                      | Bounded remediation round, then escalate                                         |
+| Envelope breach          | terminal                                      | Bounded remediation round (trim scope — never widen the envelope), then escalate |
+| `merge-blocked`          | supervisor exits                              | Bounded retry with backoff, invalidating the `ci` and phase steps                |
+
+**CI appear window.** Every CI block in the entire corpus — all 16 of 59
+verdicts — read `no check runs` or `no CI results for <sha>`. There were
+**zero actual CI failures**, because the engine pushed and polled before
+GitHub had registered the check runs. The gate now distinguishes three
+states: not yet reported (keep waiting, up to `checksAppearTimeoutMs`),
+reported and failing (the existing bounded fix loop), and appear-deadline
+exceeded (escalate — a check suite that never registers is a real
+misconfiguration, not something to spin on).
+
+**Gate remediation.** Reviewer disagreement and envelope breach were 22 of
+44 historical escalations, and each one ended its run cold — even though
+median reviewer dispatch is only 1.16 minutes, so re-judging is cheap. A red
+reviewer or envelope gate now re-dispatches the implementation agent in the
+task's existing worktree with the failing verdicts' reasons as input,
+commits and pushes the fix, and lets the gates judge the new head. The
+budget is explicit (`gateFixAttempts` per task in `state.json`, default 2)
+and exhaustion escalates loudly rather than spinning. Envelope remediation
+is instructed to **reduce the diff**, never to raise `maxDiffLines` — a gate
+that negotiates its own threshold is not a gate. Each round is recorded in
+`state.remediations` and a `[remediate] <task> …` line in `monitor.log`.
+
+**Merge-blocked retry.** The supervisor exited on `merge-blocked` 28 times
+across 79 waves, each ending the process. It now retries up to
+`MERGE_BLOCKED_RETRY_LIMIT` times with backoff, invalidating the step-cache
+entries that could produce a different answer (`ci` and the phase
+aggregate). Retries are counted in `state.mergeBlockedRetries`, and
+exhaustion is still a loud terminal exit.
+
+**Recurring escalations re-notify.** `emitOnce` deduped on the escalation
+title alone, so a given escalation woke a human exactly once ever and
+recurrence was silently swallowed. Escalations now carry an `occurrenceKey`
+(the branch head SHA, or the implementation digest for a task with no head)
+folded into the dedupe marker: the same finding on unchanged content stays
+quiet, but the same finding after an agent pushed a fix wakes the human
+again.
+
+**Instrumentation.** Only `starting`, `implementation` and `reviewer` set a
+heartbeat step, so 52.6% of measured work was unobservable and time from the
+uninstrumented steps accrued under whatever label was left standing —
+overstating reviewer time by roughly 3.5 minutes a segment. `sandbox`,
+`verification` (including per-criterion verifier-agent progress), `ci` and
+`merge` now set their own labels.
+
 ### Spec-format lint and the single-writer rule (#40)
 
 The spec file is the one artifact humans and the machine must agree on
@@ -230,6 +294,15 @@ A `--supervise` (or detached supervise child) process installs exit traps so
 `no-ready-task` / shadow human gate) is still `abnormal: true` so the
 artifacts alone distinguish quiet incompleteness from success.
 
+**The engine is the single writer of `supervise.exit`.** It used to have two
+incompatible formats on disk, because `sdlc-continuity-daemon.sh` deleted the
+file before a relaunch and then `echo $?`'d a bare exit code over it — which
+destroyed the `reason`/`abnormal` evidence and left a `0` that could not be
+told apart from a zero-exit with work unmerged. The daemon's relaunch probe
+now writes `supervise.relaunch-exit` instead. `SuperviseExitRepository.read`
+still parses the bare-integer form, reporting it as `abnormal: true`, so
+pre-Wave-0 run directories remain readable.
+
 **Detection boundary:** exit traps own every termination Node can handle.
 `SIGKILL`, OOM-kill, and power-loss cannot run a handler by definition —
 those remain the continuity layer's job (`supervise.pid` liveness +
@@ -296,6 +369,7 @@ declares them:
      unchanged pre-checklist prompt/verdict shape. The engine ships no
      content — the workspace's HSR/inline-docs bar lands here via
      team-setup; other consumers declare their own. -->
+
 - [ ] Every new HSR class has TSDoc (mandatory)
 - [ ] Prefer readability over cleverness
 ```
@@ -325,7 +399,7 @@ Audit of evaluation-time `.sdlc/` call sites and how each complies:
 
 - **Envelope gate → `surfaces.json`** — resolved as a git blob at the
   gate's `headRef` via `SurfaceMapRepository.loadAtRef` (`git show
-  <ref>:.sdlc/surfaces.json`). Missing at that ref with
+<ref>:.sdlc/surfaces.json`). Missing at that ref with
   `forbiddenSurfaces` declared → breach reason naming the contract path
   and the judged ref. `SurfaceMapRepository.load` (working-tree read)
   remains for synthesis-time use only; gates must not call it.
@@ -337,7 +411,7 @@ Audit of evaluation-time `.sdlc/` call sites and how each complies:
 - **Sandbox gate → `environments.json`** — loaded from the task
   **worktree**, which is the engine-owned checkout of the judged branch
   tip (commands must execute from a filesystem checkout). Compliant: the
-  worktree *is* the judged tree.
+  worktree _is_ the judged tree.
 - **Verification (test tier) → `verification.json`** — same worktree
   rule as the sandbox contract. Compliant for the same reason.
 
@@ -462,22 +536,34 @@ Handler / Service / Repository with InversifyJS (workspace rule):
   carries per-item `checklistFindings`; a failed `mandatory` item overrides
   a model concur to disagree (SPEC-BUG-reviewer-house-bar-P1 T-01).
 - `services/aggregator.service.ts` — combines ci / verification / reviewer /
-  envelope into one phase verdict and derives exception-ledger entries
-  (reviewer disagreement, third CI fix attempt, envelope breach, budget
-  exhaustion) (P2 T-06).
+  envelope / sandbox into one phase verdict and derives exception-ledger
+  entries (reviewer disagreement, third CI fix attempt, envelope breach,
+  failed sandbox deploy, budget exhaustion) (P2 T-06). A repo with no
+  sandbox contract is distinguished from a sandbox that deployed unhealthily
+  — only the latter blocks.
+- `services/gate-remediation.service.ts` — Wave 0: re-dispatches the
+  implementation agent against a red reviewer or envelope gate in the task's
+  existing worktree, commits and pushes the fix so the gates re-judge the
+  new head. Bounded by `gateFixAttempts` per task and the run's token
+  budget; envelope remediation must trim the diff, never widen the envelope
+  (`utils/gate-fix-prompt.ts`).
 - `services/escalation.service.ts` — P3 T-06 / fail-loud T-04: turns
   exception entries into interrupting `action-required` queue items,
   assigned needs-human GitHub issues (`--operator` / `SDLC_OPERATOR`), and
-  durable wake-inbox events (idempotent by title). Swallowed GitHub failures
+  durable wake-inbox events (idempotent by title **and** `occurrenceKey`, so
+  the same finding on a new head SHA re-notifies). Swallowed GitHub failures
   append a loud `monitor.log` warning without blocking the run.
 - `repositories/issue.repository.ts` — `gh issue` create / find-by-title.
 - `repositories/wake-inbox.repository.ts` — durable `~/.rosetta/wake` emits.
-- `services/ci-gate.service.ts` — the live CI gate (P3 T-03): polls the
-  pushed branch's check runs to terminal, dispatches a fix agent on
-  failure (failing logs in the prompt, ≤3 attempts persisted in
-  `ciFixAttempts`), pushes fixes, and returns the post-cycle verdict with
-  the cycle transcript as evidence; honest `blocked` when the branch is
-  not pushed.
+  `emitOnce` dedupes per (title, `occurrenceKey`); the occurrence is hashed
+  into the marker so a long dedupe key cannot truncate it away.
+- `services/ci-gate.service.ts` — the live CI gate (P3 T-03): waits a
+  bounded appear window for the pushed branch's check runs to register,
+  polls them to terminal, dispatches a fix agent on failure (failing logs in
+  the prompt, ≤3 attempts persisted in `ciFixAttempts`), pushes fixes, and
+  returns the post-cycle verdict with the cycle transcript as evidence;
+  honest `blocked` when the branch is not pushed or when checks never appear
+  within the window.
 - `services/digest.service.ts` — phase-boundary digest to the PRD-0007
   personal queue; append-only. Veto is a separate `check-veto` command
   that reads the item back (T-07 / P3 T-05).

@@ -69,6 +69,47 @@ export interface IRunStateRepository {
    * spend and persist. Returns the new total.
    */
   recordTokenSpend(runsDir: string, state: RunState, deltaK: number): number;
+  /**
+   * Wave 0: increment the task's gate remediation counter and persist.
+   * Returns the new count. Persisted so resume never refills the budget.
+   */
+  recordGateFixAttempt(
+    runsDir: string,
+    state: RunState,
+    taskId: string
+  ): number;
+  /**
+   * Wave 0: record the head SHA a remediation round produced. Task
+   * re-selection consults this to reopen a task whose phase gate breached
+   * before the fix landed.
+   */
+  recordRemediation(
+    runsDir: string,
+    state: RunState,
+    taskId: string,
+    sha: string,
+    gates: string[]
+  ): void;
+  /**
+   * Wave 0: increment and persist the run's supervisor merge-blocked retry
+   * count. Returns the new count.
+   */
+  recordMergeBlockedRetry(runsDir: string, state: RunState): number;
+  /**
+   * Wave 0: drop cached steps matching `predicate` so the next wave
+   * re-evaluates them, and persist. Returns the keys removed.
+   *
+   * @remarks
+   * The supervisor's bounded merge-blocked retry needs this: replaying a
+   * wave against an intact step cache reuses the same red verdicts and
+   * makes no progress, so a retry that does not invalidate is just a
+   * slower way to reach the same stop.
+   */
+  invalidateSteps(
+    runsDir: string,
+    state: RunState,
+    predicate: (step: StepResult, key: string) => boolean
+  ): string[];
 }
 
 const stateFile = (runsDir: string, runId: string): string =>
@@ -86,6 +127,9 @@ export class RunStateRepository implements IRunStateRepository {
     state.steps = state.steps ?? {};
     state.tokenSpendK = state.tokenSpendK ?? 0;
     state.ciFixAttempts = state.ciFixAttempts ?? {};
+    state.gateFixAttempts = state.gateFixAttempts ?? {};
+    state.remediations = state.remediations ?? {};
+    state.mergeBlockedRetries = state.mergeBlockedRetries ?? 0;
     // #37 launch record — older states only had updatedAt.
     state.startedAt = state.startedAt ?? state.updatedAt;
     state.specDigest = state.specDigest ?? '';
@@ -197,5 +241,56 @@ export class RunStateRepository implements IRunStateRepository {
     state.tokenSpendK = (state.tokenSpendK ?? 0) + deltaK;
     this.save(runsDir, state);
     return state.tokenSpendK;
+  }
+
+  recordGateFixAttempt(
+    runsDir: string,
+    state: RunState,
+    taskId: string
+  ): number {
+    state.gateFixAttempts = state.gateFixAttempts ?? {};
+    const next = (state.gateFixAttempts[taskId] ?? 0) + 1;
+    state.gateFixAttempts[taskId] = next;
+    this.save(runsDir, state);
+    return next;
+  }
+
+  recordRemediation(
+    runsDir: string,
+    state: RunState,
+    taskId: string,
+    sha: string,
+    gates: string[]
+  ): void {
+    state.remediations = state.remediations ?? {};
+    state.remediations[taskId] = {
+      attempt: state.gateFixAttempts?.[taskId] ?? 1,
+      sha,
+      gates,
+      recordedAt: new Date().toISOString()
+    };
+    this.save(runsDir, state);
+  }
+
+  recordMergeBlockedRetry(runsDir: string, state: RunState): number {
+    state.mergeBlockedRetries = (state.mergeBlockedRetries ?? 0) + 1;
+    this.save(runsDir, state);
+    return state.mergeBlockedRetries;
+  }
+
+  invalidateSteps(
+    runsDir: string,
+    state: RunState,
+    predicate: (step: StepResult, key: string) => boolean
+  ): string[] {
+    const removed = Object.entries(state.steps)
+      .filter(([key, step]) => predicate(step, key))
+      .map(([key]) => key);
+    if (removed.length === 0) return [];
+    for (const key of removed) {
+      delete state.steps[key];
+    }
+    this.save(runsDir, state);
+    return removed;
   }
 }

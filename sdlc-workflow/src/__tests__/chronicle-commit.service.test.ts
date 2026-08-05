@@ -78,6 +78,9 @@ const makeState = (): RunState => ({
   steps: {},
   tokenSpendK: 0,
   ciFixAttempts: {},
+  gateFixAttempts: {},
+  remediations: {},
+  mergeBlockedRetries: 0,
   updatedAt: 'x'
 });
 

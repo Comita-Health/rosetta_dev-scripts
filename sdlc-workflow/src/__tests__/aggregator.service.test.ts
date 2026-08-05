@@ -33,6 +33,9 @@ const makeState = (overrides: Partial<RunState> = {}): RunState => ({
   steps: {},
   tokenSpendK: 0,
   ciFixAttempts: {},
+  gateFixAttempts: {},
+  remediations: {},
+  mergeBlockedRetries: 0,
   updatedAt: 'x',
   ...overrides
 });
@@ -41,6 +44,17 @@ const aggregator = new AggregatorService();
 
 const aggregate = (gates: GateSet, state = makeState(), budgetK = 200) =>
   aggregator.aggregate({ gates, state, taskId: 'T-01', budgetK });
+
+/** The missing-contract verdict SandboxDeployService returns verbatim. */
+const noSandboxContract = (): GateVerdict => ({
+  gate: 'sandbox',
+  outcome: 'blocked',
+  wouldEscalate: false,
+  reasons: [
+    'no sandbox contract (.sdlc/environments.json → sandbox) in the repo'
+  ],
+  recordedAt: 'x'
+});
 
 describe('AggregatorService (T-06)', () => {
   it('is green only when all four gates pass', () => {
@@ -141,5 +155,69 @@ describe('AggregatorService (T-06)', () => {
 
     const { exceptions } = aggregate(allGreen(), state, 200);
     expect(exceptions).toEqual([]);
+  });
+
+  // Wave 0: the sandbox verdict was computed but never handed to the
+  // aggregator, so a failed deploy did not block a merge — "it merged" never
+  // meant "it deployed".
+  describe('sandbox gate (Wave 0)', () => {
+    it('blocks the phase when a declared sandbox fails to deploy', () => {
+      const gates = allGreen();
+      gates.sandbox = verdict('sandbox', 'breach', ['deploy command failed']);
+
+      const { verdict: phase, exceptions } = aggregate(gates);
+
+      expect(phase.outcome).toBe('breach');
+      expect(phase.reasons[0]).toContain('sandbox');
+      expect(exceptions).toContainEqual(
+        expect.objectContaining({
+          trigger: 'sandbox-failed',
+          taskId: 'T-01',
+          context: ['deploy command failed']
+        })
+      );
+    });
+
+    it('passes when a declared sandbox deploys healthy', () => {
+      const gates = allGreen();
+      gates.sandbox = verdict('sandbox', 'pass', ['deployed and healthy']);
+
+      const { verdict: phase, exceptions } = aggregate(gates);
+
+      expect(phase.outcome).toBe('pass');
+      expect(exceptions).toEqual([]);
+    });
+
+    // Graceful degradation is the whole reason this gate is not a plain
+    // `outcome !== 'pass'` check: a repo with no `.sdlc/environments.json`
+    // reports `blocked`, and failing every task in every such repo would
+    // make the engine unusable outside repos that already have a sandbox.
+    it('does not block a repo that declares no sandbox contract', () => {
+      const gates = allGreen();
+      gates.sandbox = noSandboxContract();
+
+      const { verdict: phase, exceptions } = aggregate(gates);
+
+      expect(phase.outcome).toBe('pass');
+      expect(phase.reasons).toEqual([]);
+      expect(exceptions).toEqual([]);
+    });
+
+    it('is optional — an absent sandbox verdict changes nothing', () => {
+      const { verdict: phase } = aggregate(allGreen());
+      expect(phase.outcome).toBe('pass');
+    });
+
+    // The caller passes `sandbox: sandboxOutcome?.verdict`, so the key is
+    // present and explicitly undefined whenever the sandbox step was skipped.
+    it('treats an explicitly undefined sandbox the same as an absent one', () => {
+      const { verdict: phase, exceptions } = aggregate({
+        ...allGreen(),
+        sandbox: undefined
+      });
+
+      expect(phase.outcome).toBe('pass');
+      expect(exceptions).toEqual([]);
+    });
   });
 });

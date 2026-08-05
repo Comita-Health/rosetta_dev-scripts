@@ -149,7 +149,8 @@ describe('VerificationService (T-04)', () => {
     expect(outcome.verdict.reasons).toHaveLength(2);
     expect(
       outcome.verdict.reasons.some(
-        reason => reason.includes('1 shared check') && reason.includes('test: alpha')
+        reason =>
+          reason.includes('1 shared check') && reason.includes('test: alpha')
       )
     ).toBe(true);
     expect(
@@ -185,6 +186,41 @@ describe('VerificationService (T-04)', () => {
       outcome: 'pass',
       evidenceId: `${task.id}-agent-criterion-1`
     });
+  });
+
+  // Wave 0 instrumentation: the verifier agent is an unbounded model call
+  // that previously emitted nothing, so its minutes accrued under whatever
+  // heartbeat label was left over from the prior step.
+  it('reports verifier-agent progress per criterion to the heartbeat sink', async () => {
+    const task = taskWith([
+      'agent: the endpoint answers',
+      'agent: the audit row lands'
+    ]);
+    const set = jest.fn();
+
+    await service.verify({ ...baseInput, task, progress: { set } });
+
+    expect(set).toHaveBeenCalledTimes(2);
+    expect(set).toHaveBeenNthCalledWith(1, {
+      taskId: task.id,
+      step: 'verification',
+      worktreePath: '/wt',
+      lastLine: 'verifier agent 1/2: the endpoint answers'
+    });
+    expect(set).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        lastLine: 'verifier agent 2/2: the audit row lands'
+      })
+    );
+  });
+
+  it('verifies without a progress sink', async () => {
+    const task = taskWith(['agent: the endpoint answers']);
+
+    const outcome = await service.verify({ ...baseInput, task });
+
+    expect(outcome.verdict.outcome).toBe('pass');
   });
 
   it('fails an agent-tier criterion whose verdict cannot be parsed, keeping the transcript', async () => {

@@ -181,7 +181,12 @@ export type ExceptionTrigger =
   | 'envelope-breach'
   | 'budget-exhaustion'
   /** P3 T-04: a red phase gate blocked an enforced merge. */
-  | 'merge-blocked';
+  | 'merge-blocked'
+  /**
+   * Wave 0: a *declared* sandbox failed to deploy or report healthy. A repo
+   * with no sandbox contract never raises this — see the aggregator.
+   */
+  | 'sandbox-failed';
 
 /**
  * An exception-ledger entry (SPEC-PRD-0011-P2 T-06): a would-escalate
@@ -286,7 +291,34 @@ export interface RunState {
   tokenSpendK: number;
   /** Per-task count of failing CI fix attempts (Phase-3 machinery records). */
   ciFixAttempts: Record<string, number>;
+  /**
+   * Wave 0: per-task count of gate remediation rounds (reviewer / envelope
+   * re-dispatch). Persisted so a resume cannot refill the attempt budget.
+   */
+  gateFixAttempts: Record<string, number>;
+  /**
+   * Wave 0: the latest engine remediation per task. Task re-selection uses
+   * it to reopen a task whose phase gate breached *before* a fix landed —
+   * without it, the breach would stay terminal and the fix would never be
+   * judged.
+   */
+  remediations: Record<string, RemediationRecord>;
+  /**
+   * Wave 0: count of supervisor merge-blocked retries for this run.
+   * Persisted so a relaunch cannot loop forever on the same block.
+   */
+  mergeBlockedRetries: number;
   updatedAt: string; // ISO timestamp
+}
+
+/** Wave 0: one engine-driven gate remediation round for a task. */
+export interface RemediationRecord {
+  attempt: number;
+  /** Head SHA the remediation produced — the ref the gates must re-judge. */
+  sha: string;
+  /** Gate names the round was asked to address. */
+  gates: string[];
+  recordedAt: string; // ISO timestamp
 }
 
 // --- T-08 Chronicle artifact schemas (versioned from day one) ---

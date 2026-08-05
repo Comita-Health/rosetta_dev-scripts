@@ -2,6 +2,69 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** the CI gate no longer treats "GitHub has not registered
+  a check run yet" as a verdict. A postmortem over 23 runs found **every**
+  CI block in the corpus — 16 of 59 verdicts — read `no check runs` or
+  `no CI results for <sha>`, with **zero actual CI failures**: the engine
+  pushed, polled once before the check suite existed, marked `blocked`,
+  escalated and exited. `ci-gate` now polls a bounded appear window
+  (`checksAppearTimeoutMs`, default 5 min) before judging, distinguishing
+  not-yet-reported (wait) from reported-and-failing (the existing ≤3-attempt
+  fix loop) from appear-deadline-exceeded (escalate — a suite that never
+  registers is a real misconfiguration).
+- **sdlc-workflow:** a red **reviewer or envelope** gate now gets a bounded
+  remediation round before it becomes a needs-human escalation. These were
+  22 of 44 historical escalations and every one ended its run cold, even
+  though median reviewer dispatch is 1.16 minutes — re-judging is cheap, so
+  the terminal stop was pure waste. `gate-remediation.service` re-dispatches
+  the implementation agent in the task's existing worktree with the failing
+  verdicts' reasons as input, commits and pushes, and lets the gates judge
+  the new head; the executor re-opens a task whose breached phase has a
+  newer remediation so the fix is actually re-evaluated. Bounded by
+  `state.gateFixAttempts` (default 2) and the run token budget, with
+  exhaustion escalating loudly. Envelope remediation is instructed to reduce
+  the diff and explicitly forbidden from raising `maxDiffLines` — a gate
+  that negotiates its own threshold is not a gate.
+- **sdlc-workflow:** the supervisor no longer exits on `merge-blocked`. That
+  single behavior fired 28 times across 79 waves, each time ending the
+  process and waiting for a hand relaunch, and accounts for the bulk of the
+  1,560 idle minutes (62.7% of elapsed time) measured across the corpus. It
+  now retries with backoff up to a bounded limit, invalidating the step-cache
+  entries that could produce a different answer (`ci` and the phase
+  aggregate) so the retry re-polls instead of replaying the cached block.
+  Retries are counted in `state.mergeBlockedRetries`; exhaustion is still a
+  loud terminal exit.
+- **sdlc-workflow:** the **sandbox gate joined the aggregate**. Previously
+  the aggregator received only `{ci, verification, reviewer, envelope}`, so a
+  failed sandbox deploy did not block a merge and "it merged" never implied
+  "it deployed". A declared sandbox that deployed unhealthily now blocks the
+  phase and records a `sandbox-failed` exception; a repo with no
+  `.sdlc/environments.json` still does not block, since the absence of a
+  contract is not evidence of a broken deploy.
+- **sdlc-workflow:** `emitOnce` woke a human exactly **once, ever** per
+  escalation title — it deduped on the title alone and never cleared the
+  marker, so recurrence was silently swallowed. Escalations now carry an
+  `occurrenceKey` (branch head SHA, or the implementation digest for a task
+  with no head) hashed into the dedupe marker: the same finding on unchanged
+  content stays quiet, but the same finding after an agent pushed a fix
+  re-notifies. Hashing (rather than appending) the occurrence keeps a long
+  dedupe key from truncating the suffix away and silently re-deduping.
+- **sdlc-workflow:** heartbeat coverage. Only `starting`, `implementation`
+  and `reviewer` set a step label, leaving 52.6% of measured work
+  unobservable and accruing sandbox / verification / ci / merge time under
+  whatever label was left standing — which overstated reviewer time by
+  ~3.5 minutes per segment across 51% of reviewer segments. Those four steps
+  now set their own labels, and the verifier agent reports per-criterion
+  progress through an optional sink on `VerificationInput`.
+- **sdlc-workflow:** the engine is now the **single writer** of
+  `supervise.exit`. `sdlc-continuity-daemon.sh` deleted the file before a
+  relaunch and then `echo $?`'d a bare exit code over it, destroying the
+  `reason`/`abnormal` evidence and leaving two incompatible formats on disk
+  — a bare `0` was indistinguishable from a zero-exit that left work
+  unmerged. The daemon's relaunch probe writes `supervise.relaunch-exit`
+  instead; `SuperviseExitRepository.read` still parses the legacy bare form
+  as `abnormal: true` so existing run directories stay readable.
+
 - **sdlc-workflow:** `queue-run --spec <path> --repo <path> …` writes a
   durable FIFO launch record (`<runsDir>/queue/<n>.json`, deduped by spec
   path) capturing the same argv surface as the continuity daemon's

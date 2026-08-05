@@ -128,6 +128,10 @@ import {
   IEscalationService
 } from './services/escalation.service';
 import {
+  GateRemediationService,
+  IGateRemediationService
+} from './services/gate-remediation.service';
+import {
   HeartbeatService,
   IHeartbeatService
 } from './services/heartbeat.service';
@@ -270,6 +274,9 @@ container
 container
   .bind<IEscalationService>(WORKFLOW_TOKENS.EscalationService)
   .to(EscalationService);
+container
+  .bind<IGateRemediationService>(WORKFLOW_TOKENS.GateRemediationService)
+  .to(GateRemediationService);
 container
   .bind<IHeartbeatService>(WORKFLOW_TOKENS.HeartbeatService)
   .to(HeartbeatService);

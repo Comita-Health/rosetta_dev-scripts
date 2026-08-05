@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { existsSync, mkdirSync, writeFileSync, renameSync } from 'fs';
 import { injectable } from 'inversify';
 import os from 'os';
@@ -16,6 +17,15 @@ export interface WakeEmitInput {
   dedupeKey: string;
   prompt: string;
   data?: Record<string, unknown>;
+  /**
+   * Distinguishes *this* occurrence of `(kind, dedupeKey)` from a mere
+   * replay of it — typically the failing verdict's inputs digest or the
+   * task head SHA. {@link IWakeInboxRepository.emitOnce} suppresses a
+   * repeat only when the occurrence key also matches, so resuming a run
+   * stays quiet while the *same* escalation against *new* content notifies
+   * again. Omitted → the pre-Wave-0 behaviour of once-ever per dedupeKey.
+   */
+  occurrenceKey?: string;
   /** Override root for tests (`…/wake`); production leaves unset. */
   wakeDir?: string;
 }
@@ -24,15 +34,57 @@ export interface IWakeInboxRepository {
   /** Write/overwrite the pending wake file for `(kind, dedupeKey)`. */
   emit(input: WakeEmitInput): string;
   /**
-   * Emit at most once per `(kind, dedupeKey)` until the notified marker is
-   * cleared — matches title-idempotence for escalation resume.
+   * Emit at most once per `(kind, dedupeKey, occurrenceKey)`.
+   *
+   * @remarks
+   * The pending file is still keyed by `(kind, dedupeKey)` alone, so a
+   * recurrence overwrites rather than piling up N files for one problem —
+   * only the *notified marker* carries the occurrence key. Before Wave 0
+   * the marker had no occurrence component, so an escalation title woke a
+   * human exactly once ever and every recurrence was silently swallowed.
+   *
    * Returns the pending file path when newly emitted, or null when skipped.
    */
   emitOnce(input: WakeEmitInput): string | null;
 }
 
+const WAKE_SLUG_MAX = 96;
+const OCCURRENCE_HASH_CHARS = 16;
+
 const wakeSlug = (value: string): string =>
-  value.replace(/[^A-Za-z0-9._-]/g, '-').slice(0, 96);
+  value.replace(/[^A-Za-z0-9._-]/g, '-').slice(0, WAKE_SLUG_MAX);
+
+/**
+ * Notified-marker filename.
+ *
+ * @remarks
+ * Two length hazards, both of which would silently collapse every
+ * occurrence back onto a single marker and reintroduce the once-ever bug
+ * `occurrenceKey` exists to fix:
+ *
+ * - Escalation titles routinely approach {@link WAKE_SLUG_MAX}, so the
+ *   suffix is reserved *before* the base is truncated rather than slugging
+ *   `base + suffix` wholesale.
+ * - Truncating the occurrence key itself would make any two keys sharing a
+ *   prefix indistinguishable, so it is hashed to a fixed-width digest
+ *   instead. Keys are arbitrary strings, not necessarily SHAs that happen
+ *   to differ early.
+ */
+const markerName = (
+  kind: string,
+  dedupeKey: string,
+  occurrenceKey?: string
+): string => {
+  const base = wakeSlug(`${kind}-${dedupeKey}`);
+  if (occurrenceKey === undefined || occurrenceKey.length === 0) {
+    return base;
+  }
+  const suffix = `-${createHash('sha1')
+    .update(occurrenceKey)
+    .digest('hex')
+    .slice(0, OCCURRENCE_HASH_CHARS)}`;
+  return `${base.slice(0, WAKE_SLUG_MAX - suffix.length)}${suffix}`;
+};
 
 const defaultWakeRoot = (): string =>
   process.env.ROSETTA_WAKE_DIR ?? path.join(os.homedir(), '.rosetta', 'wake');
@@ -68,7 +120,7 @@ export class WakeInboxRepository implements IWakeInboxRepository {
     mkdirSync(notifiedDir, { recursive: true });
     const marker = path.join(
       notifiedDir,
-      wakeSlug(`${input.kind}-${input.dedupeKey}`)
+      markerName(input.kind, input.dedupeKey, input.occurrenceKey)
     );
     if (existsSync(marker)) {
       return null;

@@ -52,6 +52,8 @@ describe('SuperviseService', () => {
   let readAtRef: jest.Mock;
   let queuePeek: jest.Mock;
   let queueRemove: jest.Mock;
+  let recordMergeBlockedRetry: jest.Mock;
+  let invalidateSteps: jest.Mock;
   let supervise: ISuperviseService;
   let runsDir: string;
   let wakeDir: string;
@@ -104,6 +106,13 @@ describe('SuperviseService', () => {
     readAtRef = jest.fn().mockReturnValue(baseSpec);
     queuePeek = jest.fn().mockReturnValue(null);
     queueRemove = jest.fn();
+    recordMergeBlockedRetry = jest
+      .fn()
+      .mockImplementation((_dir, state: RunState) => {
+        state.mergeBlockedRetries = (state.mergeBlockedRetries ?? 0) + 1;
+        return state.mergeBlockedRetries;
+      });
+    invalidateSteps = jest.fn().mockReturnValue([]);
     exitRepo = new SuperviseExitRepository();
 
     const container = new Container();
@@ -135,7 +144,11 @@ describe('SuperviseService', () => {
     });
     container
       .bind<IRunStateRepository>(WORKFLOW_TOKENS.RunStateRepository)
-      .toConstantValue({ load } as unknown as IRunStateRepository);
+      .toConstantValue({
+        load,
+        recordMergeBlockedRetry,
+        invalidateSteps
+      } as unknown as IRunStateRepository);
     container
       .bind<IProcessDetachRepository>(WORKFLOW_TOKENS.ProcessDetachRepository)
       .toConstantValue({ spawnDetached, isAlive });
@@ -177,6 +190,8 @@ describe('SuperviseService', () => {
     supervise: true,
     detach: false,
     wakeDir,
+    // Wave 0 retries back off before the next wave — never in tests.
+    mergeBlockedBackoffMs: 0,
     ...over
   });
 
@@ -611,7 +626,7 @@ describe('SuperviseService', () => {
     // A record whose execPath/execArgv deliberately differ from this test
     // process's own would have let the pre-fix code (which read
     // process.execPath/process.execArgv directly) pass unnoticed.
-    it('spawns the queued launch with the record\'s own execPath/execArgv, not the enforcing process\'s', async () => {
+    it("spawns the queued launch with the record's own execPath/execArgv, not the enforcing process's", async () => {
       runTask.mockResolvedValueOnce(wave('executed'));
       load.mockReturnValueOnce(mergedBoth);
 
@@ -638,7 +653,10 @@ describe('SuperviseService', () => {
       runTask.mockResolvedValueOnce(wave('executed'));
       load.mockReturnValueOnce(mergedBoth);
 
-      const record = queuedRecord('/queued/repo', '/queued/repo/specs/draft.md');
+      const record = queuedRecord(
+        '/queued/repo',
+        '/queued/repo/specs/draft.md'
+      );
       record.runsDir = runsDir;
       queuePeek.mockReturnValue({ seq: 8, record });
       readAtRef.mockImplementation((repoPath: string) =>
@@ -657,7 +675,11 @@ describe('SuperviseService', () => {
       expect(queueCall).toBeUndefined();
       const notes = note.mock.calls.map(call => String(call[1]));
       expect(
-        notes.some(line => line.includes('not yet Approved') && line.includes('/queued/repo/specs/draft.md'))
+        notes.some(
+          line =>
+            line.includes('not yet Approved') &&
+            line.includes('/queued/repo/specs/draft.md')
+        )
       ).toBe(true);
     });
 
@@ -681,7 +703,10 @@ describe('SuperviseService', () => {
       const queueWakeName = wakes.find(name => name.includes('queue-launch'));
       expect(queueWakeName).toBeDefined();
       const payload = JSON.parse(
-        readFileSync(path.join(wakeDir, 'pending', queueWakeName as string), 'utf-8')
+        readFileSync(
+          path.join(wakeDir, 'pending', queueWakeName as string),
+          'utf-8'
+        )
       ) as { kind: string; data: { specPath: string } };
       expect(payload.kind).toBe('sdlc_queue_launch');
       expect(payload.data.specPath).toBe('/queued/repo/specs/spec.md');
@@ -689,7 +714,9 @@ describe('SuperviseService', () => {
       const notes = note.mock.calls.map(call => String(call[1]));
       expect(
         notes.some(
-          line => line.includes('[queue] FAILED') && line.includes('retained for retry')
+          line =>
+            line.includes('[queue] FAILED') &&
+            line.includes('retained for retry')
         )
       ).toBe(true);
     });
@@ -749,7 +776,10 @@ describe('SuperviseService', () => {
       const wakes = pendingWakes();
       const queueWakeName = wakes.find(name => name.includes('queue-launch'));
       const payload = JSON.parse(
-        readFileSync(path.join(wakeDir, 'pending', queueWakeName as string), 'utf-8')
+        readFileSync(
+          path.join(wakeDir, 'pending', queueWakeName as string),
+          'utf-8'
+        )
       ) as { data: { detail: string } };
       expect(payload.data.detail).toContain('spawn EAGAIN');
     });
@@ -793,9 +823,8 @@ describe('SuperviseService', () => {
     expect(result.detail).toBe('no-ready-task');
   });
 
-  it('fails immediately on enforce merge-blocked instead of spinning no-ready', async () => {
-    runTask.mockResolvedValue(wave('executed'));
-    load.mockReturnValue({
+  const mergeBlockedState = (): RunState =>
+    ({
       taskResults: {
         'T-01': {
           taskId: 'T-01',
@@ -826,12 +855,79 @@ describe('SuperviseService', () => {
           recordedAt: 't'
         }
       ]
-    } as unknown as RunState);
+    }) as unknown as RunState;
 
-    const result = await supervise.run(input());
+  // Wave 0: merge-blocked is no longer terminal on sight. The postmortem
+  // found 28 merge-blocked exits across 79 waves, each parking the run for a
+  // hand relaunch, and the trigger was almost always mechanical (CI polled
+  // before checks registered, or a merge racing a sibling). The supervisor
+  // now spends a small persisted budget retrying before it asks for a human.
+  it('retries a merge-blocked wave, invalidating the cached ci/phase steps', async () => {
+    runTask.mockResolvedValue(wave('executed'));
+    const state = mergeBlockedState();
+    load.mockReturnValue(state);
+
+    const result = await supervise.run(input({ maxWaves: 10 }));
+
     expect(result.kind).toBe('failed');
     expect(result.detail).toBe('merge-blocked');
+    // 3 retries → 4 waves total, then the block reaches a human.
+    expect(runTask).toHaveBeenCalledTimes(4);
+    expect(recordMergeBlockedRetry).toHaveBeenCalledTimes(3);
+    expect(state.mergeBlockedRetries).toBe(3);
+    expect(note.mock.calls.flat().join('\n')).toContain(
+      'merge-blocked retries exhausted (3/3)'
+    );
+  });
+
+  it('re-evaluates only the ci and phase steps of the blocked tasks', async () => {
+    runTask.mockResolvedValue(wave('executed'));
+    load.mockReturnValue(mergeBlockedState());
+
+    await supervise.run(input({ maxWaves: 10 }));
+
+    const predicate = invalidateSteps.mock.calls[0][2] as (
+      step: { name: string; taskId?: string },
+      key: string
+    ) => boolean;
+    expect(predicate({ name: 'ci', taskId: 'T-01' }, 'ci:T-01:d')).toBe(true);
+    expect(predicate({ name: 'phase', taskId: 'T-01' }, 'phase:T-01:d')).toBe(
+      true
+    );
+    // Paid agent work that already produced a verdict is never replayed.
+    expect(
+      predicate({ name: 'reviewer', taskId: 'T-01' }, 'reviewer:T-01:d')
+    ).toBe(false);
+    expect(
+      predicate({ name: 'implementation', taskId: 'T-01' }, 'impl:T-01:d')
+    ).toBe(false);
+    // A sibling task that was not part of the blocked wave keeps its cache.
+    expect(predicate({ name: 'ci', taskId: 'T-02' }, 'ci:T-02:d')).toBe(false);
+  });
+
+  it('does not retry a merge-blocked wave whose budget is already spent', async () => {
+    runTask.mockResolvedValue(wave('executed'));
+    load.mockReturnValue({
+      ...mergeBlockedState(),
+      mergeBlockedRetries: 3
+    } as unknown as RunState);
+
+    const result = await supervise.run(input({ maxWaves: 10 }));
+
+    expect(result.detail).toBe('merge-blocked');
+    // A relaunch must not refill the budget into an infinite retry loop.
     expect(runTask).toHaveBeenCalledTimes(1);
+    expect(recordMergeBlockedRetry).not.toHaveBeenCalled();
+  });
+
+  it('never retries a merge-blocked wave in shadow mode', async () => {
+    runTask.mockResolvedValue(wave('executed'));
+    load.mockReturnValue(mergeBlockedState());
+
+    const result = await supervise.run(input({ shadow: true, maxWaves: 10 }));
+
+    expect(recordMergeBlockedRetry).not.toHaveBeenCalled();
+    expect(result.detail).toBe('shadow-human-gate');
   });
 
   it('fails when max-waves is exhausted without full merge', async () => {

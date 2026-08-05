@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import { mkdtempSync, readFileSync, rmSync } from 'fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'fs';
 import os from 'os';
 import path from 'path';
 import { Container } from 'inversify';
@@ -14,6 +14,7 @@ import {
 import type { IRunStateRepository } from '../repositories/run-state.repository';
 import type { ISpecDocRepository } from '../repositories/spec-doc.repository';
 import type { IEscalationService } from '../services/escalation.service';
+import type { IGateRemediationService } from '../services/gate-remediation.service';
 import type { IAggregatorService } from '../services/aggregator.service';
 import type { IChronicleCommitService } from '../services/chronicle-commit.service';
 import type { ICiGateService } from '../services/ci-gate.service';
@@ -31,7 +32,10 @@ import type { IHeartbeatService } from '../services/heartbeat.service';
 import type { IReviewerGateService } from '../services/reviewer-gate.service';
 import type { IReviewerPublishService } from '../services/reviewer-publish.service';
 import type { ISandboxDeployService } from '../services/sandbox-deploy.service';
-import type { IVerificationService } from '../services/verification.service';
+import type {
+  IVerificationService,
+  VerificationInput
+} from '../services/verification.service';
 import { WORKFLOW_TOKENS } from '../tokens';
 import { GateVerdict, RunState, SpecDocument, WorkflowError } from '../types';
 import { makeEnvelope, makeTask } from './fixtures';
@@ -65,6 +69,9 @@ const makeState = (): RunState => ({
   steps: {},
   tokenSpendK: 0,
   ciFixAttempts: {},
+  gateFixAttempts: {},
+  remediations: {},
+  mergeBlockedRetries: 0,
   updatedAt: 'x'
 });
 
@@ -103,6 +110,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
   let retroPost: jest.Mock;
   let chronicleRecord: jest.Mock;
   let recordMerge: jest.Mock;
+  let setContext: jest.Mock;
   let evidenceSave: jest.Mock;
   let appendVerdict: jest.Mock;
   let recordExceptions: jest.Mock;
@@ -123,6 +131,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
   let removeWorktreeAsync: jest.Mock;
   let specRead: jest.Mock;
   let escalationPost: jest.Mock;
+  let remediate: jest.Mock;
 
   const taskOutcome = (
     overrides: Partial<ExecutorOutcome> = {}
@@ -225,6 +234,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
     recordMerge = jest
       .fn()
       .mockResolvedValue('chronicles/sdlc/run-1/merge.json');
+    setContext = jest.fn();
     evidenceSave = jest.fn().mockReturnValue('/evidence/x.txt');
 
     // Persistence mocks mirror the real repository's in-memory mutation so
@@ -273,6 +283,14 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
     escalationPost = jest
       .fn()
       .mockReturnValue({ posted: [], wakes: [], issues: {} });
+    // Default: nothing to remediate, so red gates still escalate and block
+    // exactly as they did before Wave 0 — tests that want the remediation
+    // path override this per case.
+    remediate = jest.fn().mockResolvedValue({
+      kind: 'skipped',
+      attempt: 0,
+      detail: 'no remediable gate findings'
+    });
 
     const container = new Container();
     container
@@ -365,7 +383,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
       .bind<IHeartbeatService>(WORKFLOW_TOKENS.HeartbeatService)
       .toConstantValue({
         start: jest.fn(),
-        setContext: jest.fn(),
+        setContext,
         tick: jest.fn(),
         stop: jest.fn()
       });
@@ -394,10 +412,17 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
         recordTaskPrUrl,
         recordCiFixAttempt: jest.fn(),
         recordTokenSpend: jest.fn(),
+        recordGateFixAttempt: jest.fn(),
+        recordRemediation: jest.fn(),
+        recordMergeBlockedRetry: jest.fn(),
+        invalidateSteps: jest.fn().mockReturnValue([]),
         load: stateLoad,
         save: jest.fn(),
         recordTaskResult: jest.fn()
       });
+    container
+      .bind<IGateRemediationService>(WORKFLOW_TOKENS.GateRemediationService)
+      .toConstantValue({ remediate });
     container.bind<IRunHandler>(WORKFLOW_TOKENS.RunHandler).to(RunHandler);
     handler = container.get<IRunHandler>(WORKFLOW_TOKENS.RunHandler);
     jest.spyOn(console, 'log').mockImplementation(() => undefined);
@@ -852,6 +877,216 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
       }
     );
 
+    // Wave 0 instrumentation: 52.6% of measured work was unobservable because
+    // only `starting`, `implementation` and `reviewer` set a heartbeat step —
+    // sandbox, verification, ci and merge time all accrued under whatever
+    // label was left over, which overstated reviewer time by ~3.5 min a
+    // segment.
+    it('labels every post-implementation step so time is not misattributed to reviewer', async () => {
+      greenGates();
+
+      await handler.runTask(INPUT);
+
+      const steps = setContext.mock.calls.map(([ctx]) => ctx.step);
+      expect(steps).toEqual(
+        expect.arrayContaining([
+          'reviewer',
+          'sandbox',
+          'verification',
+          'ci',
+          'merge'
+        ])
+      );
+      // The reviewer label must be superseded, not left standing over the
+      // gates that follow it.
+      expect(steps.lastIndexOf('reviewer')).toBeLessThan(
+        steps.lastIndexOf('merge')
+      );
+    });
+
+    it('labels the verifier agent as verification while it runs', async () => {
+      greenGates();
+      // The real service calls the sink per agent-tier criterion; the mock
+      // stands in for that contract.
+      verify.mockImplementation(async (verifyInput: VerificationInput) => {
+        verifyInput.progress?.set({
+          taskId: 'T-01',
+          step: 'verification',
+          lastLine: 'verifier agent 1/1: the thing works'
+        });
+        return {
+          verdict: verdictOf('verification', 'pass'),
+          criteria: criterionVerdicts
+        };
+      });
+
+      await handler.runTask(INPUT);
+
+      expect(setContext).toHaveBeenCalledWith(
+        expect.objectContaining({
+          step: 'verification',
+          lastLine: 'verifier agent 1/1: the thing works'
+        })
+      );
+    });
+
+    // Wave 0: a red *remediable* gate gets one bounded agent round before it
+    // becomes a needs-human escalation. Reviewer disagreement and envelope
+    // breach were 22 of 44 historical escalations and every one of them ended
+    // its run cold.
+    describe('gate remediation (Wave 0)', () => {
+      // A real monitor.log path: the remediation round is an operator-visible
+      // event, so the durable line is part of the contract, not incidental.
+      let monitorDir: string;
+      let monitorPath: string;
+      const remediationInput = () => ({ ...INPUT, monitorPath });
+      // An unwritten log and a log without the line both mean "not logged".
+      const monitorLog = (): string =>
+        existsSync(monitorPath) ? readFileSync(monitorPath, 'utf-8') : '';
+
+      beforeEach(() => {
+        monitorDir = mkdtempSync(path.join(os.tmpdir(), 'sdlc-remediate-'));
+        monitorPath = path.join(monitorDir, 'monitor.log');
+      });
+
+      afterEach(() => rmSync(monitorDir, { recursive: true, force: true }));
+
+      const redReviewer = () => {
+        greenGates();
+        review.mockResolvedValue(
+          verdictOf('reviewer', 'breach', ['unsafe migration'])
+        );
+        aggregate.mockReturnValue({
+          verdict: verdictOf('phase', 'breach', ['failing gates: reviewer']),
+          exceptions: [
+            {
+              trigger: 'reviewer-disagreement' as const,
+              taskId: 'T-01',
+              context: ['unsafe migration'],
+              recordedAt: 'x'
+            }
+          ]
+        });
+      };
+
+      it('dispatches remediation with the reviewer and envelope verdicts', async () => {
+        redReviewer();
+
+        await handler.runTask(INPUT);
+
+        expect(remediate).toHaveBeenCalledTimes(1);
+        const call = remediate.mock.calls[0][0];
+        expect(call.branch).toBe('sdlc/run-1/T-01');
+        expect(call.task.id).toBe('T-01');
+        expect(call.envelope).toBe(SPEC.envelope);
+        expect(call.verdicts.map((v: GateVerdict) => v.gate)).toEqual([
+          'reviewer',
+          'envelope'
+        ]);
+      });
+
+      it('suppresses the escalation and the merge attempt when a fix landed', async () => {
+        redReviewer();
+        remediate.mockResolvedValue({
+          kind: 'remediated',
+          attempt: 1,
+          sha: 'fix-sha',
+          detail: 'attempt 1/2 addressed [reviewer]'
+        });
+
+        await handler.runTask(remediationInput());
+
+        // Filing a needs-human issue for a finding the engine is actively
+        // fixing is exactly the noise that teaches an operator to ignore
+        // escalations.
+        expect(escalationPost).not.toHaveBeenCalled();
+        expect(prMerge).not.toHaveBeenCalled();
+        expect(state.exceptions).not.toContainEqual(
+          expect.objectContaining({ trigger: 'merge-blocked' })
+        );
+        expect(monitorLog()).toContain(
+          '[remediate] T-01 attempt 1/2 addressed [reviewer]'
+        );
+      });
+
+      it('records a failed round in monitor.log so a spent attempt is visible', async () => {
+        redReviewer();
+        remediate.mockResolvedValue({
+          kind: 'failed',
+          attempt: 1,
+          detail: 'remediation agent produced no commit'
+        });
+
+        await handler.runTask(remediationInput());
+
+        expect(monitorLog()).toContain('[remediate] T-01 failed');
+        expect(escalationPost).toHaveBeenCalled();
+      });
+
+      it('keeps the common skip out of monitor.log', async () => {
+        redReviewer();
+
+        await handler.runTask(remediationInput());
+
+        // Most red gates have nothing remediable; logging every one would
+        // bury the rounds that actually happened.
+        expect(monitorLog()).not.toContain('[remediate]');
+      });
+
+      it('still escalates when remediation is skipped or fails', async () => {
+        redReviewer();
+        remediate.mockResolvedValue({
+          kind: 'skipped',
+          attempt: 2,
+          detail: 'gate-fix attempts exhausted (2/2)'
+        });
+
+        await handler.runTask(INPUT);
+
+        // An exhausted budget must be loud, not silently absorbed.
+        expect(escalationPost).toHaveBeenCalled();
+        expect(state.exceptions).toContainEqual(
+          expect.objectContaining({ trigger: 'merge-blocked' })
+        );
+      });
+
+      it('never remediates a green phase', async () => {
+        greenGates();
+
+        await handler.runTask(INPUT);
+
+        expect(remediate).not.toHaveBeenCalled();
+      });
+
+      it('never remediates in shadow mode', async () => {
+        redReviewer();
+
+        await handler.runTask({ ...INPUT, shadow: true });
+
+        // Shadow is calibration: it observes what the gates would say and
+        // changes nothing on the branch.
+        expect(remediate).not.toHaveBeenCalled();
+      });
+
+      it('does not remediate from a cached phase verdict on resume', async () => {
+        redReviewer();
+        remediate.mockResolvedValue({
+          kind: 'remediated',
+          attempt: 1,
+          sha: 'fix-sha',
+          detail: 'd'
+        });
+
+        await handler.runTask(remediationInput());
+        expect(remediate).toHaveBeenCalledTimes(1);
+
+        // Resume replays the step graph; the cached phase verdict must not
+        // spend another remediation round on content already fixed.
+        await handler.runTask(remediationInput());
+        expect(remediate).toHaveBeenCalledTimes(1);
+      });
+    });
+
     it('with the shadow flag set, verdicts are recorded but no merge call is ever issued', async () => {
       greenGates();
 
@@ -1160,9 +1395,9 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
         );
         const forwarded = recordRevert.mock.calls[0][0].revertedVerdicts;
         expect(forwarded).toHaveLength(2);
-        expect(
-          forwarded.some((v: GateVerdict) => v.taskId === 'T-03')
-        ).toBe(false);
+        expect(forwarded.some((v: GateVerdict) => v.taskId === 'T-03')).toBe(
+          false
+        );
       });
 
       it('absence of a veto tag changes nothing', async () => {

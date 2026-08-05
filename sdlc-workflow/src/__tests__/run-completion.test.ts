@@ -51,6 +51,9 @@ const state = (merged: Record<string, string | undefined>): RunState =>
     criterionVerdicts: [],
     steps: {},
     ciFixAttempts: {},
+    gateFixAttempts: {},
+    remediations: {},
+    mergeBlockedRetries: 0,
     tokenSpendK: 0,
     updatedAt: 't'
   }) as RunState;

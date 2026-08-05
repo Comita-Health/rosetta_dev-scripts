@@ -10,6 +10,7 @@ import {
   GateVerdict,
   SpecTask
 } from '../types';
+import type { ProgressSink } from './executor.service';
 import { parseAllCriteria, TieredCriterion } from '../utils/criterion-tier';
 import { extractJson } from '../utils/json-schema';
 import { buildVerifierPrompt } from '../utils/verifier-prompt';
@@ -27,6 +28,12 @@ export interface VerificationInput {
    * test-tier scripted check is not re-run.
    */
   precomputedTestTier?: CriterionVerdict[];
+  /**
+   * Optional heartbeat sink (#39). The verifier agent is an unbounded model
+   * call — the Wave 0 postmortem found it emitted no heartbeats at all, so
+   * its time silently inflated whichever step label happened to be current.
+   */
+  progress?: ProgressSink;
 }
 
 /** Fields {@link verifyTestTierOnly} needs — no sandbox health report. */
@@ -95,7 +102,16 @@ export class VerificationService implements IVerificationService {
       );
     }
 
-    for (const criterion of tiered.filter(item => item.tier === 'agent')) {
+    const agentTier = tiered.filter(item => item.tier === 'agent');
+    for (const [index, criterion] of agentTier.entries()) {
+      input.progress?.set({
+        taskId: input.task.id,
+        step: 'verification',
+        worktreePath: input.worktreePath,
+        lastLine:
+          `verifier agent ${index + 1}/${agentTier.length}: ` +
+          criterion.body.slice(0, 80)
+      });
       verdicts.push(await this.runAgentTier(input, criterion));
     }
 
@@ -275,7 +291,9 @@ export class VerificationService implements IVerificationService {
                 .join('; ')}`
       );
     }
-    reasons.push(...withoutEvidence.map(verdict => `failed: ${verdict.criterion}`));
+    reasons.push(
+      ...withoutEvidence.map(verdict => `failed: ${verdict.criterion}`)
+    );
     return reasons;
   }
 }

@@ -16,6 +16,9 @@ const makeState = (): RunState => ({
   steps: {},
   tokenSpendK: 0,
   ciFixAttempts: {},
+  gateFixAttempts: {},
+  remediations: {},
+  mergeBlockedRetries: 0,
   updatedAt: 'x'
 });
 
@@ -211,5 +214,114 @@ describe('RunStateRepository', () => {
     expect(repo.recordTokenSpend(dir, state, 5)).toBe(5);
     expect(repo.recordTokenSpend(dir, state, 3)).toBe(8);
     expect(repo.load(dir, 'run-1')?.tokenSpendK).toBe(8);
+  });
+
+  describe('Wave 0 retry bookkeeping', () => {
+    it('increments and persists gate fix attempts', () => {
+      const state = makeState();
+      repo.save(dir, state);
+
+      expect(repo.recordGateFixAttempt(dir, state, 'T-01')).toBe(1);
+      expect(repo.recordGateFixAttempt(dir, state, 'T-01')).toBe(2);
+      expect(repo.recordGateFixAttempt(dir, state, 'T-02')).toBe(1);
+
+      // Persisted: a resume must not refill the remediation budget.
+      const loaded = repo.load(dir, 'run-1');
+      expect(loaded?.gateFixAttempts).toEqual({ 'T-01': 2, 'T-02': 1 });
+    });
+
+    it('records a remediation with the attempt, head SHA and gates', () => {
+      const state = makeState();
+      repo.recordGateFixAttempt(dir, state, 'T-01');
+      repo.recordRemediation(dir, state, 'T-01', 'fix-sha', [
+        'reviewer',
+        'envelope'
+      ]);
+
+      const record = repo.load(dir, 'run-1')?.remediations['T-01'];
+      expect(record).toMatchObject({
+        attempt: 1,
+        sha: 'fix-sha',
+        gates: ['reviewer', 'envelope']
+      });
+      expect(record?.recordedAt).toMatch(/^\d{4}-/);
+    });
+
+    it('increments and persists merge-blocked retries', () => {
+      const state = makeState();
+      repo.save(dir, state);
+
+      expect(repo.recordMergeBlockedRetry(dir, state)).toBe(1);
+      expect(repo.recordMergeBlockedRetry(dir, state)).toBe(2);
+      expect(repo.load(dir, 'run-1')?.mergeBlockedRetries).toBe(2);
+    });
+
+    it('invalidates only the steps matching the predicate, and persists', () => {
+      const state = makeState();
+      const step = (name: string, taskId: string) => ({
+        name,
+        taskId,
+        inputsDigest: 'd',
+        completedAt: 'x'
+      });
+      state.steps = {
+        'ci:T-01:d': step('ci', 'T-01'),
+        'phase:T-01:d': step('phase', 'T-01'),
+        'reviewer:T-01:d': step('reviewer', 'T-01'),
+        'ci:T-02:d': step('ci', 'T-02')
+      };
+      repo.save(dir, state);
+
+      const removed = repo.invalidateSteps(
+        dir,
+        state,
+        s => s.taskId === 'T-01' && s.name !== 'reviewer'
+      );
+
+      expect(removed.sort()).toEqual(['ci:T-01:d', 'phase:T-01:d']);
+      expect(Object.keys(repo.load(dir, 'run-1')?.steps ?? {}).sort()).toEqual([
+        'ci:T-02:d',
+        'reviewer:T-01:d'
+      ]);
+    });
+
+    it('does not rewrite state when the predicate matches nothing', () => {
+      const state = makeState();
+      state.steps = {
+        'ci:T-01:d': {
+          name: 'ci',
+          taskId: 'T-01',
+          inputsDigest: 'd',
+          completedAt: 'x'
+        }
+      };
+      repo.save(dir, state);
+      const before = repo.load(dir, 'run-1')?.updatedAt;
+
+      expect(repo.invalidateSteps(dir, state, () => false)).toEqual([]);
+      expect(repo.load(dir, 'run-1')?.updatedAt).toBe(before);
+    });
+
+    it('backfills the Wave 0 fields for a state file written before them', () => {
+      const legacy = {
+        runId: 'run-legacy',
+        specId: 'S',
+        specPath: '/s.md',
+        baseSha: 'b',
+        taskResults: {},
+        verdicts: [],
+        updatedAt: '2026-01-01T00:00:00.000Z'
+      };
+      mkdirSync(path.join(dir, 'run-legacy'), { recursive: true });
+      writeFileSync(
+        path.join(dir, 'run-legacy', 'state.json'),
+        JSON.stringify(legacy)
+      );
+
+      const loaded = repo.load(dir, 'run-legacy');
+      expect(loaded?.gateFixAttempts).toEqual({});
+      expect(loaded?.remediations).toEqual({});
+      expect(loaded?.mergeBlockedRetries).toBe(0);
+    });
   });
 });

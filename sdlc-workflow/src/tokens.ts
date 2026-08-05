@@ -38,6 +38,7 @@ export const WORKFLOW_TOKENS = {
   WakeInboxRepository: Symbol.for('WakeInboxRepository'),
   PrLifecycleService: Symbol.for('PrLifecycleService'),
   EscalationService: Symbol.for('EscalationService'),
+  GateRemediationService: Symbol.for('GateRemediationService'),
   HeartbeatService: Symbol.for('HeartbeatService'),
   HeartbeatWatchService: Symbol.for('HeartbeatWatchService'),
   ProcessDetachRepository: Symbol.for('ProcessDetachRepository'),

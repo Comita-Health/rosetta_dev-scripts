@@ -51,6 +51,36 @@ import type { IHeartbeatWatchService } from './heartbeat-watch.service';
 const DETACH_STARTUP_GRACE_MS = 1_500;
 const DETACH_FAILURE_LOG_LINES = 20;
 
+/**
+ * Wave 0: how many times a merge-blocked wave is retried before the run
+ * stops for a human.
+ *
+ * @remarks
+ * The performance postmortem measured 28 merge-blocked supervisor exits
+ * across 79 waves, each ending the process and waiting for a hand
+ * relaunch — together the bulk of 1,560 idle minutes (62.7% of elapsed
+ * time). Most were mechanical: a CI verdict polled before checks
+ * registered, or a `gh pr merge` that lost a race with a sibling landing on
+ * the default branch. Both clear on a retry; neither needed a human.
+ *
+ * The budget is small and persisted (`state.mergeBlockedRetries`) so a
+ * genuinely stuck run still reaches a human quickly, and a relaunch cannot
+ * refill it into an infinite loop.
+ */
+const MERGE_BLOCKED_RETRY_LIMIT = 3;
+const DEFAULT_MERGE_BLOCKED_BACKOFF_MS = 30_000;
+
+/**
+ * Steps dropped before a merge-blocked retry. Re-evaluating these is the
+ * entire point of the retry: `ci` because absent checks are the dominant
+ * false block, `phase` because it aggregates `ci`, and `merge` is never
+ * cached on a blocked task anyway. `implementation`, `reviewer`, `sandbox`
+ * and `verification` are deliberately kept — replaying paid agent work
+ * that already reached a verdict is pure cost, and reviewer/envelope
+ * findings are the remediation loop's job, not the retry's.
+ */
+const MERGE_BLOCKED_RETRY_STEPS = new Set(['ci', 'phase']);
+
 const sleep = (ms: number): Promise<void> =>
   new Promise(resolve => setTimeout(resolve, ms));
 
@@ -92,6 +122,11 @@ export interface SuperviseInput extends RunTaskInput {
    * so wakes land in `$ROSETTA_WAKE_DIR` / `~/.rosetta/wake`.
    */
   wakeDir?: string;
+  /**
+   * Base backoff before a merge-blocked retry wave, default 30s (doubled
+   * per attempt). Tests pass 0.
+   */
+  mergeBlockedBackoffMs?: number;
 }
 
 export interface SuperviseResult {
@@ -333,6 +368,12 @@ export class SuperviseService implements ISuperviseService {
             lastWave.tasks.map(task => task.taskId)
           )
         ) {
+          const blockedTaskIds = lastWave.tasks.map(task => task.taskId);
+          if (
+            await this.retryMergeBlocked(input, monitorPath, blockedTaskIds)
+          ) {
+            continue;
+          }
           this._hbWatch.note(
             monitorPath,
             `[supervise] MERGE BLOCKED after wave ${waves} — escalate / fix gates, then resume`
@@ -435,6 +476,72 @@ export class SuperviseService implements ISuperviseService {
       // Best-effort — a stale pid is worse than a missing one only when the
       // daemon would relaunch a terminal refusal; ignore FS races.
     }
+  }
+
+  /**
+   * Wave 0: consume one merge-blocked retry from the run's budget. Returns
+   * true when the caller should run another wave, false when the block must
+   * reach a human.
+   *
+   * @remarks
+   * A retry that does not invalidate the step cache is pointless — the wave
+   * would replay the same cached red verdicts. So this drops the `ci` and
+   * `phase` steps of the blocked tasks (see
+   * {@link MERGE_BLOCKED_RETRY_STEPS}) before backing off, which is what
+   * lets a CI verdict recorded before GitHub registered any checks be
+   * re-judged against the checks that have since appeared.
+   *
+   * The budget is deliberately not per-task: a wave stops on the first
+   * blocked task, and per-task budgets would let a 5-task wave spend 15
+   * retries walking the same failure.
+   */
+  private async retryMergeBlocked(
+    input: SuperviseInput,
+    monitorPath: string,
+    blockedTaskIds: string[]
+  ): Promise<boolean> {
+    const state = this._runStateRepo.load(input.runsDir, input.runId);
+    if (state === null) return false;
+
+    const spent = state.mergeBlockedRetries ?? 0;
+    if (spent >= MERGE_BLOCKED_RETRY_LIMIT) {
+      this._hbWatch.note(
+        monitorPath,
+        `[supervise] merge-blocked retries exhausted (${spent}/${MERGE_BLOCKED_RETRY_LIMIT}) — handing to a human`
+      );
+      return false;
+    }
+
+    const attempt = this._runStateRepo.recordMergeBlockedRetry(
+      input.runsDir,
+      state
+    );
+    const blocked = new Set(blockedTaskIds);
+    const dropped = this._runStateRepo.invalidateSteps(
+      input.runsDir,
+      state,
+      step =>
+        step.taskId !== undefined &&
+        blocked.has(step.taskId) &&
+        MERGE_BLOCKED_RETRY_STEPS.has(step.name)
+    );
+
+    const backoffMs =
+      (input.mergeBlockedBackoffMs ?? DEFAULT_MERGE_BLOCKED_BACKOFF_MS) *
+      2 ** (attempt - 1);
+    this._hbWatch.note(
+      monitorPath,
+      `[supervise] merge blocked — retry ${attempt}/${MERGE_BLOCKED_RETRY_LIMIT} ` +
+        `in ${Math.round(backoffMs / 1000)}s (re-evaluating ${dropped.length} ` +
+        `cached step(s) for ${blockedTaskIds.join(', ')})`
+    );
+    console.log(
+      chalk.yellow(
+        `\n[supervise] merge blocked — retrying (${attempt}/${MERGE_BLOCKED_RETRY_LIMIT}) after ${Math.round(backoffMs / 1000)}s`
+      )
+    );
+    if (backoffMs > 0) await sleep(backoffMs);
+    return true;
   }
 
   private mapWaveKind(

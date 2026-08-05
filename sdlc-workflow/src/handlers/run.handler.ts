@@ -13,6 +13,7 @@ import type { ICiGateService } from '../services/ci-gate.service';
 import type { IDigestService } from '../services/digest.service';
 import type { IEnvelopeGateService } from '../services/envelope-gate.service';
 import type { IEscalationService } from '../services/escalation.service';
+import type { IGateRemediationService } from '../services/gate-remediation.service';
 import type {
   ExecutorOutcome,
   IExecutorService,
@@ -222,7 +223,9 @@ export class RunHandler implements IRunHandler {
     @inject(WORKFLOW_TOKENS.SpecDocRepository)
     private readonly _specDocRepo: ISpecDocRepository,
     @inject(WORKFLOW_TOKENS.HeartbeatService)
-    private readonly _heartbeat: IHeartbeatService
+    private readonly _heartbeat: IHeartbeatService,
+    @inject(WORKFLOW_TOKENS.GateRemediationService)
+    private readonly _remediation: IGateRemediationService
   ) {}
 
   async runTask(input: RunTaskInput): Promise<RunTaskResult> {
@@ -313,7 +316,15 @@ export class RunHandler implements IRunHandler {
           const entries = state.exceptions.filter(
             entry => entry.taskId === outcome.task.id
           );
-          this.postEscalations(input, state, outcome.task.id, entries);
+          // No head SHA to key on — the task never reached the gates. Its
+          // implementation digest is the equivalent content discriminator.
+          this.postEscalations(
+            input,
+            state,
+            outcome.task.id,
+            entries,
+            outcome.implDigest
+          );
         }
       }
 
@@ -469,12 +480,27 @@ export class RunHandler implements IRunHandler {
     // on purpose until a safe shared-install contract exists (PRD-0022).
     // Test tier goes first: it is the cheaper command and shortens
     // time-to-red for plain test failures.
+    this._heartbeat.setContext({
+      taskId: task.id,
+      step: 'verification',
+      worktreePath,
+      lastLine: 'running the test tier'
+    });
+
     const precomputedTestTier = await this._verification.verifyTestTierOnly({
       worktreePath,
       runsDir: input.runsDir,
       runId: input.runId,
       task
     });
+
+    this._heartbeat.setContext({
+      taskId: task.id,
+      step: 'sandbox',
+      worktreePath,
+      lastLine: `deploying ${headSha.slice(0, 12)} to the sandbox`
+    });
+
     const sandboxOutcome = await this.sandboxStep(
       input,
       state,
@@ -482,6 +508,13 @@ export class RunHandler implements IRunHandler {
       worktreePath,
       inputsDigest({ ...chain, step: 'sandbox' })
     );
+
+    this._heartbeat.setContext({
+      taskId: task.id,
+      step: 'verification',
+      worktreePath,
+      lastLine: 'evaluating acceptance criteria'
+    });
 
     const verificationVerdict = await this.verificationStep(
       input,
@@ -492,6 +525,13 @@ export class RunHandler implements IRunHandler {
       inputsDigest({ ...chain, criteria: task.acceptanceCriteria }),
       precomputedTestTier
     );
+
+    this._heartbeat.setContext({
+      taskId: task.id,
+      step: 'ci',
+      worktreePath,
+      lastLine: 'waiting on GitHub check runs'
+    });
 
     // P3 T-03: live CI gate — poll the pushed branch's checks to terminal,
     // dispatch bounded fix agents on failure, and consume the post-cycle
@@ -539,7 +579,10 @@ export class RunHandler implements IRunHandler {
           ci: ciVerdict,
           verification: verificationVerdict,
           reviewer: reviewerVerdict,
-          envelope: envelopeVerdict
+          envelope: envelopeVerdict,
+          // Wave 0: a failed deploy of a declared sandbox now blocks the
+          // merge, so "it merged" finally means "it deployed".
+          sandbox: sandboxOutcome.verdict
         },
         state,
         taskId: task.id,
@@ -569,9 +612,31 @@ export class RunHandler implements IRunHandler {
           )
         );
       }
+
+      // Wave 0: before treating a red phase as terminal, give the agent a
+      // bounded round at the findings it can actually act on. A remediated
+      // task returns here with a new head, so the gates re-judge the fix
+      // instead of the run stopping on the first objection.
+      if (
+        input.shadow !== true &&
+        phaseVerdict.outcome !== 'pass' &&
+        (await this.remediationRound(input, state, task, spec, worktreePath, [
+          reviewerVerdict,
+          envelopeVerdict
+        ]))
+      ) {
+        return;
+      }
+
       // P3 T-06: escalate — action-required queue items, then halt this
       // task (staying unmerged blocks dependents; other tasks continue).
-      this.postEscalations(input, state, task.id, aggregate.exceptions);
+      this.postEscalations(
+        input,
+        state,
+        task.id,
+        aggregate.exceptions,
+        chain.headSha
+      );
     }
 
     // P3 T-04: enforcement. Green across the board auto-merges; any red
@@ -579,6 +644,78 @@ export class RunHandler implements IRunHandler {
     await this.enforcementStep(input, state, task, chain, phaseVerdict);
 
     await this.chronicleSteps(input, state, task, spec, chain, phaseVerdict);
+  }
+
+  /**
+   * Wave 0: dispatch one bounded gate remediation round. Returns true when
+   * a fix landed and the caller must abandon this pass — the verdicts it
+   * holds now describe a superseded head SHA, and re-selection will bring
+   * the task back for a clean re-gate.
+   *
+   * @remarks
+   * Escalation is deliberately suppressed on a successful remediation:
+   * filing a needs-human issue for a finding the engine is actively fixing
+   * is exactly the noise that trained the operator to ignore escalations.
+   * A skip or a failure falls through to the normal escalation path, so an
+   * exhausted budget is still loud.
+   */
+  private async remediationRound(
+    input: RunTaskInput,
+    state: RunState,
+    task: SpecTask,
+    spec: SpecDocument,
+    worktreePath: string,
+    verdicts: GateVerdict[]
+  ): Promise<boolean> {
+    const branch = state.taskResults[task.id]?.branch;
+    if (branch === undefined) return false;
+
+    this._heartbeat.setContext({
+      taskId: task.id,
+      step: 'remediation',
+      worktreePath,
+      lastLine: 'dispatching gate remediation agent'
+    });
+
+    const outcome = await this._remediation.remediate({
+      worktreePath,
+      branch,
+      task: task,
+      envelope: spec.envelope,
+      runsDir: input.runsDir,
+      state,
+      verdicts,
+      budgetK: spec.envelope.budgetK
+    });
+
+    if (outcome.kind === 'remediated') {
+      const line = `[remediate] ${task.id} ${outcome.detail}`;
+      console.log(chalk.yellow(`  ${line}`));
+      this.noteMonitor(input, line);
+      return true;
+    }
+
+    console.log(
+      chalk.gray(`  [remediate] ${task.id} ${outcome.kind}: ${outcome.detail}`)
+    );
+    // A skip is the common, uninteresting case (most red gates have nothing
+    // remediable) — keep it out of monitor.log so a spent budget or a
+    // failed round stays easy to spot there.
+    if (outcome.kind === 'failed') {
+      this.noteMonitor(
+        input,
+        `[remediate] ${task.id} failed: ${outcome.detail}`
+      );
+    }
+    return false;
+  }
+
+  /** Append to the run's live monitor log (explicit override, else default). */
+  private noteMonitor(input: RunTaskInput, line: string): void {
+    appendMonitorLine(
+      input.monitorPath ?? path.join(input.runsDir, input.runId, 'monitor.log'),
+      line
+    );
   }
 
   /**
@@ -612,7 +749,7 @@ export class RunHandler implements IRunHandler {
         }
       ];
       this._runStateRepo.recordExceptions(input.runsDir, state, entries);
-      this.postEscalations(input, state, task.id, entries);
+      this.postEscalations(input, state, task.id, entries, chain.headSha);
       console.log(
         chalk.red(
           `  [enforce] merge blocked for ${task.id}: ${phaseVerdict.reasons.join('; ')}`
@@ -631,6 +768,12 @@ export class RunHandler implements IRunHandler {
       return;
     }
 
+    this._heartbeat.setContext({
+      taskId: task.id,
+      step: 'merge',
+      lastLine: 'gates green — merging the task PR'
+    });
+
     const prUrl = state.taskResults[task.id]?.prUrl;
     const prNumber = prUrl?.match(/\/pull\/(\d+)$/)?.[1];
     if (prUrl === undefined || prNumber === undefined) {
@@ -643,7 +786,7 @@ export class RunHandler implements IRunHandler {
         }
       ];
       this._runStateRepo.recordExceptions(input.runsDir, state, entries);
-      this.postEscalations(input, state, task.id, entries);
+      this.postEscalations(input, state, task.id, entries, chain.headSha);
       console.log(
         chalk.red(`  [enforce] ${task.id} green but has no PR — cannot merge`)
       );
@@ -701,7 +844,7 @@ export class RunHandler implements IRunHandler {
         }
       ];
       this._runStateRepo.recordExceptions(input.runsDir, state, entries);
-      this.postEscalations(input, state, task.id, entries);
+      this.postEscalations(input, state, task.id, entries, chain.headSha);
       console.log(
         chalk.red(
           `  [enforce] merge failed for ${task.id}: ${detail.slice(0, 300)}`
@@ -812,7 +955,8 @@ export class RunHandler implements IRunHandler {
     input: RunTaskInput,
     state: RunState,
     taskId: string,
-    entries: ExceptionEntry[]
+    entries: ExceptionEntry[],
+    occurrenceKey?: string
   ): void {
     if (entries.length === 0) return;
     const evidenceIds = state.verdicts
@@ -828,6 +972,10 @@ export class RunHandler implements IRunHandler {
       repoPath: input.repoPath,
       operator: input.operator,
       monitorPath,
+      // Wave 0: recurrence of the same escalation against a *new* task head
+      // must wake the human again — a resume against unchanged content must
+      // not. The head SHA is exactly that discriminator.
+      occurrenceKey,
       wakeDir: input.wakeDir
     });
     for (const title of outcome.posted) {
@@ -1312,7 +1460,9 @@ export class RunHandler implements IRunHandler {
 
     if (result.deduped) {
       console.log(
-        chalk.yellow(`  [queue] already queued (dedup by spec path): ${specPath}`)
+        chalk.yellow(
+          `  [queue] already queued (dedup by spec path): ${specPath}`
+        )
       );
       console.log(`  record: ${result.path}`);
       return;
@@ -1653,7 +1803,8 @@ export class RunHandler implements IRunHandler {
         runId: input.runId,
         task,
         healthReport,
-        precomputedTestTier
+        precomputedTestTier,
+        progress: { set: ctx => this._heartbeat.setContext(ctx) }
       });
     } catch (err) {
       if (err instanceof WorkflowError && err.code === 'SPEC_MALFORMED') {

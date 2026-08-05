@@ -50,6 +50,9 @@ const baseState = (): RunState => ({
   steps: {},
   tokenSpendK: 0,
   ciFixAttempts: {},
+  gateFixAttempts: {},
+  remediations: {},
+  mergeBlockedRetries: 0,
   updatedAt: 'x'
 });
 
@@ -115,7 +118,11 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
         .mockImplementation((_d, state: RunState, delta: number) => {
           state.tokenSpendK = (state.tokenSpendK ?? 0) + delta;
           return state.tokenSpendK;
-        })
+        }),
+      recordGateFixAttempt: jest.fn(),
+      recordRemediation: jest.fn(),
+      recordMergeBlockedRetry: jest.fn(),
+      invalidateSteps: jest.fn().mockReturnValue([])
     };
 
     const container = new Container();
@@ -301,6 +308,101 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
     expect(pool.outcomes[0].task.id).toBe('T-01');
     expect(pool.outcomes[0].cached).toBe(true);
     expect(agentRun).not.toHaveBeenCalled();
+  });
+
+  // Wave 0: breach-terminal-per-digest is right for identical content, but a
+  // remediation round deliberately changes the task head — and the
+  // implementation digest is rooted at {task content, integration tip},
+  // neither of which moves when the agent commits a fix. Without this the fix
+  // would sit on the branch forever, never judged.
+  describe('remediated tasks reopen for a re-gate (Wave 0)', () => {
+    const breachedState = (remediatedAt?: string) => {
+      const state = baseState();
+      const digest = implementationDigest(makeSpec().tasks[0], 'base-sha');
+      state.taskResults['T-01'] = {
+        taskId: 'T-01',
+        status: 'completed',
+        branch: 'sdlc/run-1/T-01',
+        inputsDigest: digest,
+        recordedAt: 'x'
+      };
+      state.steps[stepKey('implementation', 'T-01', digest)] = {
+        name: 'implementation',
+        taskId: 'T-01',
+        inputsDigest: digest,
+        completedAt: '2026-08-05T10:00:00.000Z'
+      };
+      state.steps[stepKey('phase', 'T-01', 'p')] = {
+        name: 'phase',
+        taskId: 'T-01',
+        inputsDigest: 'p',
+        completedAt: '2026-08-05T10:00:00.000Z',
+        verdict: {
+          gate: 'phase',
+          outcome: 'breach',
+          wouldEscalate: true,
+          reasons: ['failing gates: reviewer'],
+          recordedAt: 'x'
+        }
+      };
+      if (remediatedAt !== undefined) {
+        state.remediations['T-01'] = {
+          attempt: 1,
+          sha: 'fix-sha',
+          gates: ['reviewer'],
+          recordedAt: remediatedAt
+        };
+      }
+      return state;
+    };
+
+    it('re-selects a breached task whose remediation landed after the phase step', async () => {
+      stateMock.load.mockReturnValue(breachedState('2026-08-05T10:05:00.000Z'));
+
+      const pool = await executor.executeReady(INPUT);
+
+      expect(pool.kind).toBe('executed');
+      expect(pool.outcomes[0].task.id).toBe('T-01');
+      // The implementation is cached — only the gates need to run again, so
+      // the re-gate costs a reviewer round, not a fresh implementation.
+      expect(pool.outcomes[0].cached).toBe(true);
+      expect(agentRun).not.toHaveBeenCalled();
+    });
+
+    it('leaves a breached task terminal when the remediation predates the phase step', async () => {
+      // The phase gate already judged this fix and still breached — reopening
+      // would loop on content the gates have seen.
+      stateMock.load.mockReturnValue(breachedState('2026-08-05T09:55:00.000Z'));
+
+      const pool = await executor.executeReady(INPUT);
+
+      expect(pool.kind).toBe('no-ready-task');
+    });
+
+    it('leaves a breached task with no remediation terminal', async () => {
+      stateMock.load.mockReturnValue(breachedState());
+
+      const pool = await executor.executeReady(INPUT);
+
+      expect(pool.kind).toBe('no-ready-task');
+    });
+
+    it('does not reopen a remediated task that already merged', async () => {
+      const state = breachedState('2026-08-05T10:05:00.000Z');
+      state.taskResults['T-01'].mergedSha = 'merge-sha';
+      state.steps[stepKey('merge', 'T-01', 'm')] = {
+        name: 'merge',
+        taskId: 'T-01',
+        inputsDigest: 'm',
+        completedAt: '2026-08-05T10:10:00.000Z'
+      };
+      stateMock.load.mockReturnValue(state);
+
+      const pool = await executor.executeReady(INPUT);
+
+      // T-02 becomes eligible instead; T-01 is terminal.
+      expect(pool.outcomes.map(o => o.task.id)).toEqual(['T-02']);
+    });
   });
 
   it('a merged dependency unblocks its dependents', async () => {
