@@ -35,6 +35,11 @@
       "name": "comita_admissions",
       "ghRepo": "comita_admissions",
       "label": "Comita Admissions — Referral Management"
+    },
+    {
+      "name": "comita_website",
+      "ghRepo": "comita_website",
+      "label": "Comita — Marketing Site"
     }
   ],
   "personalChronicle": {

@@ -60,16 +60,19 @@ Always use `bun` over `npm`/`yarn` (`bun install`, `bun run <script>`).
 ## Folder Structure
 
 ```
-rosetta/
+comita/   (Comita Health workspace; stock Rosetta uses ~/projects/rosetta/)
 ├── rosetta_dev-scripts/     Workspace tooling (team-setup + sdlc-workflow)
 ├── rosetta_docs/            PRDs, ADRs, foundations
 ├── rosetta_chronicle/       Memory engine
 ├── rosetta_wayfinder/       Knowledge guide
+├── comita_docs/             Company docs, brand, policies
+├── comita_admissions/       Production app — referral & admissions management
+├── comita_website/          Marketing site (comitahealth.com / dig)
 └── rosetta_chronicle_<you>/ Personal chronicle (in your GitHub account)
 ```
 
-Consumer workspaces add their own product repos beside these. Each repo has a
-`CLAUDE.md` describing its purpose and structure.
+Consumer workspaces list product repos in `team-setup/src/config/shared.json`
+`flatRepos`. Each repo has a `CLAUDE.md` describing its purpose and structure.
 
 ## Architecture — Handler / Service / Repository (MANDATORY)
 
