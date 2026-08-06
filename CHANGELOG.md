@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** per-workspace event daemon skeleton (SPEC-PRD-0020-P1
+  T-01). `sdlc-workflow daemon --workspace <root>` is a long-running process
+  whose only required input is the workspace root; `DaemonConfig` (activate
+  script, runs dir, poll cadence, headless runner) is loaded from
+  `.sdlc/daemon.json` under that root, and pid/log/launchd label are derived
+  per workspace so two roots never share a process. `daemon install` /
+  `daemon uninstall` write (or remove) a KeepAlive=true launchd plist with a
+  workspace-unique label. Bootstrap and lifecycle only — no watch/poll yet.
 - **sdlc-workflow:** the reviewer prompt no longer ships domain-specific
   vocabulary as examples of invariants worth documenting. Examples are now
   generic ("authorization, data-sensitivity boundaries, idempotency, ordering,

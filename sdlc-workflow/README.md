@@ -107,6 +107,17 @@ bun run dev -- queue-run --spec ../specs/PRD-0011/phase-4-spec.md --repo ..
 
 # List queued launch records (FIFO, oldest first)
 bun run dev -- status --queue
+
+# Per-workspace SDLC event daemon (SPEC-PRD-0020-P1 T-01) — process
+# bootstrap only; watch/poll modules land in later tasks. Config is
+# `.sdlc/daemon.json` under the workspace root (DaemonConfig contract).
+bun run dev -- daemon --workspace ../..
+bun run dev -- daemon install --workspace ../..
+bun run dev -- daemon uninstall --workspace ../..
+# Options
+#   --workspace   required workspace root (all paths/ids derived from it)
+#   --plist-dir   LaunchAgents directory (default: ~/Library/LaunchAgents)
+#   --no-load     write the plist without calling launchctl (tests / dry-run)
 ```
 
 `decompose` grounds the synthesized envelope in the target repo tree (#35):
