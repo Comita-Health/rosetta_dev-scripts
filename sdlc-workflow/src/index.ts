@@ -922,10 +922,14 @@ yargs(hideBin(process.argv))
                 describe:
                   'Directory for the plist (default: ~/Library/LaunchAgents)'
               })
-              .option('no-load', {
+              // Name the positive flag `load` so yargs' built-in `--no-load`
+              // negation works. Declaring `no-load` as its own option makes
+              // strict mode reject `--no-load` as "Unknown argument: load".
+              .option('load', {
                 type: 'boolean',
-                default: false,
-                describe: 'Write the plist without calling launchctl'
+                default: true,
+                describe:
+                  'Call launchctl bootstrap/enable (use --no-load to write the plist only)'
               }),
           argv => {
             const handler = container.get<IDaemonHandler>(
@@ -935,7 +939,7 @@ yargs(hideBin(process.argv))
               handler.install({
                 workspaceRoot: argv.workspace,
                 plistDir: argv['plist-dir'],
-                load: argv['no-load'] !== true,
+                load: argv.load !== false,
                 cliEntry: __filename,
                 program: process.execPath
               });

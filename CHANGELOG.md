@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** `daemon install --no-load` works again — the flag is
+  yargs' negation of `--load` (default true); declaring a literal `no-load`
+  option made strict mode reject `--no-load` as `Unknown argument: load`
+  (SPEC-PRD-0020-P1 T-01).
 - **sdlc-workflow:** `daemon install` is transactional on macOS launchd —
   after a successful `launchctl bootstrap`, a failed `launchctl enable` boots
   the agent out and removes the plist so install never reports failure while

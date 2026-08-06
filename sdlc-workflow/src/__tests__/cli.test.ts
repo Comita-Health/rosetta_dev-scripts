@@ -1,4 +1,13 @@
 import { execSync } from 'child_process';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync
+} from 'fs';
+import os from 'os';
 import path from 'path';
 
 const CWD = path.resolve(__dirname, '..', '..');
@@ -65,6 +74,48 @@ describe('CLI (T-01)', () => {
       expect(output).toMatch(
         /GIT_FAILED|Spec file not found|Refused at intake/
       );
+    });
+  });
+
+  describe('daemon install argument parsing', () => {
+    it('accepts --no-load and writes a KeepAlive plist with a unique label', () => {
+      const workspace = mkdtempSync(path.join(os.tmpdir(), 'daemon-cli-ws-'));
+      const plistDir = mkdtempSync(path.join(os.tmpdir(), 'daemon-cli-plist-'));
+      mkdirSync(path.join(workspace, '.sdlc'), { recursive: true });
+      writeFileSync(
+        path.join(workspace, '.sdlc', 'daemon.json'),
+        JSON.stringify({
+          activateScript: 'scripts/activate.sh',
+          runsDir: 'var/runs',
+          defaultPollSeconds: 30,
+          headlessRunner: 'test-runner'
+        }),
+        'utf-8'
+      );
+
+      const { output, code } = cli(
+        `daemon install --workspace ${workspace} --plist-dir ${plistDir} --no-load`
+      );
+
+      expect(output).not.toContain('Unknown argument');
+      expect(code).toBe(0);
+      expect(output).toMatch(/sdlc\.workflow\.daemon\.[a-f0-9]{16}/);
+      expect(output).toContain('plist only');
+
+      const plists = readdirSync(plistDir).filter(f => f.endsWith('.plist'));
+      expect(plists).toHaveLength(1);
+      const body = readFileSync(path.join(plistDir, plists[0]), 'utf-8');
+      expect(body).toMatch(/<key>KeepAlive<\/key>\s*<true\/>/);
+      expect(body).toMatch(
+        /<key>Label<\/key>\s*<string>sdlc\.workflow\.daemon\.[a-f0-9]{16}<\/string>/
+      );
+      expect(body).toContain(`<string>${workspace}</string>`);
+
+      const uninstall = cli(
+        `daemon uninstall --workspace ${workspace} --plist-dir ${plistDir}`
+      );
+      expect(uninstall.code).toBe(0);
+      expect(existsSync(path.join(plistDir, plists[0]))).toBe(false);
     });
   });
 });
