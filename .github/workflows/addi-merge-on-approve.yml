@@ -418,6 +418,13 @@ jobs:
 
             # Do NOT use `gh pr checks --watch` — this job can register as a
             # pending check and deadlock on itself.
+            #
+            # statusCheckRollup mixes CheckRun (Actions) and StatusContext
+            # (legacy commit statuses, e.g. sdlc/reviewer). CheckRuns use
+            # status + conclusion (QUEUED/IN_PROGRESS/COMPLETED + SUCCESS/…).
+            # StatusContexts use state (PENDING/SUCCESS/FAILURE/ERROR) with
+            # status/conclusion null — so `select(.status != "COMPLETED")`
+            # treated successful StatusContexts as forever-pending (#384/#385).
             echo "Waiting for checks (excluding this workflow)…"
             local deadline=$((SECONDS + 1200))
             local self_run="${GITHUB_RUN_ID:-}"
@@ -428,16 +435,25 @@ jobs:
                 [.statusCheckRollup[]?
                   | select((.workflowName // "") != "Addi merge on Approve")
                   | select((.detailsUrl // "") | contains("/runs/\($run)/") | not)
-                  | select(.status != "COMPLETED")]
+                  | select(
+                      ((.status != null) and (.status != "COMPLETED"))
+                      or ((.status == null)
+                        and ((.state // "PENDING" | ascii_upcase) == "PENDING"))
+                    )]
                 | length')
               failed=$(echo "$rollup" | jq --argjson run "${self_run:-0}" '
                 [.statusCheckRollup[]?
                   | select((.workflowName // "") != "Addi merge on Approve")
                   | select((.detailsUrl // "") | contains("/runs/\($run)/") | not)
-                  | select(.status == "COMPLETED")
-                  | select(.conclusion != "SUCCESS"
-                      and .conclusion != "SKIPPED"
-                      and .conclusion != "NEUTRAL")]
+                  | select(
+                      ((.status == "COMPLETED")
+                        and (.conclusion != "SUCCESS")
+                        and (.conclusion != "SKIPPED")
+                        and (.conclusion != "NEUTRAL"))
+                      or ((.status == null)
+                        and ((.state // "" | ascii_upcase) == "FAILURE"
+                          or (.state // "" | ascii_upcase) == "ERROR"))
+                    )]
                 | length')
               if [ "$failed" -gt 0 ]; then
                 echo "Checks failed; not merging $url"

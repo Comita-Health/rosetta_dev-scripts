@@ -71,8 +71,17 @@ Approve and merge:
    PR branch, rewrite only `status: Draft` → `Approved`, push as Addi
    (`docs(spec): approve SPEC-… on human Approve`, DCO-signed).
 3. **Head re-pin** — wait until `headRefOid` matches the flip SHA.
-4. **Checks → merge** — existing statusCheckRollup wait, then squash /
+4. **Checks → merge** — statusCheckRollup wait (see below), then squash /
    merge-async as before.
+
+The wait loop must classify **both** rollup shapes: CheckRun (Actions:
+`status` + `conclusion`) and StatusContext (legacy commit statuses such as
+`sdlc/reviewer`: `state` with `status`/`conclusion` null). Filtering only on
+`status != "COMPLETED"` treats successful StatusContexts as forever-pending
+and times out without merging. Pending = unfinished CheckRun **or**
+StatusContext with `state=PENDING`; failed = completed CheckRun with a bad
+conclusion **or** StatusContext `FAILURE`/`ERROR`. Terminal StatusContext
+`SUCCESS` is done.
 
 Tests: `node --test team-setup/scripts/flip-spec-status.test.mjs`.
 
