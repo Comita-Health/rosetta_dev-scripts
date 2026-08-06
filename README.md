@@ -209,7 +209,7 @@ bun run dev -- shell-alias
 ## Directory Structure After Setup
 
 ```
-~/projects/rosetta/
+~/projects/comita/   (or ~/projects/rosetta/ for a stock Rosetta workspace)
 ├── CLAUDE.md                    (shared agent brief — Claude Code + Cursor)
 ├── AGENTS.md                    (Cursor-oriented map; points at CLAUDE.md)
 ├── .claude/                     (Claude settings, commands, rules, skills)
@@ -219,13 +219,17 @@ bun run dev -- shell-alias
 ├── rosetta_docs/                (cloned — PRDs, ADRs, docs, shared assets)
 ├── rosetta_chronicle/           (cloned — memory engine)
 ├── rosetta_wayfinder/           (cloned — knowledge guide)
+├── comita_docs/                 (Comita — company docs & brand; Comita workspaces)
+├── comita_admissions/           (Comita — admissions product; Comita workspaces)
+├── comita_website/              (Comita — marketing site; Comita workspaces)
 └── rosetta_chronicle_<you>/     (created + cloned — your private personal Chronicle)
 ```
 
-All workspace repos — `rosetta_dev-scripts`, `rosetta_docs`, `rosetta_chronicle`, and
-`rosetta_wayfinder` — are configured as `flatRepos` in `team-setup/src/config/shared.json` and cloned
-side by side at the workspace root. Cross-cutting artifacts (PRDs, ADRs, vision, shared assets) live
-in the versioned **`rosetta_docs`** repo. `tracks/default.json` no longer defines any doc `projects`.
+All workspace repos — engine `rosetta_*` packages plus any consumer product repos listed
+in `team-setup/src/config/shared.json` `flatRepos` — are cloned side by side at the
+workspace root. Cross-cutting artifacts (PRDs, ADRs, vision, shared assets) live
+in the versioned **`rosetta_docs`** repo (and consumer `*_docs` where present).
+`tracks/default.json` no longer defines any doc `projects`.
 
 ### Personal Chronicle
 
