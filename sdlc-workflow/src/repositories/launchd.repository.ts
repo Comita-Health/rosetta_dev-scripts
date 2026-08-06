@@ -133,9 +133,18 @@ export class LaunchdRepository implements ILaunchdRepository {
           [(bootstrap.stderr || bootstrap.stdout || '').trim()]
         );
       }
-      spawnSync('launchctl', ['enable', `${guiDomain()}/${input.label}`], {
-        encoding: 'utf-8'
-      });
+      const enable = spawnSync(
+        'launchctl',
+        ['enable', `${guiDomain()}/${input.label}`],
+        { encoding: 'utf-8' }
+      );
+      if (enable.status !== 0) {
+        throw new WorkflowError(
+          `launchctl enable failed for ${input.label}`,
+          'DAEMON_CONFIG_INVALID',
+          [(enable.stderr || enable.stdout || '').trim()]
+        );
+      }
     }
 
     return {

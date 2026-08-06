@@ -111,6 +111,9 @@ bun run dev -- status --queue
 # Per-workspace SDLC event daemon (SPEC-PRD-0020-P1 T-01) — process
 # bootstrap only; watch/poll modules land in later tasks. Config is
 # `.sdlc/daemon.json` under the workspace root (DaemonConfig contract).
+# `install` creates `.sdlc/daemon/` + touches the log before launchd load;
+# `uninstall` derives the label/plist from the workspace root alone so a
+# missing/malformed contract cannot leave an orphaned agent.
 bun run dev -- daemon --workspace ../..
 bun run dev -- daemon install --workspace ../..
 bun run dev -- daemon uninstall --workspace ../..

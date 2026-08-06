@@ -4,6 +4,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  unlinkSync,
   writeFileSync
 } from 'fs';
 import { Container } from 'inversify';
@@ -228,6 +229,7 @@ describe('DaemonLifecycleService.run', () => {
     const configRepo = new DaemonConfigRepository();
     const { paths } = configRepo.load(root);
     const processRepo: IDaemonProcessRepository = {
+      ensureState: jest.fn(),
       writePid: jest.fn(),
       readPid: jest.fn(),
       isAlive: jest.fn(),
@@ -267,5 +269,55 @@ describe('DaemonLifecycleService.run', () => {
     const result = lifecycle.install(root, { plistDir, load: false });
     expect(result.plistXml).toContain(process.execPath);
     expect(result.loaded).toBe(false);
+  });
+
+  it('install creates the daemon state directory and log before launchd load', () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'daemon-install-state-'));
+    writeDaemonConfig(root);
+    const plistDir = mkdtempSync(path.join(os.tmpdir(), 'daemon-plist-state-'));
+    const configRepo = new DaemonConfigRepository();
+    const { paths } = configRepo.load(root);
+    expect(existsSync(paths.stateDir)).toBe(false);
+    expect(existsSync(paths.logPath)).toBe(false);
+
+    const lifecycle = new DaemonLifecycleService(
+      configRepo,
+      new DaemonProcessRepository(),
+      new LaunchdRepository()
+    );
+    lifecycle.install(root, { plistDir, load: false });
+
+    expect(existsSync(paths.stateDir)).toBe(true);
+    expect(existsSync(paths.logPath)).toBe(true);
+    expect(existsSync(paths.pidFile)).toBe(false);
+  });
+
+  it('uninstall recovers from a missing daemon.json via derived label only', () => {
+    const root = mkdtempSync(
+      path.join(os.tmpdir(), 'daemon-uninstall-orphan-')
+    );
+    writeDaemonConfig(root);
+    const plistDir = mkdtempSync(
+      path.join(os.tmpdir(), 'daemon-plist-orphan-')
+    );
+    const configRepo = new DaemonConfigRepository();
+    const lifecycle = new DaemonLifecycleService(
+      configRepo,
+      new DaemonProcessRepository(),
+      new LaunchdRepository()
+    );
+
+    const installed = lifecycle.install(root, { plistDir, load: false });
+    expect(existsSync(installed.plistPath)).toBe(true);
+
+    // Simulate a deleted/moved contract — uninstall must not call load().
+    unlinkSync(path.join(root, '.sdlc', 'daemon.json'));
+    writeFileSync(path.join(root, '.sdlc', 'daemon.json'), '{', 'utf-8');
+
+    expect(() => configRepo.load(root)).toThrow(/Malformed daemon config/);
+
+    const removed = lifecycle.uninstall(root, { plistDir });
+    expect(removed.label).toBe(installed.label);
+    expect(existsSync(installed.plistPath)).toBe(false);
   });
 });

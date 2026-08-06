@@ -120,6 +120,27 @@ describe('DaemonConfigRepository', () => {
     writeFileSync(fileRoot, 'x', 'utf-8');
     expect(() => repo.load(fileRoot)).toThrow(/not a directory/);
   });
+
+  it('derivePaths works without a daemon.json contract', () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'daemon-cfg-derive-'));
+    const paths = repo.derivePaths(root);
+    expect(paths.launchdLabel).toMatch(
+      /^sdlc\.workflow\.daemon\.[a-f0-9]{16}$/
+    );
+    expect(paths.logPath).toBe(
+      path.join(root, '.sdlc', 'daemon', 'daemon.log')
+    );
+    // Still works when the workspace directory itself is gone.
+    const gone = path.join(
+      os.tmpdir(),
+      `daemon-cfg-gone-${Date.now()}-${Math.random()}`
+    );
+    const gonePaths = repo.derivePaths(gone);
+    expect(gonePaths.launchdLabel).toMatch(
+      /^sdlc\.workflow\.daemon\.[a-f0-9]{16}$/
+    );
+    expect(() => repo.derivePaths('')).toThrow(/non-empty workspace root/);
+  });
 });
 
 /**

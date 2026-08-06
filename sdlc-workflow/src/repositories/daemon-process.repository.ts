@@ -21,6 +21,14 @@ export interface DaemonProcessStartInput {
  * logic — bootstrap and exit only (SPEC-PRD-0020-P1 T-01).
  */
 export interface IDaemonProcessRepository {
+  /**
+   * Create the pid/log parent directories and touch the log file so launchd can
+   * open StandardOutPath/StandardErrorPath at bootstrap time (install must
+   * call this before loading the agent).
+   */
+  ensureState(
+    input: Pick<DaemonProcessStartInput, 'pidFile' | 'logPath'>
+  ): void;
   /** Create state dirs, touch the log path, and write the pid file. */
   writePid(input: DaemonProcessStartInput): void;
   /** Read a pid file; `null` when absent or unparseable. */
@@ -38,12 +46,18 @@ export interface IDaemonProcessRepository {
 
 @injectable()
 export class DaemonProcessRepository implements IDaemonProcessRepository {
-  writePid(input: DaemonProcessStartInput): void {
+  ensureState(
+    input: Pick<DaemonProcessStartInput, 'pidFile' | 'logPath'>
+  ): void {
     mkdirSync(path.dirname(input.pidFile), { recursive: true });
     mkdirSync(path.dirname(input.logPath), { recursive: true });
     if (!existsSync(input.logPath)) {
       writeFileSync(input.logPath, '', 'utf-8');
     }
+  }
+
+  writePid(input: DaemonProcessStartInput): void {
+    this.ensureState(input);
     const pid = input.pid ?? process.pid;
     writeFileAtomic(input.pidFile, `${pid}\n`);
   }

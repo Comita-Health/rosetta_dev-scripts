@@ -42,7 +42,7 @@ describe('LaunchdRepository launchctl load', () => {
   });
 
   it('throws when bootstrap fails', () => {
-    spawnSync.mockImplementation((cmd: string, args: string[]) => {
+    spawnSync.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === 'bootstrap') {
         return { status: 1, stdout: '', stderr: 'bootstrap denied' };
       }
@@ -63,5 +63,29 @@ describe('LaunchdRepository launchctl load', () => {
         load: true
       })
     ).toThrow(WorkflowError);
+  });
+
+  it('throws when enable fails after a successful bootstrap', () => {
+    spawnSync.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === 'enable') {
+        return { status: 1, stdout: '', stderr: 'enable denied' };
+      }
+      return { status: 0, stdout: '', stderr: '' };
+    });
+    const repo = new LaunchdRepository();
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'daemon-launchd-enable-'));
+
+    expect(() =>
+      repo.install({
+        label: 'sdlc.workflow.daemon.enablefail',
+        program: process.execPath,
+        programArguments: [],
+        workingDirectory: dir,
+        stdoutPath: path.join(dir, 'o.log'),
+        stderrPath: path.join(dir, 'e.log'),
+        plistDir: dir,
+        load: true
+      })
+    ).toThrow(/launchctl enable failed/);
   });
 });

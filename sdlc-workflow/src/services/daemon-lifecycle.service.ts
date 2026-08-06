@@ -74,6 +74,12 @@ export class DaemonLifecycleService implements IDaemonLifecycleService {
     options: DaemonInstallOptions = {}
   ): DaemonInstallResult {
     const { config, paths } = this._configRepo.load(workspaceRoot);
+    // launchd opens StandardOutPath/StandardErrorPath at load/start; create
+    // the state directory and touch the log before bootstrap/enable.
+    this._processRepo.ensureState({
+      pidFile: paths.pidFile,
+      logPath: paths.logPath
+    });
     const program = options.program ?? process.execPath;
     const cliEntry =
       options.cliEntry ?? path.resolve(__dirname, '..', 'index.js');
@@ -112,7 +118,9 @@ export class DaemonLifecycleService implements IDaemonLifecycleService {
     workspaceRoot: string,
     options: Pick<DaemonInstallOptions, 'plistDir'> = {}
   ): { label: string } {
-    const { paths } = this._configRepo.load(workspaceRoot);
+    // Label/plist path are derived from the workspace root alone so a
+    // missing or malformed `.sdlc/daemon.json` cannot strand a launchd agent.
+    const paths = this._configRepo.derivePaths(workspaceRoot);
     this._launchdRepo.uninstall(paths.launchdLabel, options.plistDir);
     return { label: paths.launchdLabel };
   }

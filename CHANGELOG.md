@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** `daemon install` now creates `.sdlc/daemon/` and touches
+  `daemon.log` before launchd bootstrap so StandardOutPath/StandardErrorPath
+  exist at load time; `daemon uninstall` derives the label/plist path from the
+  workspace root alone (no `.sdlc/daemon.json` required); and `launchctl
+  enable` failures after a successful bootstrap fail the install instead of
+  reporting `loaded: true` while the agent stays disabled (SPEC-PRD-0020-P1
+  T-01 remediation).
 - **sdlc-workflow:** per-workspace event daemon skeleton (SPEC-PRD-0020-P1
   T-01). `sdlc-workflow daemon --workspace <root>` is a long-running process
   whose only required input is the workspace root; `DaemonConfig` (activate
