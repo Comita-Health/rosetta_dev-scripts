@@ -112,6 +112,7 @@ bun run dev -- status --queue
 # bootstrap only; watch/poll modules land in later tasks. Config is
 # `.sdlc/daemon.json` under the workspace root (DaemonConfig contract).
 # `install` creates `.sdlc/daemon/` + touches the log before launchd load;
+# load is transactional (enable failure → bootout + plist remove);
 # `uninstall` derives the label/plist from the workspace root alone so a
 # missing/malformed contract cannot leave an orphaned agent.
 bun run dev -- daemon --workspace ../..

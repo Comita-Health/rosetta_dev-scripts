@@ -127,6 +127,7 @@ export class LaunchdRepository implements ILaunchdRepository {
         { encoding: 'utf-8' }
       );
       if (bootstrap.status !== 0) {
+        this.removePlist(plistPath);
         throw new WorkflowError(
           `launchctl bootstrap failed for ${input.label}`,
           'DAEMON_CONFIG_INVALID',
@@ -139,6 +140,11 @@ export class LaunchdRepository implements ILaunchdRepository {
         { encoding: 'utf-8' }
       );
       if (enable.status !== 0) {
+        // Bootstrap already loaded the agent (RunAtLoad/KeepAlive may be
+        // running). Roll back before surfacing failure so install never
+        // leaves a loaded agent + on-disk plist after reporting an error.
+        this.bootout(input.label);
+        this.removePlist(plistPath);
         throw new WorkflowError(
           `launchctl enable failed for ${input.label}`,
           'DAEMON_CONFIG_INVALID',
@@ -158,15 +164,18 @@ export class LaunchdRepository implements ILaunchdRepository {
   uninstall(label: string, plistDir?: string): void {
     this.bootout(label);
     const dir = plistDir ?? defaultPlistDir();
-    const plistPath = path.join(dir, `${label}.plist`);
-    if (existsSync(plistPath)) {
-      unlinkSync(plistPath);
-    }
+    this.removePlist(path.join(dir, `${label}.plist`));
   }
 
   private bootout(label: string): void {
     spawnSync('launchctl', ['bootout', `${guiDomain()}/${label}`], {
       encoding: 'utf-8'
     });
+  }
+
+  private removePlist(plistPath: string): void {
+    if (existsSync(plistPath)) {
+      unlinkSync(plistPath);
+    }
   }
 }

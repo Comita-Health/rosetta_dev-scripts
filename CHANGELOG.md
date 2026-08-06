@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** `daemon install` is transactional on macOS launchd —
+  after a successful `launchctl bootstrap`, a failed `launchctl enable` boots
+  the agent out and removes the plist so install never reports failure while
+  leaving a loaded KeepAlive agent on disk (SPEC-PRD-0020-P1 T-01).
 - **sdlc-workflow:** `daemon install` now creates `.sdlc/daemon/` and touches
   `daemon.log` before launchd bootstrap so StandardOutPath/StandardErrorPath
   exist at load time; `daemon uninstall` derives the label/plist path from the

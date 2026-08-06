@@ -24,8 +24,33 @@ export interface DaemonCommandInput {
  * validation of the required workspace root (SPEC-PRD-0020-P1 T-01).
  */
 export interface IDaemonHandler {
+  /**
+   * Start the long-running daemon for one workspace: load `DaemonConfig`,
+   * write pid/log paths, then block until SIGTERM/SIGINT.
+   *
+   * @throws {WorkflowError} `DAEMON_CONFIG_INVALID` when `--workspace` is
+   *   missing/empty (no partial state) or when config under the root is
+   *   missing/malformed.
+   */
   run(input: DaemonCommandInput): Promise<DaemonRuntimePaths>;
+  /**
+   * Generate and load a KeepAlive=true launchd agent for the workspace.
+   * Creates `.sdlc/daemon/` + log before bootstrap so launchd can open
+   * StandardOutPath/StandardErrorPath. Load is transactional: a failed
+   * `launchctl enable` after bootstrap boots out and removes the plist.
+   *
+   * @throws {WorkflowError} `DAEMON_CONFIG_INVALID` when `--workspace` is
+   *   missing/empty, config is invalid, or launchctl bootstrap/enable fails.
+   */
   install(input: DaemonCommandInput): DaemonInstallResult;
+  /**
+   * Unload and remove the workspace launchd agent. Label/plist path are
+   * derived from the workspace root alone so a missing or malformed
+   * `.sdlc/daemon.json` cannot strand an orphaned agent.
+   *
+   * @throws {WorkflowError} `DAEMON_CONFIG_INVALID` when `--workspace` is
+   *   missing/empty (no launchctl calls).
+   */
   uninstall(input: DaemonCommandInput): { label: string };
 }
 
@@ -36,6 +61,14 @@ export class DaemonHandler implements IDaemonHandler {
     private readonly _lifecycle: IDaemonLifecycleService
   ) {}
 
+  /**
+   * Start the long-running daemon for one workspace: load `DaemonConfig`,
+   * write pid/log paths, then block until SIGTERM/SIGINT.
+   *
+   * @throws {WorkflowError} `DAEMON_CONFIG_INVALID` when `--workspace` is
+   *   missing/empty (no partial state) or when config under the root is
+   *   missing/malformed.
+   */
   async run(input: DaemonCommandInput): Promise<DaemonRuntimePaths> {
     const workspaceRoot = this.requireWorkspace(input.workspaceRoot);
     console.log(chalk.bold('\nStarting SDLC event daemon...\n'));
@@ -45,6 +78,15 @@ export class DaemonHandler implements IDaemonHandler {
     return paths;
   }
 
+  /**
+   * Generate and load a KeepAlive=true launchd agent for the workspace.
+   * Creates `.sdlc/daemon/` + log before bootstrap so launchd can open
+   * StandardOutPath/StandardErrorPath. Load is transactional: a failed
+   * `launchctl enable` after bootstrap boots out and removes the plist.
+   *
+   * @throws {WorkflowError} `DAEMON_CONFIG_INVALID` when `--workspace` is
+   *   missing/empty, config is invalid, or launchctl bootstrap/enable fails.
+   */
   install(input: DaemonCommandInput): DaemonInstallResult {
     const workspaceRoot = this.requireWorkspace(input.workspaceRoot);
     const options: DaemonInstallOptions = {
@@ -67,6 +109,14 @@ export class DaemonHandler implements IDaemonHandler {
     return result;
   }
 
+  /**
+   * Unload and remove the workspace launchd agent. Label/plist path are
+   * derived from the workspace root alone so a missing or malformed
+   * `.sdlc/daemon.json` cannot strand an orphaned agent.
+   *
+   * @throws {WorkflowError} `DAEMON_CONFIG_INVALID` when `--workspace` is
+   *   missing/empty (no launchctl calls).
+   */
   uninstall(input: DaemonCommandInput): { label: string } {
     const workspaceRoot = this.requireWorkspace(input.workspaceRoot);
     const result = this._lifecycle.uninstall(workspaceRoot, {

@@ -8,7 +8,7 @@ jest.mock('child_process', () => ({
   spawnSync: (...args: unknown[]) => spawnSync(...args)
 }));
 
-import { mkdtempSync } from 'fs';
+import { existsSync, mkdtempSync } from 'fs';
 import os from 'os';
 import path from 'path';
 import { LaunchdRepository } from '../repositories/launchd.repository';
@@ -39,9 +39,10 @@ describe('LaunchdRepository launchctl load', () => {
       true
     );
     expect(spawnSync.mock.calls.some(c => c[1]?.[0] === 'enable')).toBe(true);
+    expect(existsSync(result.plistPath)).toBe(true);
   });
 
-  it('throws when bootstrap fails', () => {
+  it('throws and removes the plist when bootstrap fails', () => {
     spawnSync.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === 'bootstrap') {
         return { status: 1, stdout: '', stderr: 'bootstrap denied' };
@@ -50,10 +51,12 @@ describe('LaunchdRepository launchctl load', () => {
     });
     const repo = new LaunchdRepository();
     const dir = mkdtempSync(path.join(os.tmpdir(), 'daemon-launchd-fail-'));
+    const label = 'sdlc.workflow.daemon.loadfail';
+    const plistPath = path.join(dir, `${label}.plist`);
 
     expect(() =>
       repo.install({
-        label: 'sdlc.workflow.daemon.loadfail',
+        label,
         program: process.execPath,
         programArguments: [],
         workingDirectory: dir,
@@ -63,9 +66,10 @@ describe('LaunchdRepository launchctl load', () => {
         load: true
       })
     ).toThrow(WorkflowError);
+    expect(existsSync(plistPath)).toBe(false);
   });
 
-  it('throws when enable fails after a successful bootstrap', () => {
+  it('boots out and removes the plist when enable fails after bootstrap', () => {
     spawnSync.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === 'enable') {
         return { status: 1, stdout: '', stderr: 'enable denied' };
@@ -74,10 +78,12 @@ describe('LaunchdRepository launchctl load', () => {
     });
     const repo = new LaunchdRepository();
     const dir = mkdtempSync(path.join(os.tmpdir(), 'daemon-launchd-enable-'));
+    const label = 'sdlc.workflow.daemon.enablefail';
+    const plistPath = path.join(dir, `${label}.plist`);
 
     expect(() =>
       repo.install({
-        label: 'sdlc.workflow.daemon.enablefail',
+        label,
         program: process.execPath,
         programArguments: [],
         workingDirectory: dir,
@@ -87,5 +93,12 @@ describe('LaunchdRepository launchctl load', () => {
         load: true
       })
     ).toThrow(/launchctl enable failed/);
+
+    // Pre-clean bootout before bootstrap, plus rollback bootout after enable.
+    const bootoutCalls = spawnSync.mock.calls.filter(
+      (c: unknown[]) => Array.isArray(c[1]) && c[1][0] === 'bootout'
+    );
+    expect(bootoutCalls.length).toBeGreaterThanOrEqual(2);
+    expect(existsSync(plistPath)).toBe(false);
   });
 });
