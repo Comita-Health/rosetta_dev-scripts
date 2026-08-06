@@ -101,4 +101,78 @@ describe('LaunchdRepository launchctl load', () => {
     expect(bootoutCalls.length).toBeGreaterThanOrEqual(2);
     expect(existsSync(plistPath)).toBe(false);
   });
+
+  /**
+   * When launchctl cannot be executed at all, spawnSync reports `status: null`
+   * with empty streams — the spawn error is the only actionable cause, so it
+   * must reach the operator rather than being dropped.
+   */
+  it('surfaces the spawn error when launchctl cannot be executed', () => {
+    spawnSync.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === 'bootstrap') {
+        return {
+          status: null,
+          stdout: null,
+          stderr: null,
+          error: new Error('spawnSync launchctl ENOENT')
+        };
+      }
+      return { status: 0, stdout: '', stderr: '' };
+    });
+    const repo = new LaunchdRepository();
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'daemon-launchd-enoent-'));
+    const label = 'sdlc.workflow.daemon.enoent';
+    const plistPath = path.join(dir, `${label}.plist`);
+
+    let thrown: WorkflowError | undefined;
+    try {
+      repo.install({
+        label,
+        program: process.execPath,
+        programArguments: [],
+        workingDirectory: dir,
+        stdoutPath: path.join(dir, 'o.log'),
+        stderrPath: path.join(dir, 'e.log'),
+        plistDir: dir,
+        load: true
+      });
+    } catch (error) {
+      thrown = error as WorkflowError;
+    }
+
+    expect(thrown).toBeInstanceOf(WorkflowError);
+    expect(thrown?.code).toBe('DAEMON_CONFIG_INVALID');
+    expect(thrown?.details).toEqual(['spawnSync launchctl ENOENT']);
+    expect(existsSync(plistPath)).toBe(false);
+  });
+
+  it('reports a non-zero exit with no output without a blank detail', () => {
+    spawnSync.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === 'bootstrap') {
+        return { status: 5, stdout: '   ', stderr: '' };
+      }
+      return { status: 0, stdout: '', stderr: '' };
+    });
+    const repo = new LaunchdRepository();
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'daemon-launchd-silent-'));
+
+    let thrown: WorkflowError | undefined;
+    try {
+      repo.install({
+        label: 'sdlc.workflow.daemon.silent',
+        program: process.execPath,
+        programArguments: [],
+        workingDirectory: dir,
+        stdoutPath: path.join(dir, 'o.log'),
+        stderrPath: path.join(dir, 'e.log'),
+        plistDir: dir,
+        load: true
+      });
+    } catch (error) {
+      thrown = error as WorkflowError;
+    }
+
+    expect(thrown).toBeInstanceOf(WorkflowError);
+    expect(thrown?.details).toEqual([]);
+  });
 });

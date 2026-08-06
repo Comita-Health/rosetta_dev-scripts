@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** a `daemon install` that cannot execute `launchctl` at all
+  now names the cause. `spawnSync` reports that case as `status: null` with
+  empty stdout/stderr, so the thrown `DAEMON_CONFIG_INVALID` carried a blank
+  detail and told the operator only that "bootstrap failed"; the spawn error
+  (e.g. `ENOENT` off macOS) is now surfaced, and a failure with genuinely no
+  output no longer pads `details` with an empty string (SPEC-PRD-0020-P1 T-01).
 - **sdlc-workflow:** `daemon install --no-load` works again — the flag is
   yargs' negation of `--load` (default true); declaring a literal `no-load`
   option made strict mode reject `--no-load` as `Unknown argument: load`

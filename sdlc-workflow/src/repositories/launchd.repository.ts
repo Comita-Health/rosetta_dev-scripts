@@ -51,6 +51,45 @@ const xmlEscape = (value: string): string =>
 const defaultPlistDir = (): string =>
   path.join(os.homedir(), 'Library', 'LaunchAgents');
 
+/** First non-blank value, trimmed — `''` when every candidate is empty. */
+const firstNonEmpty = (...values: (string | null | undefined)[]): string => {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
+  return '';
+};
+
+interface LaunchctlOutcome {
+  ok: boolean;
+  /** Operator-actionable cause, or `''` when launchctl said nothing. */
+  detail: string;
+}
+
+/**
+ * Runs `launchctl` and normalises the two distinct failure shapes: a non-zero
+ * exit (cause on stderr/stdout) and a failure to spawn at all — launchctl
+ * absent or not executable — where `status` is null and both streams are
+ * empty, leaving `error.message` as the only cause worth reporting.
+ */
+const runLaunchctl = (args: string[]): LaunchctlOutcome => {
+  const result = spawnSync('launchctl', args, { encoding: 'utf-8' });
+  const detail = firstNonEmpty(
+    result.stderr,
+    result.stdout,
+    result.error?.message
+  );
+  if (result.error !== undefined && result.error !== null) {
+    return { ok: false, detail };
+  }
+  return { ok: result.status === 0, detail };
+};
+
+/** Omit the details array entirely rather than carrying a blank entry. */
+const detailsOf = (outcome: LaunchctlOutcome): string[] =>
+  outcome.detail.length > 0 ? [outcome.detail] : [];
+
 const guiDomain = (): string => {
   if (typeof process.getuid !== 'function') {
     throw new WorkflowError(
@@ -121,25 +160,17 @@ export class LaunchdRepository implements ILaunchdRepository {
     const shouldLoad = input.load !== false;
     if (shouldLoad) {
       this.bootout(input.label);
-      const bootstrap = spawnSync(
-        'launchctl',
-        ['bootstrap', guiDomain(), plistPath],
-        { encoding: 'utf-8' }
-      );
-      if (bootstrap.status !== 0) {
+      const bootstrap = runLaunchctl(['bootstrap', guiDomain(), plistPath]);
+      if (bootstrap.ok === false) {
         this.removePlist(plistPath);
         throw new WorkflowError(
           `launchctl bootstrap failed for ${input.label}`,
           'DAEMON_CONFIG_INVALID',
-          [(bootstrap.stderr || bootstrap.stdout || '').trim()]
+          detailsOf(bootstrap)
         );
       }
-      const enable = spawnSync(
-        'launchctl',
-        ['enable', `${guiDomain()}/${input.label}`],
-        { encoding: 'utf-8' }
-      );
-      if (enable.status !== 0) {
+      const enable = runLaunchctl(['enable', `${guiDomain()}/${input.label}`]);
+      if (enable.ok === false) {
         // Bootstrap already loaded the agent (RunAtLoad/KeepAlive may be
         // running). Roll back before surfacing failure so install never
         // leaves a loaded agent + on-disk plist after reporting an error.
@@ -148,7 +179,7 @@ export class LaunchdRepository implements ILaunchdRepository {
         throw new WorkflowError(
           `launchctl enable failed for ${input.label}`,
           'DAEMON_CONFIG_INVALID',
-          [(enable.stderr || enable.stdout || '').trim()]
+          detailsOf(enable)
         );
       }
     }
@@ -167,10 +198,13 @@ export class LaunchdRepository implements ILaunchdRepository {
     this.removePlist(path.join(dir, `${label}.plist`));
   }
 
+  /**
+   * Best-effort unload. A failure here is expected and ignored: the agent is
+   * simply not loaded when pre-cleaning before bootstrap or when uninstalling
+   * an agent that was never bootstrapped.
+   */
   private bootout(label: string): void {
-    spawnSync('launchctl', ['bootout', `${guiDomain()}/${label}`], {
-      encoding: 'utf-8'
-    });
+    runLaunchctl(['bootout', `${guiDomain()}/${label}`]);
   }
 
   private removePlist(plistPath: string): void {
