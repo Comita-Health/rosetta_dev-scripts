@@ -28,10 +28,10 @@ Build the long-running daemon entrypoint (a `daemon` subcommand of the `sdlc-wor
 
 ### Acceptance criteria
 
-- [ ] test: starting the daemon with two different workspace roots produces two processes with distinct PID files and log paths, verified by an integration test spawning both.
-- [ ] test: the daemon configuration loader rejects any hardcoded organization, repository, path, or domain-specific literal in source, enforced by a lint/grep-based test over the daemon config module.
-- [ ] agent: `daemon install` for a workspace produces a launchd plist with a KeepAlive=true entry and a workspace-unique label, inspected via `launchctl print` or a plist diff.
-- [ ] test: launching the daemon without a workspace root argument fails fast with a non-zero exit code and no partial state written.
+- [x] test: starting the daemon with two different workspace roots produces two processes with distinct PID files and log paths, verified by an integration test spawning both.
+- [x] test: the daemon configuration loader rejects any hardcoded organization, repository, path, or domain-specific literal in source, enforced by a lint/grep-based test over the daemon config module.
+- [x] agent: `daemon install` for a workspace produces a launchd plist with a KeepAlive=true entry and a workspace-unique label, inspected via `launchctl print` or a plist diff.
+- [x] test: launching the daemon without a workspace root argument fails fast with a non-zero exit code and no partial state written.
 
 ## Task T-02: Durable file-based storage for watch registry and wake inbox
 
@@ -43,10 +43,10 @@ Implement the PRD §4 storage contract: one durable file per watch registration 
 
 ### Acceptance criteria
 
-- [ ] test: writing a watch and a wake, killing the process, and reopening the store returns identical records with no data loss.
-- [ ] test: two workspace roots produce two physically distinct storage directories with no shared records.
-- [ ] test: writing a wake whose idempotent ID (kind + target + signal) already exists does not create a second record.
-- [ ] test: two concurrent consumption claims for the same wake result in exactly one winner, enforced by the atomic-rename claim.
+- [x] test: writing a watch and a wake, killing the process, and reopening the store returns identical records with no data loss.
+- [x] test: two workspace roots produce two physically distinct storage directories with no shared records.
+- [x] test: writing a wake whose idempotent ID (kind + target + signal) already exists does not create a second record.
+- [x] test: two concurrent consumption claims for the same wake result in exactly one winner, enforced by the atomic-rename claim.
 
 ## Task T-03: Watch registry lifecycle API scoped per workspace
 
@@ -58,11 +58,11 @@ Expose an internal API, used by the CLI and poll loop, to register a watch for a
 
 ### Acceptance criteria
 
-- [ ] test: a watch registered via the API remains queryable after the registering process exits and the daemon is queried fresh.
-- [ ] test: registering the same target and kind twice does not create duplicate watch records.
-- [ ] test: a watch registered in workspace A is not returned by any list or query call scoped to workspace B.
-- [ ] test: a watch whose target reaches a terminal state (e.g. PR merged or closed) is expired by the registry rather than polled indefinitely.
-- [ ] agent: listing watches through the registry API returns kind, target, age, and last-poll-time fields for each active watch.
+- [x] test: a watch registered via the API remains queryable after the registering process exits and the daemon is queried fresh.
+- [x] test: registering the same target and kind twice does not create duplicate watch records.
+- [x] test: a watch registered in workspace A is not returned by any list or query call scoped to workspace B.
+- [x] test: a watch whose target reaches a terminal state (e.g. PR merged or closed) is expired by the registry rather than polled indefinitely.
+- [x] agent: listing watches through the registry API returns kind, target, age, and last-poll-time fields for each active watch.
 
 ## Task T-04: Poll scheduler with exactly-once dedupe and bounded retry
 
@@ -74,10 +74,10 @@ Implement the tick loop that iterates active watches and invokes their source ad
 
 ### Acceptance criteria
 
-- [ ] test: simulating two overlapping ticks for the same watch and underlying signal produces exactly one wake record.
-- [ ] test: retrying a poll after a simulated crash mid-write does not produce a duplicate wake for the same source event.
-- [ ] test: a watch whose adapter call fails N consecutive times is marked degraded and stops being retried inline, instead of looping indefinitely.
-- [ ] agent: against a daemon started on a scratch workspace root with a stub source adapter registered, a watch whose adapter reports a signal yields exactly one wake record within one configured poll interval, and re-reporting that same signal adds no second wake.
+- [x] test: simulating two overlapping ticks for the same watch and underlying signal produces exactly one wake record.
+- [x] test: retrying a poll after a simulated crash mid-write does not produce a duplicate wake for the same source event.
+- [x] test: a watch whose adapter call fails N consecutive times is marked degraded and stops being retried inline, instead of looping indefinitely.
+- [x] agent: against a daemon started on a scratch workspace root with a stub source adapter registered, a watch whose adapter reports a signal yields exactly one wake record within one configured poll interval, and re-reporting that same signal adds no second wake.
 
 ## Task T-05: GitHub signal adapters for the pr-review and pr-checks watch kinds
 
@@ -89,10 +89,10 @@ Implement one adapter interface with two concrete adapters for Phase 1: `pr-revi
 
 ### Acceptance criteria
 
-- [ ] test: the pr-review adapter emits distinct normalized signals for Approve, Request-changes, and new review comments through the shared write path.
-- [ ] test: the pr-checks adapter emits a normalized signal for a CI terminal state (success or failure) through the shared write path.
-- [ ] test: an adapter cannot write to the wake store via any code path other than the shared inbox writer, enforced by a module-boundary test.
-- [ ] agent: an Approve and a CI terminal-state change on watched targets both appear in the wake inbox using the same field schema.
+- [x] test: the pr-review adapter emits distinct normalized signals for Approve, Request-changes, and new review comments through the shared write path.
+- [x] test: the pr-checks adapter emits a normalized signal for a CI terminal state (success or failure) through the shared write path.
+- [x] test: an adapter cannot write to the wake store via any code path other than the shared inbox writer, enforced by a module-boundary test.
+- [x] agent: an Approve and a CI terminal-state change on watched targets both appear in the wake inbox using the same field schema.
 
 ## Task T-06: Wake consumption engine and action-dispatch scaffold
 
@@ -104,10 +104,10 @@ Build the consumer side of the inbox: a loop that claims pending wakes via T-02'
 
 ### Acceptance criteria
 
-- [ ] test: claiming a wake for consumption is atomic such that two concurrent consumers cannot both claim the same wake.
-- [ ] test: a consumed wake records its consumer in the `consumedBy` field.
-- [ ] test: a failing notification channel does not prevent the wake from being marked consumed, and the failure is recorded rather than silently swallowed.
-- [ ] test: the action interface accepts a registered action without any chat or conversation object constructed or passed to it.
+- [x] test: claiming a wake for consumption is atomic such that two concurrent consumers cannot both claim the same wake.
+- [x] test: a consumed wake records its consumer in the `consumedBy` field.
+- [x] test: a failing notification channel does not prevent the wake from being marked consumed, and the failure is recorded rather than silently swallowed.
+- [x] test: the action interface accepts a registered action without any chat or conversation object constructed or passed to it.
 
 ## Task T-07: `sdlc-workflow daemon status` structured CLI command
 
@@ -119,10 +119,10 @@ Add a CLI subcommand that queries the watch registry (T-03) and wake inbox (T-02
 
 ### Acceptance criteria
 
-- [ ] test: `sdlc-workflow daemon status --json` output validates against a fixed schema containing watches (kind, target, age, lastPollTime) and wakes (state: pending or consumed).
-- [ ] test: a target with no registered watch appears in a distinct `unwatched` section of the output rather than being absent.
-- [ ] test: a degraded watch (poll-failure cap exceeded) is visibly distinguished from healthy watches in both the table and JSON output.
-- [ ] agent: running `sdlc-workflow daemon status` against a live daemon with at least one active watch and one consumed wake shows both in the rendered output.
+- [x] test: `sdlc-workflow daemon status --json` output validates against a fixed schema containing watches (kind, target, age, lastPollTime) and wakes (state: pending or consumed).
+- [x] test: a target with no registered watch appears in a distinct `unwatched` section of the output rather than being absent.
+- [x] test: a degraded watch (poll-failure cap exceeded) is visibly distinguished from healthy watches in both the table and JSON output.
+- [x] agent: running `sdlc-workflow daemon status` against a live daemon with at least one active watch and one consumed wake shows both in the rendered output.
 
 ## Task T-08: Absorb the pr-approve-watch skill into a thin daemon client
 
@@ -134,6 +134,6 @@ Convert the `pr-approve-watch` skill's bash poll loop into a thin client: the sk
 
 ### Acceptance criteria
 
-- [ ] test: the updated skill script contains no long-lived polling loop; it registers a watch via the daemon and exits.
-- [ ] test: the `.cursor` and `.claude` template copies of the skill are content-identical after the change, enforced by a comparison test or sync check.
-- [ ] agent: arming the updated skill against a test PR and approving that PR produces a consumed wake through the daemon path, with no watcher process surviving the arming session.
+- [x] test: the updated skill script contains no long-lived polling loop; it registers a watch via the daemon and exits.
+- [x] test: the `.cursor` and `.claude` template copies of the skill are content-identical after the change, enforced by a comparison test or sync check.
+- [x] agent: arming the updated skill against a test PR and approving that PR produces a consumed wake through the daemon path, with no watcher process surviving the arming session.
