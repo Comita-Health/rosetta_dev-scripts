@@ -114,7 +114,7 @@ bun run dev -- status --queue
 
 # Per-workspace SDLC event daemon (SPEC-PRD-0020-P1 T-01/T-04) — process
 # bootstrap, durable storage, watch registry, and bounded poll scheduler. The
-# scheduler polls nothing until source adapters (T-05) are registered.
+# scheduler polls with the Phase 1 GitHub adapters (pr-review / pr-checks).
 # Config is `.sdlc/daemon.json` under the workspace root (DaemonConfig contract).
 # `install` creates `.sdlc/daemon/` + touches the log before launchd load;
 # load is transactional (enable failure → bootout + plist remove);
@@ -186,9 +186,22 @@ A watch whose kind has no registered source adapter is _skipped, not failed_ —
 missing adapter is a wiring gap, not a signal-source fault, so it neither
 consumes the watch's failure budget nor degrades it. While the adapter registry
 is empty the loop does no polling work at all: it logs that once and keeps its
-timer. Phase 1's GitHub adapters (SPEC-PRD-0020-P1 T-05, which depends on this
-task) register into `WatchSourceAdapterRegistry`, and polling starts from the
-next tick with no scheduler change and no watch degraded in the meantime.
+timer. Phase 1 registers the GitHub `pr-review` and `pr-checks` source adapters
+(SPEC-PRD-0020-P1 T-05) into `WatchSourceAdapterRegistry` at process start:
+`pr-review` normalizes Approve, Request-changes, and new inline review comments
+into distinct signals; `pr-checks` normalizes Checks API and commit
+status-context terminal success/failure for the PR head SHA. `pr-checks` reads
+the individual commit status contexts rather than the combined rollup, because
+the combined `pending` state means "no statuses **or** a context is pending" —
+trusting the rollup would wedge every Checks-API-only PR (any repo on GitHub
+Actions), which reports `pending` with no contexts forever. All pages of check
+runs are fetched before a verdict is taken, so a busy commit cannot be called
+green off an incomplete first page. Both call GitHub
+under the workspace daemon contract's Addi activate script (with token refresh)
+and return signals only — the scheduler commits them through the shared
+wake-inbox writer (`commitWatchSignal`) so no adapter can bypass exactly-once
+delivery. Remaining watch kinds (`issue-state`, `workflow-run`,
+`run-supervisor`, `queue-item`) stay unregistered until Phase 3.
 
 `decompose` grounds the synthesized envelope in the target repo tree (#35):
 every `allowedPaths` glob must match at least one existing path in the

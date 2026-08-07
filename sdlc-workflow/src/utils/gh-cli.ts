@@ -10,6 +10,16 @@ export interface RunGhOptions {
    * the ambient human gh login.
    */
   requireAddi?: boolean;
+  /**
+   * GitHub owner used to select the activate script when the call targets a
+   * remote `owner/repo` that is not the checkout's origin (daemon watches).
+   */
+  owner?: string;
+  /**
+   * Extra env layered under the Addi mint (e.g. `SDLC_GH_ACTIVATE` from the
+   * workspace daemon contract). Does not mutate `process.env`.
+   */
+  env?: NodeJS.ProcessEnv;
 }
 
 /**
@@ -64,23 +74,31 @@ const isAuthFailure = (detail: string): boolean =>
  */
 export const ghEnv = (
   repoPath: string,
-  requireAddi = false
+  requireAddi = false,
+  options: Pick<RunGhOptions, 'owner' | 'env'> = {}
 ): NodeJS.ProcessEnv => {
-  const owner = ownerOf(repoPath);
+  const baseEnv =
+    options.env === undefined
+      ? process.env
+      : { ...process.env, ...options.env };
+  const owner =
+    typeof options.owner === 'string' && options.owner.trim().length > 0
+      ? options.owner.trim()
+      : ownerOf(repoPath);
   // No origin means no owner to select an App for and nothing to authenticate
   // against. Minting anyway would pick a workspace App by discovery order and
   // spend a round trip to answer a question nobody asked.
   if (owner === undefined && requireAddi === false) {
-    return { ...process.env };
+    return { ...baseEnv };
   }
 
   try {
-    return envForAddiWrite(process.env, { cwd: repoPath, owner });
+    return envForAddiWrite(baseEnv, { cwd: repoPath, owner });
   } catch (err) {
     if (requireAddi) {
       throw err;
     }
-    return { ...process.env };
+    return { ...baseEnv };
   }
 };
 
@@ -106,7 +124,10 @@ export const runGh = (
       cwd: repoPath,
       encoding: 'utf-8',
       input: options.stdin,
-      env: ghEnv(repoPath, requireAddi),
+      env: ghEnv(repoPath, requireAddi, {
+        owner: options.owner,
+        env: options.env
+      }),
       stdio: ['pipe', 'pipe', 'pipe']
     });
 

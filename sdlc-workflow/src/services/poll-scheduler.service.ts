@@ -2,6 +2,7 @@ import { inject, injectable } from 'inversify';
 import type { IDaemonStoreRepository } from '../repositories/daemon-store.repository';
 import { WORKFLOW_TOKENS } from '../tokens';
 import type { ActiveWatch, DurableWatchRecord, WatchKind } from '../types';
+import { commitWatchSignal } from '../utils/watch-wake-commit';
 import type { IWatchRegistryService } from './watch-registry.service';
 import type {
   IWatchSourceAdapterRegistry,
@@ -54,9 +55,8 @@ export interface IPollSchedulerService {
  * a missing adapter is a composition gap, not a signal-source fault, so it
  * must not consume the watch's bounded failure budget or degrade it. While the
  * adapter registry is empty the loop does no polling work at all — it says so
- * once and keeps its timer, so registering an adapter (SPEC-PRD-0020-P1 T-05)
- * starts polling from the next tick with no watch having been degraded in the
- * meantime.
+ * once and keeps its timer. Phase 1 registers the GitHub adapters
+ * (SPEC-PRD-0020-P1 T-05) into this registry at process start.
  */
 @injectable()
 export class PollSchedulerService implements IPollSchedulerService {
@@ -243,7 +243,7 @@ export class PollSchedulerService implements IPollSchedulerService {
       if (adapter === null) {
         return;
       }
-      const result = await adapter.poll(watch);
+      const result = await adapter.poll(workspaceRoot, watch);
       for (const signal of result.signals) {
         this.commitSignal(workspaceRoot, watch, signal);
       }
@@ -279,21 +279,6 @@ export class PollSchedulerService implements IPollSchedulerService {
     watch: DurableWatchRecord,
     signal: WatchSourceSignal
   ): void {
-    if (signal.id.trim().length === 0) {
-      throw new TypeError('Watch source signal id must be non-empty');
-    }
-    if (Number.isNaN(Date.parse(signal.observedAt))) {
-      throw new TypeError(
-        'Watch source signal observedAt must be an ISO timestamp'
-      );
-    }
-    this._store.writeWake(workspaceRoot, {
-      kind: watch.kind,
-      target: watch.id,
-      signal: signal.id,
-      createdAt: signal.observedAt,
-      ...(signal.prompt === undefined ? {} : { prompt: signal.prompt }),
-      ...(signal.data === undefined ? {} : { data: signal.data })
-    });
+    commitWatchSignal(this._store, workspaceRoot, watch, signal);
   }
 }

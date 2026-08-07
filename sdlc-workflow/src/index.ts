@@ -147,10 +147,7 @@ import {
   CloseoutAggregateService,
   ICloseoutAggregateService
 } from './services/closeout-aggregate.service';
-import {
-  CloseoutService,
-  ICloseoutService
-} from './services/closeout.service';
+import { CloseoutService, ICloseoutService } from './services/closeout.service';
 import {
   HeartbeatService,
   IHeartbeatService
@@ -179,10 +176,7 @@ import {
   SuperviseService,
   ISuperviseService
 } from './services/supervise.service';
-import {
-  DaemonHandler,
-  IDaemonHandler
-} from './handlers/daemon.handler';
+import { DaemonHandler, IDaemonHandler } from './handlers/daemon.handler';
 import {
   DaemonConfigRepository,
   IDaemonConfigRepository
@@ -212,9 +206,16 @@ import {
   PollSchedulerService
 } from './services/poll-scheduler.service';
 import {
+  IWatchSourceAdapter,
   IWatchSourceAdapterRegistry,
   WatchSourceAdapterRegistry
 } from './services/watch-source-adapter';
+import {
+  GitHubWatchSourceRepository,
+  IGitHubWatchSourceRepository
+} from './repositories/github-watch-source.repository';
+import { PrReviewWatchSourceAdapter } from './services/pr-review-watch-source.adapter';
+import { PrChecksWatchSourceAdapter } from './services/pr-checks-watch-source.adapter';
 import { WORKFLOW_TOKENS } from './tokens';
 import { WorkflowError } from './types';
 import { resolveInferenceBackend } from './utils/backend-select';
@@ -390,12 +391,42 @@ container
   .to(WatchSourceAdapterRegistry)
   .inSingletonScope();
 container
+  .bind<IGitHubWatchSourceRepository>(
+    WORKFLOW_TOKENS.GitHubWatchSourceRepository
+  )
+  .to(GitHubWatchSourceRepository);
+container
+  .bind<IWatchSourceAdapter>(WORKFLOW_TOKENS.PrReviewWatchSourceAdapter)
+  .to(PrReviewWatchSourceAdapter);
+container
+  .bind<IWatchSourceAdapter>(WORKFLOW_TOKENS.PrChecksWatchSourceAdapter)
+  .to(PrChecksWatchSourceAdapter);
+container
   .bind<IPollSchedulerService>(WORKFLOW_TOKENS.PollSchedulerService)
   .to(PollSchedulerService)
   .inSingletonScope();
-container
-  .bind<IDaemonHandler>(WORKFLOW_TOKENS.DaemonHandler)
-  .to(DaemonHandler);
+
+{
+  // Phase 1 wires only pr-review and pr-checks. Remaining kinds are Phase 3
+  // and must not be stubbed here — an unregistered kind stays unpolled.
+  const adapters = container.get<IWatchSourceAdapterRegistry>(
+    WORKFLOW_TOKENS.WatchSourceAdapterRegistry
+  );
+  adapters.register(
+    'pr-review',
+    container.get<IWatchSourceAdapter>(
+      WORKFLOW_TOKENS.PrReviewWatchSourceAdapter
+    )
+  );
+  adapters.register(
+    'pr-checks',
+    container.get<IWatchSourceAdapter>(
+      WORKFLOW_TOKENS.PrChecksWatchSourceAdapter
+    )
+  );
+}
+
+container.bind<IDaemonHandler>(WORKFLOW_TOKENS.DaemonHandler).to(DaemonHandler);
 
 yargs(hideBin(process.argv))
   .command(

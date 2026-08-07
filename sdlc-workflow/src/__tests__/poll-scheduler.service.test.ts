@@ -296,6 +296,7 @@ describe('PollSchedulerService', () => {
     };
     const configured = setup(adapter);
     const racing = {
+      register: jest.fn(),
       kinds: jest.fn().mockReturnValue(['pr-review']),
       get: jest.fn().mockReturnValueOnce(adapter).mockReturnValue(null)
     };
