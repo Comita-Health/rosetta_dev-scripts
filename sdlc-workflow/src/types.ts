@@ -595,6 +595,53 @@ export interface ActiveWatch extends WatchRegistration {
   degradedAt: string | null;
 }
 
+/**
+ * One row of `sdlc-workflow daemon status --json` watches[]
+ * (SPEC-PRD-0020-P1 T-07).
+ */
+export interface DaemonStatusWatch {
+  id: string;
+  kind: WatchKind;
+  target: WatchTarget;
+  age: number;
+  lastPollTime: string | null;
+  /** True when the poll-failure cap has been exceeded (T-04). */
+  degraded: boolean;
+  degradedAt: string | null;
+  consecutiveFailures: number;
+  lastError: string | null;
+}
+
+/** Wake row with explicit pending/consumed state for status --json. */
+export interface DaemonStatusWake {
+  id: string;
+  kind: string;
+  target: string;
+  signal: string;
+  createdAt: string;
+  state: 'pending' | 'consumed';
+  consumedBy: string | null;
+}
+
+/**
+ * A known PR/run that should be watched but has no active registration
+ * (diff of engine-discovered targets minus the active watch set).
+ */
+export interface DaemonStatusUnwatched {
+  kind: WatchKind;
+  target: WatchTarget;
+  /** Why the target is considered known (open task PR, active run, …). */
+  source: string;
+}
+
+/** Full `daemon status` payload (table renderer and `--json`). */
+export interface DaemonStatusReport {
+  workspaceRoot: string;
+  watches: DaemonStatusWatch[];
+  wakes: DaemonStatusWake[];
+  unwatched: DaemonStatusUnwatched[];
+}
+
 /** Input whose identity is the `(kind, target, signal)` tuple. */
 export interface WakeEventInput {
   kind: string;

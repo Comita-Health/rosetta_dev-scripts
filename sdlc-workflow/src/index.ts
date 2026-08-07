@@ -194,9 +194,17 @@ import {
   IDaemonLifecycleService
 } from './services/daemon-lifecycle.service';
 import {
+  DaemonStatusService,
+  IDaemonStatusService
+} from './services/daemon-status.service';
+import {
   DaemonStoreRepository,
   IDaemonStoreRepository
 } from './repositories/daemon-store.repository';
+import {
+  KnownWatchTargetRepository,
+  IKnownWatchTargetRepository
+} from './repositories/known-watch-target.repository';
 import {
   IWatchRegistryService,
   WatchRegistryService
@@ -422,6 +430,12 @@ container
   .bind<IWakeConsumptionService>(WORKFLOW_TOKENS.WakeConsumptionService)
   .to(WakeConsumptionService)
   .inSingletonScope();
+container
+  .bind<IKnownWatchTargetRepository>(WORKFLOW_TOKENS.KnownWatchTargetRepository)
+  .to(KnownWatchTargetRepository);
+container
+  .bind<IDaemonStatusService>(WORKFLOW_TOKENS.DaemonStatusService)
+  .to(DaemonStatusService);
 
 {
   // Phase 1 wires only pr-review and pr-checks. Remaining kinds are Phase 3
@@ -961,7 +975,7 @@ yargs(hideBin(process.argv))
   )
   .command(
     'daemon',
-    'Per-workspace SDLC event daemon — run, or install/uninstall the launchd agent (SPEC-PRD-0020-P1 T-01)',
+    'Per-workspace SDLC event daemon — run, status, or install/uninstall the launchd agent (SPEC-PRD-0020-P1)',
     y =>
       y
         .command(
@@ -979,6 +993,42 @@ yargs(hideBin(process.argv))
             try {
               await handler.run({
                 workspaceRoot: argv.workspace
+              });
+            } catch (err) {
+              if (err instanceof WorkflowError) {
+                console.error(chalk.red(`\n✗ ${err.code}: ${err.message}`));
+                for (const detail of err.details) {
+                  console.error(chalk.red(`  - ${detail}`));
+                }
+              } else {
+                console.error(chalk.red(`\n✗ ${err}`));
+              }
+              process.exit(1);
+            }
+          }
+        )
+        .command(
+          'status',
+          'List active watches, wakes, and unwatched known PRs/runs (SPEC-PRD-0020-P1 T-07)',
+          y2 =>
+            y2
+              .option('workspace', {
+                type: 'string',
+                describe: 'Absolute or relative path to the workspace root'
+              })
+              .option('json', {
+                type: 'boolean',
+                default: false,
+                describe: 'Emit a machine-readable JSON status report'
+              }),
+          argv => {
+            const handler = container.get<IDaemonHandler>(
+              WORKFLOW_TOKENS.DaemonHandler
+            );
+            try {
+              handler.status({
+                workspaceRoot: argv.workspace,
+                json: argv.json === true
               });
             } catch (err) {
               if (err instanceof WorkflowError) {

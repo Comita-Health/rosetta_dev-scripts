@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** add `sdlc-workflow daemon status` (human table and
+  `--json`) over the watch registry and wake inbox. Output covers active
+  watches (`kind`, `target`, `age`, `lastPollTime`), pending/consumed wakes,
+  an explicit `unwatched` section (engine-known PRs/runs minus the active
+  watch set), and a distinct degraded marker when a watch has exceeded the
+  poll-failure cap (SPEC-PRD-0020-P1 T-07).
 - **sdlc-workflow:** add the wake consumption engine and action-dispatch
   scaffold (SPEC-PRD-0020-P1 T-06). Pending wakes are claimed via the durable
   store's atomic rename, the winning consumer is stamped into `consumedBy`, and

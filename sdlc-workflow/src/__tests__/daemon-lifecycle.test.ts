@@ -51,6 +51,11 @@ const buildHandler = (): DaemonHandler => {
   container
     .bind(WORKFLOW_TOKENS.DaemonLifecycleService)
     .to(DaemonLifecycleService);
+  container.bind(WORKFLOW_TOKENS.DaemonStatusService).toConstantValue({
+    build: () => {
+      throw new Error('status not used in lifecycle tests');
+    }
+  });
   container.bind(WORKFLOW_TOKENS.DaemonHandler).to(DaemonHandler);
   return container.get(WORKFLOW_TOKENS.DaemonHandler);
 };
@@ -130,7 +135,8 @@ describe('DaemonHandler install / uninstall (launchd plist)', () => {
         .fn()
         .mockReturnValue({ label: 'sdlc.workflow.daemon.test' })
     };
-    const handler = new DaemonHandler(mockLifecycle);
+    const mockStatus = { build: jest.fn() };
+    const handler = new DaemonHandler(mockLifecycle, mockStatus);
 
     await handler.run({ workspaceRoot: root });
     expect(mockLifecycle.run).toHaveBeenCalledWith(root);
