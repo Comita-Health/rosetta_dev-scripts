@@ -56,6 +56,15 @@ const buildHandler = (): DaemonHandler => {
       throw new Error('status not used in lifecycle tests');
     }
   });
+  container.bind(WORKFLOW_TOKENS.WatchRegistryService).toConstantValue({
+    register: jest.fn(),
+    get: jest.fn(),
+    getByTarget: jest.fn(),
+    list: jest.fn(),
+    recordPoll: jest.fn(),
+    recordPollFailure: jest.fn(),
+    expire: jest.fn()
+  });
   container.bind(WORKFLOW_TOKENS.DaemonHandler).to(DaemonHandler);
   return container.get(WORKFLOW_TOKENS.DaemonHandler);
 };
@@ -136,7 +145,25 @@ describe('DaemonHandler install / uninstall (launchd plist)', () => {
         .mockReturnValue({ label: 'sdlc.workflow.daemon.test' })
     };
     const mockStatus = { build: jest.fn() };
-    const handler = new DaemonHandler(mockLifecycle, mockStatus);
+    const mockRegistry = {
+      register: jest.fn(),
+      get: jest.fn(),
+      getByTarget: jest.fn(),
+      list: jest.fn(),
+      recordPoll: jest.fn(),
+      recordPollFailure: jest.fn(),
+      expire: jest.fn()
+    };
+    const mockConfig = {
+      derivePaths: jest.fn(),
+      load: jest.fn()
+    };
+    const handler = new DaemonHandler(
+      mockLifecycle,
+      mockStatus,
+      mockRegistry,
+      mockConfig
+    );
 
     await handler.run({ workspaceRoot: root });
     expect(mockLifecycle.run).toHaveBeenCalledWith(root);

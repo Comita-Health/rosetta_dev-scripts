@@ -126,11 +126,18 @@ bun run dev -- status --queue
 bun run dev -- daemon --workspace ../..
 bun run dev -- daemon status --workspace ../..
 bun run dev -- daemon status --workspace ../.. --json
+bun run dev -- daemon watch --workspace ../.. Owner/repo#123
+bun run dev -- daemon watch --workspace ../.. --kind pr-review \
+  --poll-seconds 30 --created-by pr-approve-watch Owner/repo#123
 bun run dev -- daemon install --workspace ../..
 bun run dev -- daemon uninstall --workspace ../..
 # Options
 #   --workspace   required workspace root (all paths/ids derived from it)
-#   --json        machine-readable status report (watches / wakes / unwatched)
+#   --json        machine-readable status / watch-registration output
+#   --kind        `daemon watch` kind: pr-review (default) or pr-checks —
+#                 the only kinds whose targets are owner/repo#N
+#   --poll-seconds  override cadence (default: workspace defaultPollSeconds)
+#   --created-by  registration attribution (default: cli)
 #   --plist-dir   LaunchAgents directory (default: ~/Library/LaunchAgents)
 #   --no-load     write the plist without calling launchctl (tests / dry-run)
 ```
@@ -230,6 +237,14 @@ and runs (task `prUrl`s and run directories under the workspace `runsDir`, plus
 queued launches) against the active watch set — so a known target with no
 registration is visible rather than absent. `--json` emits the same report
 as a single object validated by a fixed schema.
+
+`daemon watch` (SPEC-PRD-0020-P1 T-08) is the register-and-exit CLI used by
+the thin `pr-approve-watch` skill client. It writes durable `pr-review`
+registrations through `WatchRegistryService` and returns — the long-lived
+daemon keeps polling. Re-registering an active kind+target is idempotent.
+`--kind` accepts `pr-review` and `pr-checks` only: every target on this
+command is parsed as `owner/repo#N`, which the run-id kinds cannot express,
+and the remaining Phase 3 kinds have no source adapter to poll them yet.
 
 `decompose` grounds the synthesized envelope in the target repo tree (#35):
 every `allowedPaths` glob must match at least one existing path in the

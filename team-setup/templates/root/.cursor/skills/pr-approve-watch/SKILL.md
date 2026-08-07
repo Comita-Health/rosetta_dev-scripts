@@ -10,8 +10,14 @@ description: >-
 
 # PR review watch (Approve + Request changes)
 
-**Human feedback on agent PRs lives on the PR** — not in chat. Arm this watcher
+**Human feedback on agent PRs lives on the PR** — not in chat. Arm this skill
 so Approve **or** Request changes wakes the agent without a chat nudge.
+
+Transport (SPEC-PRD-0020-P1 T-08): the skill script is a **thin daemon
+client**. It registers durable `pr-review` watches via
+`sdlc-workflow daemon watch` and prints `daemon status`, then **exits**. The
+workspace daemon owns the poll loop and wake inbox — do not background a
+local bash poller.
 
 | Signal | Wake | After wake |
 | ------ | ---- | ---------- |
@@ -33,39 +39,46 @@ merge path below.
 
 ## Hard rules
 
-1. After `gh pr create` (or when the user asks to watch), start
-   `.cursor/skills/pr-approve-watch/scripts/watch-pr-approve.sh` in the **background** with agent
-   `notify_on_output` on `^AGENT_LOOP_WAKE_pr_approve`.
-2. Do **not** redirect the watcher stdout away from the monitored terminal
-   (or the wake sentinel will be swallowed).
-3. Read the wake JSON `signal` field: `"approved"` or `"changes_requested"`.
-4. Prefer human (non-bot) reviews. The script uses `reviewDecision` when set,
-   else non-bot `APPROVED` / `CHANGES_REQUESTED` reviews.
-5. **Never merge on `changes_requested`.** Fix the feedback and keep watching.
-6. **Never merge on Approve alone while unresolved, unaddressed review
+1. After `gh pr create` (or when the user asks to watch), run the skill
+   script **once** (foreground is fine — it exits after register+status):
+   `.cursor/skills/pr-approve-watch/scripts/watch-pr-approve.sh` (Claude
+   Code mirror: `.claude/skills/pr-approve-watch/scripts/watch-pr-approve.sh`
+   — same bytes after team-setup sync).
+2. Do **not** leave a long-lived skill process running. Polling is the
+   daemon's job (`sdlc-workflow daemon` / launchd agent).
+3. Drain wakes from `sdlc-workflow daemon status` (or the durable wake
+   inbox). Daemon notify may also print `AGENT_LOOP_WAKE_pr-review` on the
+   daemon log — treat that as a best-effort chat mirror.
+4. Read wake JSON `signal` / `data.signal`: `"approved"` or
+   `"changes_requested"` (review-comment wakes are informational).
+5. Prefer human (non-bot) reviews — the daemon `pr-review` adapter already
+   filters bots.
+6. **Never merge on `changes_requested`.** Fix the feedback and keep watching.
+7. **Never merge on Approve alone while unresolved, unaddressed review
    comments remain** (human or bot).
-7. **Drain wakes even when chat notify is silent** — see Wake delivery below.
+8. **Drain wakes even when chat notify is silent** — see Wake delivery below.
 
 ## Wake delivery (chat notify is best-effort)
 
-`notify_on_output` often does **not** start a new agent turn after the turn
-that armed the watcher has ended. The sentinel still prints to the watcher
-terminal:
+The daemon's notify action may print:
 
 ```text
-AGENT_LOOP_WAKE_pr_approve {"target":"Owner/repo#N","signal":"approved",...}
+AGENT_LOOP_WAKE_pr-review {"signal":"approved:…","data":{"signal":"approved",…},…}
 ```
 
-**Agent duties while a watcher is armed:**
+`notify_on_output` on the daemon log often does **not** start a new agent
+turn. Durable truth is the wake inbox + `daemon status`.
 
-- Before ending a turn: skim armed watcher terminal output (Cursor terminals
-  folder / the background shell) for unconsumed `AGENT_LOOP_WAKE_pr_approve`
-  lines and process each **now**.
+**Agent duties while watches are armed:**
+
+- Before ending a turn: run
+  `sdlc-workflow daemon status --workspace <root> --json` (or the human
+  table) and process any pending / newly consumed `pr-review` wakes.
 - When the user says they approved, “check watchers”, “process wakes”, or
-  similar: that is a proceed nudge — read watcher terminals **and**
+  similar: that is a proceed nudge — read `daemon status` **and**
   `gh pr view` / `reviewDecision`, then drain any fired or missed wakes.
-- Do not claim “no activity” without checking the watcher terminal; silent
-  chat ≠ idle watcher.
+- Do not claim “no activity” without checking status; silent chat ≠ idle
+  daemon.
 
 **Human mitigations:** after Approve, ping the agent (“process watcher wakes”)
 if nothing happens within a minute.
@@ -73,19 +86,28 @@ if nothing happens within a minute.
 ## Launch template
 
 ```bash
-# From workspace root (paths work after team-setup update-config)
+# From workspace root (paths work after team-setup update-config).
+# Script registers with the daemon and exits — do not background it.
 bash .cursor/skills/pr-approve-watch/scripts/watch-pr-approve.sh --interval 30 \
   Owner/repo#123 \
   Owner/other#456
 ```
 
-Optional: `--activate ~/.config/rosetta/github-app-activate.sh` (Rosetta) or
-`~/.config/<workspace>/github-app-activate.sh` (consumer workspace). If
-omitted, the script uses `ROSETTA_GH_ACTIVATE`, then the Rosetta default, then
-the first available workspace activation script, else ambient `gh` auth.
+Claude Code: the same script under
+`.claude/skills/pr-approve-watch/scripts/watch-pr-approve.sh`.
 
-Cursor agent loop: background the command with
-`notify_on_output` pattern `^AGENT_LOOP_WAKE_pr_approve`.
+Optional: `--workspace <root>` (default: `ROSETTA_WORKSPACE`, else the
+workspace that contains this skill / `.sdlc/daemon.json`). Optional:
+`--engine <path-to-sdlc-workflow>` (default: `$WORKSPACE/rosetta_dev-scripts/sdlc-workflow`
+or `SDLC_WORKFLOW_ENGINE`). Legacy `--activate` is ignored — daemon auth
+comes from `.sdlc/daemon.json` `activateScript`.
+
+Confirm coverage:
+
+```bash
+cd "$WORKSPACE/rosetta_dev-scripts/sdlc-workflow"
+bunx tsx src/index.ts daemon status --workspace "$WORKSPACE"
+```
 
 ## On wake — `signal: changes_requested`
 
@@ -96,7 +118,7 @@ Cursor agent loop: background the command with
 4. Reply on each thread with the fix SHA; `resolveReviewThread` when done.
 5. Wait for CI green after pushes.
 6. **Do not merge.** Report what you fixed and that the PR awaits re-review.
-7. Leave the watcher running (it keeps the target until Approve).
+7. Leave the daemon watch registered (it keeps the target until Approve).
 
 ## On wake — `signal: approved`
 
@@ -140,13 +162,14 @@ Cursor agent loop: background the command with
 ## Anti-patterns
 
 - Blocking the chat with a foreground `sleep`/poll loop waiting for Approve.
+- Backgrounding this skill script as a long-lived poller (it must exit after
+  register).
 - Treating chat "LGTM" / "approved" as the proceed signal when an Addi PR exists.
-- Redirecting watcher stdout to a file without `tee` (breaks wake notifications).
 - Merging from the agent when GHA Addi merge-on-approve is enabled for the repo.
 - Merging on `changes_requested`.
 - Merging immediately on Approve without reading review comments / threads.
 - Resolving threads without a reply when the human asked for a change.
-- Ending a turn while wakes sit unprocessed in the watcher terminal because
-  chat notify did not fire.
+- Ending a turn while wakes sit unprocessed in `daemon status` because chat
+  notify did not fire.
 - Stopping after Approve when `mergeable=CONFLICTING` — resolve tip conflicts
   so GHA (or legacy merge) can proceed.

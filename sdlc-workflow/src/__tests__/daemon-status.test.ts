@@ -44,6 +44,8 @@ const buildHandler = (): DaemonHandler => {
     install: jest.fn(),
     uninstall: jest.fn()
   });
+  // T-08: DaemonHandler also injects WatchRegistryService + DaemonConfigRepository
+  // (already bound above) for `daemon watch`.
   container.bind(WORKFLOW_TOKENS.DaemonHandler).to(DaemonHandler);
   return container.get(WORKFLOW_TOKENS.DaemonHandler);
 };
