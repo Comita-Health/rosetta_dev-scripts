@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** add the wake consumption engine and action-dispatch
+  scaffold (SPEC-PRD-0020-P1 T-06). Pending wakes are claimed via the durable
+  store's atomic rename, the winning consumer is stamped into `consumedBy`, and
+  registered follow-up actions run afterward. Phase 1 ships only the best-effort
+  `notify` action (desktop + chat-mirror channels); notification failure is
+  recorded on the wake and never blocks or re-queues consumption. The action
+  context carries no chat/conversation object so Phase 3 headless dispatch can
+  plug in on the same interface.
 - **sdlc-workflow:** add Phase 1 GitHub watch source adapters for `pr-review`
   (Approve, Request-changes, new review comments) and `pr-checks` (Checks API
   and status-context terminal states). `pr-checks` judges CI from the individual

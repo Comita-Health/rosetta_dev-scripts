@@ -434,4 +434,51 @@ describe('DaemonStoreRepository', () => {
       /wake ID must be a SHA-256 digest/
     );
   });
+
+  it('stamps consumedBy onto the shared ledger inode after a claim', async () => {
+    const workspace = mkdtempSync(
+      path.join(os.tmpdir(), 'daemon-store-consumed-by-')
+    );
+    const store = new DaemonStoreRepository();
+    const written = store.writeWake(workspace, wake).record;
+    expect(await store.claimWake(workspace, written.id)).toEqual(written);
+
+    const updated = store.recordWakeConsumed(workspace, written.id, 'daemon');
+    expect(updated.consumedBy).toBe('daemon');
+    expect(store.readWake(workspace, written.id)?.consumedBy).toBe('daemon');
+    const consumedPath = path.join(
+      store.paths(workspace).consumedWakes,
+      `${written.id}.json`
+    );
+    expect(JSON.parse(readFileSync(consumedPath, 'utf-8')).consumedBy).toBe(
+      'daemon'
+    );
+  });
+
+  it('appends actionFailures without clearing consumedBy', async () => {
+    const workspace = mkdtempSync(
+      path.join(os.tmpdir(), 'daemon-store-action-fail-')
+    );
+    const store = new DaemonStoreRepository();
+    const written = store.writeWake(workspace, wake).record;
+    await store.claimWake(workspace, written.id);
+    store.recordWakeConsumed(workspace, written.id, 'daemon');
+
+    const failed = store.recordWakeActionFailure(workspace, written.id, {
+      actionId: 'notify',
+      channelId: 'desktop',
+      at: '2026-08-07T12:00:01.000Z',
+      error: 'banner exploded'
+    });
+
+    expect(failed.consumedBy).toBe('daemon');
+    expect(failed.actionFailures).toEqual([
+      {
+        actionId: 'notify',
+        channelId: 'desktop',
+        at: '2026-08-07T12:00:01.000Z',
+        error: 'banner exploded'
+      }
+    ]);
+  });
 });

@@ -6,6 +6,7 @@ import type { ILaunchdRepository } from '../repositories/launchd.repository';
 import { WORKFLOW_TOKENS } from '../tokens';
 import type { DaemonConfig, DaemonRuntimePaths } from '../types';
 import type { IPollSchedulerService } from './poll-scheduler.service';
+import type { IWakeConsumptionService } from './wake-consumption.service';
 
 export interface DaemonInstallOptions {
   /** Override LaunchAgents directory (tests). */
@@ -29,8 +30,8 @@ export interface DaemonInstallResult {
 
 /**
  * Process bootstrap and launchd lifecycle for the per-workspace daemon
- * (SPEC-PRD-0020-P1 T-01). No watch/poll modules — start, stop, install,
- * uninstall, and exit codes only.
+ * (SPEC-PRD-0020-P1 T-01). Starts the poll scheduler (T-04) and wake
+ * consumption loop (T-06) when those services are wired.
  */
 export interface IDaemonLifecycleService {
   /** Validate workspace root + config, write pid/log, then block until signal. */
@@ -56,7 +57,10 @@ export class DaemonLifecycleService implements IDaemonLifecycleService {
     private readonly _launchdRepo: ILaunchdRepository,
     @inject(WORKFLOW_TOKENS.PollSchedulerService)
     @optional()
-    private readonly _poller?: IPollSchedulerService
+    private readonly _poller?: IPollSchedulerService,
+    @inject(WORKFLOW_TOKENS.WakeConsumptionService)
+    @optional()
+    private readonly _consumer?: IWakeConsumptionService
   ) {}
 
   async run(workspaceRoot: string): Promise<DaemonRuntimePaths> {
@@ -71,10 +75,16 @@ export class DaemonLifecycleService implements IDaemonLifecycleService {
         // declares a shorter cadence is still evaluated on its own cadence.
         this._poller.start(workspaceRoot, config.defaultPollSeconds);
       }
+      if (this._consumer !== undefined) {
+        this._consumer.start(workspaceRoot, config.defaultPollSeconds);
+      }
       await this._processRepo.waitForShutdown();
     } finally {
       if (this._poller !== undefined) {
         this._poller.stop();
+      }
+      if (this._consumer !== undefined) {
+        this._consumer.stop();
       }
       this._processRepo.clearPid(paths.pidFile, process.pid);
     }
