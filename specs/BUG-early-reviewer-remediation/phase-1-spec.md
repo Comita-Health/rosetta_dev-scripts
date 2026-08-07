@@ -20,7 +20,7 @@ envelope:
   budgetK: 150
 ---
 
-# SPEC-BUG-early-reviewer-remediation-P1: Remediate reviewer/envelope breaches before sandbox deploy
+# SPEC-BUG-early-reviewer-remediation-P1: Never sandbox-deploy a reviewer/envelope-red head
 
 > Copy of `rosetta_docs/product/BUG-SPEC-TEMPLATE.md` filled for this bug
 > (lightweight bug entry into the same spec-run-verify-merge machine).
@@ -29,72 +29,71 @@ envelope:
 
 **Symptom:** When the reviewer (or envelope) gate breaches, the engine still
 runs the rest of the gate pipeline — including a full sandbox deploy that
-often takes 5–10+ minutes — before `remediationRound` fires. The operator
-sees a red `sdlc/reviewer` status and waits on Deploy Organization even
-though remediation does not use the sandbox result. A successful fix changes
-`headSha`, so the deploy that just completed is discarded and must run again
-on the remediated tip. Observed live on admissions Phase 0l T-02
+often takes 5–10+ minutes — before `remediationRound` fires. That is
+wasteful of **time and of the sandbox itself**: Deploy Organization ships
+code the reviewer already rejected. Remediation (when it eventually runs)
+changes `headSha`, so the deploy is discarded and must run again on the
+fixed tip. Observed live on admissions Phase 0l T-02
 ([Comita-Health/comita_admissions#396](https://github.com/Comita-Health/comita_admissions/pull/396)):
-reviewer breach logged, then ~6+ minutes of sandbox with empty
-`gateFixAttempts` / `remediations` while nobody addressed the finding.
+reviewer breach logged, then a long sandbox on the red head while
+`remediations` stayed empty.
 
 **Repro:** Enforce-run a task whose reviewer gate returns `breach` (any
 deterministic checklist failure). Observe heartbeat/step order:
 `reviewer` → `verification` (test tier) → `sandbox` (long) → … → `phase` →
-only then `[remediate]`. Confirm sandbox `stepElapsedMs` grows while
-`remediations` in `state.json` stays empty.
+only then `[remediate]`. Confirm sandbox runs against the red `headSha`.
 
 **Root cause:** `RunHandler.taskPipeline` places `remediationRound` after
 phase aggregation (`run.handler.ts`), which only runs once CI + sandbox +
-verification have completed. `remediationRound` is already limited to
-reviewer + envelope verdicts — it never remediates sandbox/CI — so waiting
-on those gates before remediation is pure latency for that finding class.
+verification have completed. Sandbox is not gated on reviewer/envelope
+green, so a failed review still deploys.
 
-**Why now / blast radius:** Burns wall-clock and sandbox/CI minutes on every
-reviewer-red task during live PRD-0004 / PRD-0020 runs; trains the operator
-to manually fix findings the engine would have fixed minutes earlier.
-Engine-internal only (`sdlc-workflow/src/**`); no CI-config or queue-schema
-surface changes. Gate semantics (what is remediable, budgets, fail-closed
-escalation) stay the same — only **when** remediation starts moves earlier.
+**Why now / blast radius:** Burns wall-clock and deploys known-bad tips on
+every reviewer-red task. Engine-internal only (`sdlc-workflow/src/**`); no
+CI-config or queue-schema surface changes. Remediable-finding selection and
+budgets stay the same; the change is **skip sandbox (and downstream gates
+that assume continuing this head) on reviewer/envelope non-pass**, and run
+remediation immediately when applicable.
 
-## Task T-01: Remediate reviewer/envelope red before sandbox
+## Task T-01: Skip sandbox on reviewer/envelope red; remediate first
 
 - **Story:** S-01
 - **Complexity:** S
 - **Depends on:** []
 
-After envelope and reviewer gates complete, if either is remediable-red and
-this is an enforce run, invoke the existing `remediationRound` **before**
-sandbox deploy (and before the remainder of verification/CI that depends on
-continuing the current head). On successful remediation (`kind ===
-'remediated'`), abandon the current pipeline pass exactly as today's
-post-phase path does — return so re-selection re-gates the new head from
-the top (envelope onward). Do **not** change remediable-finding selection,
-attempt budgets, or escalation suppression rules — reuse
-`remediationRound` / `GateRemediationService` as-is.
+After envelope and reviewer gates complete in an enforce run:
 
-If remediation is skipped or fails, continue the existing pipeline (sandbox
-→ verification → CI → phase → post-phase remediation attempt / escalate) so
-behavior for non-remediable red and exhausted budgets stays loud and
-unchanged.
+1. If **either** is non-pass (`breach` / remediable red / blocked that fails
+   the phase), **do not** call sandbox deploy (or CI) for the current head.
+   Deploying a tip the reviewer already rejected is out of scope for this
+   pipeline pass.
+2. If the finding is remediable, invoke the existing `remediationRound`
+   immediately (same service/budgets/escalation-suppression as today). On
+   `kind === 'remediated'`, abandon the pass so re-selection re-gates the
+   new head from the top (envelope onward) — sandbox only runs once
+   envelope + reviewer are green on that new tip.
+3. If remediation is skipped or fails, escalate / halt as today — still
+   **without** sandbox-deploying the red head. Do not fall through to
+   "continue the pipeline including sandbox" for reviewer/envelope red.
 
-Do not remediate on sandbox/CI/verification red in this early slot — those
-findings still wait for phase aggregation (out of scope). Shadow runs remain
-non-remediating.
+Do not change remediable-finding selection, attempt budgets, or shadow
+behavior (shadow remains non-remediating). Sandbox/CI/verification-only red
+still uses the existing post-phase path (out of scope for this early skip).
 
 ### Acceptance criteria
 
-- [ ] test: when reviewer returns remediable `breach` in enforce mode, the
-      handler invokes remediation **before** sandbox deploy is called (mock
-      order: reviewer → remediate; sandbox not called on that pass when
-      remediation succeeds)
-- [ ] test: successful early remediation abandons the pass (no sandbox/CI on
-      the superseded head) so the next selection re-runs gates on the new tip
-- [ ] test: when remediation is skipped/fails, sandbox still runs afterward
-      (pipeline continues; no silent drop of the deploy gate)
-- [ ] test: envelope remediable-red follows the same early path as reviewer
-- [ ] test: shadow mode never early-remediates (unchanged)
+- [ ] test: when reviewer returns non-pass in enforce mode, sandbox deploy
+      is **never** called for that head (whether or not remediation runs)
+- [ ] test: when reviewer returns remediable `breach`, remediation is
+      invoked before any sandbox call; on success the pass abandons and the
+      next selection re-gates the new tip
+- [ ] test: when remediation is skipped or fails on reviewer/envelope red,
+      sandbox is still **not** called; escalation/halt path remains loud
+- [ ] test: envelope non-pass follows the same skip-sandbox + optional
+      early-remediation path as reviewer
+- [ ] test: shadow mode never early-remediates and keeps today's gate order
+      (unchanged)
 - [ ] test: adjacent green path unchanged — when envelope + reviewer both
-      `pass`, sandbox is still invoked and no early remediation runs
-- [ ] agent: diff is confined to the early-remediation reorder and its tests —
-      no unrelated refactor of gate services or remediation budgets
+      `pass`, sandbox is still invoked
+- [ ] agent: diff is confined to the skip-sandbox / early-remediation reorder
+      and its tests — no unrelated refactor of gate services or budgets
