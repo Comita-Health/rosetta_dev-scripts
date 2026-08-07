@@ -51,7 +51,7 @@ const validateDate = (value: string | undefined, field: string): void => {
   }
 };
 
-const normalizeTarget = (target: WatchTarget): WatchTarget => {
+const normalizeTargetFields = (target: WatchTarget): WatchTarget => {
   if (typeof target !== 'object' || target === null) {
     throw new TypeError('Watch registration target must be an object');
   }
@@ -70,21 +70,47 @@ const normalizeTarget = (target: WatchTarget): WatchTarget => {
   if (target.runId !== undefined) {
     normalized.runId = requireText(target.runId, 'target.runId');
   }
-  if (
-    normalized.repo === undefined &&
-    normalized.number === undefined &&
-    normalized.runId === undefined
-  ) {
-    throw new TypeError('Watch registration target must identify a resource');
-  }
   return normalized;
+};
+
+const REPO_NUMBER_KINDS: ReadonlySet<WatchKind> = new Set([
+  'pr-review',
+  'pr-checks',
+  'issue-state'
+]);
+
+/**
+ * Kind-aware target normalization for durable identity.
+ *
+ * PR/issue kinds require both `repo` and `number` so `{ number: 42 }` cannot
+ * collide across repositories. Run-scoped kinds require `runId`.
+ */
+export const normalizeTarget = (
+  kind: WatchKind,
+  target: WatchTarget
+): WatchTarget => {
+  const normalized = normalizeTargetFields(target);
+  if (REPO_NUMBER_KINDS.has(kind)) {
+    if (normalized.repo === undefined || normalized.number === undefined) {
+      throw new TypeError(
+        `Watch registration target for ${kind} requires repo and number`
+      );
+    }
+    return { repo: normalized.repo, number: normalized.number };
+  }
+  if (normalized.runId === undefined) {
+    throw new TypeError(`Watch registration target for ${kind} requires runId`);
+  }
+  return normalized.repo === undefined
+    ? { runId: normalized.runId }
+    : { repo: normalized.repo, runId: normalized.runId };
 };
 
 /** Stable, order-independent identity required by PRD-0020 §4. */
 export const watchRegistrationId = (
   kind: WatchKind,
   target: WatchTarget
-): string => `${kind}:${JSON.stringify(normalizeTarget(target))}`;
+): string => `${kind}:${JSON.stringify(normalizeTarget(kind, target))}`;
 
 /**
  * Durable, workspace-scoped lifecycle API shared by CLI and poll-loop callers.
@@ -101,12 +127,21 @@ export class WatchRegistryService implements IWatchRegistryService {
     private readonly _store: IDaemonStoreRepository
   ) {}
 
+  /**
+   * Persist a watch for `kind`+`target` in the workspace store.
+   *
+   * @remarks
+   * Idempotent on an already-active record: returns the first write and
+   * ignores later field changes (`pollSeconds`, `action`, `expiresAt`,
+   * `createdBy`). A previously expired id may be re-registered as a new
+   * active record with a fresh `createdAt`.
+   */
   register(
     workspaceRoot: string,
     input: WatchRegistrationInput
   ): DurableWatchRecord {
     this.validateInput(input);
-    const target = normalizeTarget(input.target);
+    const target = normalizeTarget(input.kind, input.target);
     const id = watchRegistrationId(input.kind, target);
     const existing = this._store.readWatch<DurableWatchRecord>(
       workspaceRoot,
@@ -135,6 +170,14 @@ export class WatchRegistryService implements IWatchRegistryService {
     return this._store.writeWatch(workspaceRoot, record);
   }
 
+  /**
+   * Load one watch by durable id.
+   *
+   * @remarks
+   * Soft-expired rows (`expiresAt` ≤ now without `expiredAt`) are persisted
+   * with `expiredAt` on this read path, then omitted from the return value.
+   * Already-expired rows return `null` without rewriting.
+   */
   get(workspaceRoot: string, id: string): DurableWatchRecord | null {
     const record = this._store.readWatch<DurableWatchRecord>(workspaceRoot, id);
     if (record === null) {
@@ -143,6 +186,9 @@ export class WatchRegistryService implements IWatchRegistryService {
     return this.activeRecord(workspaceRoot, record, new Date().toISOString());
   }
 
+  /**
+   * Resolve a watch by kind+target identity (same id scheme as {@link register}).
+   */
   getByTarget(
     workspaceRoot: string,
     kind: WatchKind,
@@ -151,6 +197,13 @@ export class WatchRegistryService implements IWatchRegistryService {
     return this.get(workspaceRoot, watchRegistrationId(kind, target));
   }
 
+  /**
+   * Active watches only, with `age` / `lastPollTime` projections.
+   *
+   * @remarks
+   * Applies the same lazy `expiredAt` persistence as {@link get} while
+   * filtering expired rows out of the result.
+   */
   list(workspaceRoot: string): ActiveWatch[] {
     const now = new Date().toISOString();
     const nowMilliseconds = Date.parse(now);
@@ -177,6 +230,14 @@ export class WatchRegistryService implements IWatchRegistryService {
       }));
   }
 
+  /**
+   * Stamp `lastPollTime`; optionally mark terminal and expire.
+   *
+   * @remarks
+   * When `result.terminalState` is set, writes durable `expiredAt` so later
+   * {@link get} / {@link list} omit the watch. Returns `null` if the id is
+   * missing or already inactive.
+   */
   recordPoll(
     workspaceRoot: string,
     id: string,
@@ -198,6 +259,13 @@ export class WatchRegistryService implements IWatchRegistryService {
     return this._store.writeWatch(workspaceRoot, updated);
   }
 
+  /**
+   * Force-expire an active watch with a terminal-state label.
+   *
+   * @remarks
+   * Persists `expiredAt` immediately; subsequent active queries omit the row.
+   * Returns `null` when the id is missing or already inactive.
+   */
   expire(
     workspaceRoot: string,
     id: string,
@@ -255,7 +323,7 @@ export class WatchRegistryService implements IWatchRegistryService {
       );
     }
     requireText(input.createdBy, 'createdBy');
-    normalizeTarget(input.target);
+    normalizeTarget(input.kind, input.target);
     validateDate(input.expiresAt, 'expiresAt');
     if (input.action !== undefined) {
       requireText(input.action.transcriptDir, 'action.transcriptDir');

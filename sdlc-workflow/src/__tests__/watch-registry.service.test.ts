@@ -212,7 +212,19 @@ describe('WatchRegistryService', () => {
         ...registration,
         target: {}
       })
-    ).toThrow(/identify a resource/);
+    ).toThrow(/requires repo and number/);
+    expect(() =>
+      registry.register(workspace, {
+        ...registration,
+        target: { number: 42 }
+      })
+    ).toThrow(/requires repo and number/);
+    expect(() =>
+      registry.register(workspace, {
+        ...registration,
+        target: { repo: 'owner/repo' }
+      })
+    ).toThrow(/requires repo and number/);
     expect(() =>
       registry.register(workspace, {
         ...registration,
@@ -222,12 +234,22 @@ describe('WatchRegistryService', () => {
     expect(() =>
       registry.register(workspace, {
         ...registration,
-        target: { number: -1 }
+        target: { number: -1, repo: 'owner/repo' }
       })
     ).toThrow(/target.number/);
     expect(() =>
       registry.register(workspace, {
-        ...registration,
+        kind: 'workflow-run',
+        pollSeconds: 30,
+        createdBy: 'agent',
+        target: { repo: 'owner/repo' }
+      })
+    ).toThrow(/requires runId/);
+    expect(() =>
+      registry.register(workspace, {
+        kind: 'workflow-run',
+        pollSeconds: 30,
+        createdBy: 'agent',
         target: { runId: '' }
       })
     ).toThrow(/target.runId/);
