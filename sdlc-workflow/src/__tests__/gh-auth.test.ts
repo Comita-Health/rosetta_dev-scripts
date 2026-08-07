@@ -5,7 +5,8 @@ import * as path from 'path';
 import {
   discoverActivateScript,
   envForAddiWrite,
-  isAddiLogin
+  isAddiLogin,
+  resetAddiTokenCache
 } from '../utils/gh-auth';
 
 jest.mock('child_process', () => ({
@@ -222,6 +223,79 @@ describe('gh-auth (Addi write identity)', () => {
       expect(() => envForAddiWrite({ HOME: home }, { home })).toThrow(
         expect.objectContaining({ code: 'GH_NOT_ADDI' })
       );
+    });
+
+    describe('token lifetime', () => {
+      let nowSpy: jest.SpyInstance<number, []>;
+
+      const mintOnce = (): void => {
+        execMock
+          .mockReturnValueOnce('Roustalski\n') // ambient viewer: not Addi
+          .mockReturnValueOnce('ghs_minted\n') // token script
+          .mockReturnValueOnce('addi-m[bot]\n'); // viewer under minted token
+        envForAddiWrite({ HOME: home }, { home });
+        execMock.mockReset();
+      };
+
+      beforeEach(() => {
+        resetAddiTokenCache();
+        nowSpy = jest.spyOn(Date, 'now').mockReturnValue(0);
+      });
+
+      afterEach(() => {
+        nowSpy.mockRestore();
+        resetAddiTokenCache();
+      });
+
+      // Minting per gh command would spend an API round trip on every poll.
+      it('reuses a cached token rather than minting per gh command', () => {
+        mintOnce();
+        execMock.mockReturnValueOnce('Roustalski\n');
+
+        const env = envForAddiWrite({ HOME: home }, { home });
+
+        expect(env.GH_TOKEN).toBe('ghs_minted');
+        const commands = execMock.mock.calls.map(call => String(call[0]));
+        expect(commands.some(cmd => cmd.includes('token.sh'))).toBe(false);
+      });
+
+      // Installation tokens die at 60 minutes and a supervised run outlives
+      // that, so the cache has to give up the token before GitHub does.
+      it('re-mints once the cached token nears expiry', () => {
+        mintOnce();
+        nowSpy.mockReturnValue(50 * 60_000);
+        execMock
+          .mockReturnValueOnce('Roustalski\n')
+          .mockReturnValueOnce('ghs_second\n')
+          .mockReturnValueOnce('addi-m[bot]\n');
+
+        expect(envForAddiWrite({ HOME: home }, { home }).GH_TOKEN).toBe(
+          'ghs_second'
+        );
+      });
+
+      it('keeps the cached token while it is still well within its life', () => {
+        mintOnce();
+        nowSpy.mockReturnValue(10 * 60_000);
+        execMock.mockReturnValueOnce('Roustalski\n');
+
+        expect(envForAddiWrite({ HOME: home }, { home }).GH_TOKEN).toBe(
+          'ghs_minted'
+        );
+      });
+
+      it('mints again after the cache is dropped', () => {
+        mintOnce();
+        resetAddiTokenCache();
+        execMock
+          .mockReturnValueOnce('Roustalski\n')
+          .mockReturnValueOnce('ghs_third\n')
+          .mockReturnValueOnce('addi-m[bot]\n');
+
+        expect(envForAddiWrite({ HOME: home }, { home }).GH_TOKEN).toBe(
+          'ghs_third'
+        );
+      });
     });
   });
 });

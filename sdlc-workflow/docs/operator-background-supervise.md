@@ -9,8 +9,10 @@ Each `run` invocation processes **one dependency wave**. After an enforce auto-m
 ## CLI
 
 ```bash
-# Activate Addi first so escalate issues / SDLC PRs are App-authored even if
-# ambient gh is the human (engine also refuses human auth on create).
+# Optional: activate Addi so ad-hoc gh in this shell is App-authored. The run
+# does not depend on it — the engine mints and refreshes its own token per
+# call. Do not treat an activated shell as the run's credential: the token it
+# exports expires after 60 minutes, long before a detached run finishes.
 eval "$(bash ~/.config/comita/github-app-activate.sh)"   # or ~/.config/rosetta/…
 
 # Recommended operator / agent launch (likely future default for --supervise):

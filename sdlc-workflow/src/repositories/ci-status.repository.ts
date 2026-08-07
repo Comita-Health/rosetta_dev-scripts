@@ -1,6 +1,6 @@
-import { execSync } from 'child_process';
 import { injectable } from 'inversify';
 import { WorkflowError } from '../types';
+import { runGh } from '../utils/gh-cli';
 import { originSlug } from '../utils/gh-repo';
 
 export interface CheckRunSummary {
@@ -45,9 +45,9 @@ export class CiStatusRepository implements ICiStatusRepository {
   checkRuns(repoPath: string, sha: string): CheckRunSummary | null {
     let raw: string;
     try {
-      raw = execSync(
-        `gh api "repos/${originSlug(repoPath)}/commits/${sha}/check-runs" --jq "[.check_runs[] | {name, status, conclusion}]"`,
-        { cwd: repoPath, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
+      raw = runGh(
+        repoPath,
+        `gh api "repos/${originSlug(repoPath)}/commits/${sha}/check-runs" --jq "[.check_runs[] | {name, status, conclusion}]"`
       );
     } catch {
       return null;
@@ -83,9 +83,9 @@ export class CiStatusRepository implements ICiStatusRepository {
 
   failedLogs(repoPath: string, sha: string): string {
     try {
-      const raw = execSync(
-        `gh run list --commit ${sha} --status failure --json databaseId --jq ".[].databaseId"`,
-        { cwd: repoPath, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
+      const raw = runGh(
+        repoPath,
+        `gh run list --commit ${sha} --status failure --json databaseId --jq ".[].databaseId"`
       );
       const ids = raw
         .split('\n')
@@ -94,13 +94,7 @@ export class CiStatusRepository implements ICiStatusRepository {
       const logs: string[] = [];
       for (const id of ids) {
         try {
-          logs.push(
-            execSync(`gh run view ${id} --log-failed`, {
-              cwd: repoPath,
-              encoding: 'utf-8',
-              stdio: ['pipe', 'pipe', 'pipe']
-            })
-          );
+          logs.push(runGh(repoPath, `gh run view ${id} --log-failed`));
         } catch {
           // A single unreadable run does not void the rest.
         }
@@ -123,14 +117,10 @@ export class CiStatusRepository implements ICiStatusRepository {
       payload.target_url = input.targetUrl;
     }
     try {
-      execSync(
+      runGh(
+        repoPath,
         `gh api --method POST "repos/${originSlug(repoPath)}/statuses/${sha}" --input -`,
-        {
-          cwd: repoPath,
-          encoding: 'utf-8',
-          input: JSON.stringify(payload),
-          stdio: ['pipe', 'pipe', 'pipe']
-        }
+        { stdin: JSON.stringify(payload), requireAddi: true }
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

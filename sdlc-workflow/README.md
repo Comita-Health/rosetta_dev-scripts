@@ -724,12 +724,23 @@ Handler / Service / Repository with InversifyJS (workspace rule):
   under the operator's login.
 - `repositories/issue.repository.ts` — `gh issue` create / find-by-title
   (creates require Addi).
-- `utils/gh-auth.ts` / `utils/gh-cli.ts` — shared `gh` runner; mutating
-  calls mint/reuse an Addi installation token (`SDLC_GH_ACTIVATE` /
+- `utils/gh-auth.ts` / `utils/gh-cli.ts` — shared `gh` runner; calls mint or
+  reuse an Addi installation token (`SDLC_GH_ACTIVATE` /
   `ROSETTA_GH_ACTIVATE` / `~/.config/*/github-app-activate.sh`). The script is
-  selected by the **owner being written to** — a workspace App is installed on
+  selected by the **owner being addressed** — a workspace App is installed on
   its own org only, so the wrong one authenticates and then fails the write
   with `Resource not accessible by integration`.
+  **Reads take the same identity as writes.** An installation token is valid
+  for 60 minutes and a detached run lasts far longer, so a run that inherits
+  the operator's launch-time token starts failing every `gh` call about an
+  hour in — the deploy watch, the CI poll and the escalation post at once,
+  each reported as its own gate failure rather than as the single expired
+  credential it is. Tokens are cached per activate script and re-minted at 45
+  minutes; an auth failure re-mints and retries once, so a token that dies
+  mid-call costs a retry rather than a wave. `ghEnv` exports the same
+  credential for repo-owned subprocesses (sandbox deploy/health), which shell
+  out to `gh` themselves. A read still falls back to ambient auth when no App
+  resolves; a write refuses with `GH_NOT_ADDI`.
 - `utils/gh-repo.ts` — `owner/repo` of the checkout's `origin`. Every `gh`
   call pins `--repo` to it: on a fork, an unqualified call resolves against
   the **upstream parent**, but task branches are pushed to `origin`, so PR

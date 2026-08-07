@@ -127,6 +127,54 @@ const mintInstallationToken = (activateScript: string): string => {
 };
 
 /**
+ * GitHub App installation tokens are valid for 60 minutes. A supervised run
+ * routinely outlives that several times over, so a token minted once at
+ * launch and inherited by every later call goes 401 mid-run - and because
+ * the deploy watch, the CI poll and the escalation post all use it, they
+ * fail together and the run reads its own expired credential as a red gate.
+ *
+ * Re-minting is cheap relative to the TTL, so tokens are cached per activate
+ * script and refreshed well before the boundary rather than at it - a call
+ * that starts just under the wire must not straddle expiry while it runs.
+ */
+const TOKEN_TTL_MS = 45 * 60_000;
+
+interface CachedToken {
+  token: string;
+  mintedAt: number;
+}
+
+const tokenCache = new Map<string, CachedToken>();
+
+/** Drop cached tokens. Call after a 401 and on test teardown. */
+export const resetAddiTokenCache = (): void => {
+  tokenCache.clear();
+};
+
+/**
+ * Cached installation token for an activate script, minting on first use and
+ * whenever the cached one is older than {@link TOKEN_TTL_MS}.
+ *
+ * @remarks
+ * `fresh` reports whether this call minted. A cached token was already
+ * proven to be Addi when it was minted, so re-running the viewer query for
+ * every gh command would double the API traffic to re-answer a settled
+ * question - only a fresh mint needs verifying.
+ */
+const installationToken = (
+  activateScript: string,
+  now: number = Date.now()
+): { token: string; fresh: boolean } => {
+  const cached = tokenCache.get(activateScript);
+  if (cached !== undefined && now - cached.mintedAt < TOKEN_TTL_MS) {
+    return { token: cached.token, fresh: false };
+  }
+  const token = mintInstallationToken(activateScript);
+  tokenCache.set(activateScript, { token, mintedAt: now });
+  return { token, fresh: true };
+};
+
+/**
  * Environment for mutating gh writes (issue create, pr create, ...).
  *
  * @remarks
@@ -177,8 +225,9 @@ export const envForAddiWrite = (
   }
 
   let token: string;
+  let fresh: boolean;
   try {
-    token = mintInstallationToken(activate);
+    ({ token, fresh } = installationToken(activate));
   } catch (err) {
     if (err instanceof WorkflowError) {
       throw err;
@@ -196,6 +245,10 @@ export const envForAddiWrite = (
     GH_TOKEN: token,
     GITHUB_TOKEN: token
   };
+
+  if (fresh === false) {
+    return env;
+  }
 
   let login: string;
   try {
