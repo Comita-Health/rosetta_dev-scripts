@@ -1,7 +1,8 @@
 import { ChildProcess, spawn } from 'child_process';
 import {
+  chmodSync,
+  copyFileSync,
   existsSync,
-  mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
@@ -68,9 +69,16 @@ describe('DaemonStoreRepository', () => {
       'repositories',
       'daemon-store.repository.ts'
     );
+    // `require`, matching the CommonJS this package actually emits: the module
+    // exports no default, and resolving a named export out of an ESM `import`
+    // of a transpiled `.ts` fails outright. The explicit constructor check
+    // keeps any future interop change loud instead of leaving a child that
+    // reaches READY without ever writing a record.
     const script = `
-      import storeModule from ${JSON.stringify(modulePath)};
-      const { DaemonStoreRepository } = storeModule;
+      const { DaemonStoreRepository } = require(${JSON.stringify(modulePath)});
+      if (typeof DaemonStoreRepository !== 'function') {
+        throw new TypeError('DaemonStoreRepository did not load as a constructor');
+      }
       const store = new DaemonStoreRepository();
       store.writeWatch(process.env.WORKSPACE, ${JSON.stringify(watch)});
       store.writeWake(process.env.WORKSPACE, ${JSON.stringify(wake)});
@@ -79,7 +87,7 @@ describe('DaemonStoreRepository', () => {
     `;
     const child = spawn(
       process.execPath,
-      ['--import', 'tsx', '--input-type=module', '--eval', script],
+      ['--import', 'tsx', '--eval', script],
       {
         cwd: path.resolve(__dirname, '..', '..'),
         env: { ...process.env, WORKSPACE: workspace },
@@ -87,22 +95,32 @@ describe('DaemonStoreRepository', () => {
       }
     );
 
+    const reopened = new DaemonStoreRepository();
+    expect(existsSync(reopened.paths(workspace).root)).toBe(false);
+
+    let signal: NodeJS.Signals | null = null;
     try {
       await waitForReady(child);
     } finally {
-      const exited = new Promise<void>(resolve => {
-        child.once('exit', () => resolve());
+      const exited = new Promise<NodeJS.Signals | null>(resolve => {
+        child.once('exit', (_code, exitSignal) => resolve(exitSignal));
       });
       child.kill('SIGKILL');
-      await exited;
+      signal = await exited;
     }
 
-    const reopened = new DaemonStoreRepository();
+    // Nothing in the writer got a chance to flush on the way out, so anything
+    // readable now was made durable by the writes themselves.
+    expect(signal).toBe('SIGKILL');
     expect(reopened.readWatch(workspace, watch.id)).toEqual(watch);
     expect(reopened.readWake(workspace, wakeEventId(wake))).toEqual({
       id: wakeEventId(wake),
       ...wake
     });
+    expect(reopened.listWatches(workspace)).toEqual([watch]);
+    expect(reopened.listPendingWakes(workspace)).toEqual([
+      { id: wakeEventId(wake), ...wake }
+    ]);
   });
 
   it('isolates records in physically distinct workspace directories', () => {
@@ -173,20 +191,70 @@ describe('DaemonStoreRepository', () => {
     });
   });
 
+  it('never re-queues a consumed wake when its signal is detected again', async () => {
+    const workspace = mkdtempSync(
+      path.join(os.tmpdir(), 'daemon-store-replay-')
+    );
+    const store = new DaemonStoreRepository();
+    const written = store.writeWake(workspace, wake).record;
+    expect(await store.claimWake(workspace, written.id)).toEqual(written);
+
+    const redetected = store.writeWake(workspace, {
+      ...wake,
+      createdAt: '2026-08-07T11:00:00.000Z',
+      prompt: 'same signal, later poll'
+    });
+
+    expect(redetected).toEqual({ record: written, created: false });
+    expect(readdirSync(store.paths(workspace).pendingWakes)).toEqual([]);
+    expect(await store.claimWake(workspace, written.id)).toBeNull();
+    expect(readdirSync(store.paths(workspace).consumedWakes)).toEqual([
+      `${written.id}.json`
+    ]);
+    expect(store.readWake(workspace, written.id)).toEqual(written);
+  });
+
+  it('refuses to claim again when a pending file reappears beside a consumed one', async () => {
+    const workspace = mkdtempSync(
+      path.join(os.tmpdir(), 'daemon-store-double-')
+    );
+    const store = new DaemonStoreRepository();
+    const paths = store.paths(workspace);
+    const written = store.writeWake(workspace, wake).record;
+    expect(await store.claimWake(workspace, written.id)).toEqual(written);
+
+    // The state writeWake can never produce, planted by hand: a pending file
+    // for an ID that is already consumed. A rename would silently replace the
+    // consumed record and hand out a second claim.
+    const consumedFile = path.join(paths.consumedWakes, `${written.id}.json`);
+    copyFileSync(
+      consumedFile,
+      path.join(paths.pendingWakes, `${written.id}.json`)
+    );
+
+    expect(await store.claimWake(workspace, written.id)).toBeNull();
+    expect(existsSync(consumedFile)).toBe(true);
+    expect(JSON.parse(readFileSync(consumedFile, 'utf-8'))).toEqual(written);
+  });
+
   it('rejects claim filesystem failures without losing the pending wake', async () => {
     const workspace = mkdtempSync(
       path.join(os.tmpdir(), 'daemon-store-error-')
     );
     const store = new DaemonStoreRepository();
     const written = store.writeWake(workspace, wake).record;
-    mkdirSync(
-      path.join(store.paths(workspace).consumedWakes, `${written.id}.json`)
-    );
+    const consumed = store.paths(workspace).consumedWakes;
+    chmodSync(consumed, 0o500);
 
-    await expect(store.claimWake(workspace, written.id)).rejects.toMatchObject({
-      code: expect.stringMatching(/EISDIR|ENOTDIR/)
-    });
+    try {
+      await expect(
+        store.claimWake(workspace, written.id)
+      ).rejects.toMatchObject({ code: 'EACCES' });
+    } finally {
+      chmodSync(consumed, 0o700);
+    }
     expect(store.listPendingWakes(workspace)).toEqual([written]);
+    expect(await store.claimWake(workspace, written.id)).toEqual(written);
   });
 
   it('hashes an unambiguous tuple and rejects empty roots and IDs', () => {
