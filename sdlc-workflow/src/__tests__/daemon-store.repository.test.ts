@@ -61,6 +61,10 @@ const waitForReady = (child: ChildProcess): Promise<void> =>
   });
 
 describe('DaemonStoreRepository', () => {
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
   it('survives writer process death and reopens identical records', async () => {
     const workspace = mkdtempSync(path.join(os.tmpdir(), 'daemon-store-kill-'));
     const modulePath = path.resolve(
@@ -158,6 +162,37 @@ describe('DaemonStoreRepository', () => {
     expect(replay.created).toBe(false);
     expect(replay.record).toEqual(first.record);
     expect(readdirSync(store.paths(workspace).pendingWakes)).toHaveLength(1);
+  });
+
+  it('exclusively acquires, safely releases, and expires poll leases', () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-08-07T10:00:00.000Z'));
+    const workspace = mkdtempSync(
+      path.join(os.tmpdir(), 'daemon-store-lease-')
+    );
+    const store = new DaemonStoreRepository();
+    const first = store.tryAcquirePollLease(workspace, watch.id, 1_000);
+
+    expect(first).not.toBeNull();
+    expect(store.tryAcquirePollLease(workspace, watch.id, 1_000)).toBeNull();
+    store.releasePollLease(workspace, {
+      ...first!,
+      token: 'not-the-owner'
+    });
+    expect(store.tryAcquirePollLease(workspace, watch.id, 1_000)).toBeNull();
+
+    jest.advanceTimersByTime(1_000);
+    const recovered = store.tryAcquirePollLease(workspace, watch.id, 1_000);
+    expect(recovered).not.toBeNull();
+    expect(recovered?.token).not.toBe(first?.token);
+    store.releasePollLease(workspace, first!);
+    expect(store.tryAcquirePollLease(workspace, watch.id, 1_000)).toBeNull();
+    store.releasePollLease(workspace, recovered!);
+    expect(() => store.tryAcquirePollLease(workspace, watch.id, 0)).toThrow(
+      /positive integer/
+    );
+    expect(
+      store.tryAcquirePollLease(workspace, watch.id, 1_000)
+    ).not.toBeNull();
   });
 
   it('allows exactly one of two concurrent atomic-rename claims to win', async () => {

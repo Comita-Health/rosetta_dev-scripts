@@ -150,7 +150,10 @@ describe('WatchRegistryService', () => {
         createdBy: 'pr-approve-watch',
         expiresAt: '2026-08-07T11:00:00.000Z',
         age: 15,
-        lastPollTime: null
+        lastPollTime: null,
+        consecutiveFailures: 0,
+        lastError: null,
+        degradedAt: null
       }
     ]);
 

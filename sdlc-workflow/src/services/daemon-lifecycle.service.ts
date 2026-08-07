@@ -1,10 +1,11 @@
-import { inject, injectable } from 'inversify';
+import { inject, injectable, optional } from 'inversify';
 import path from 'path';
 import type { IDaemonConfigRepository } from '../repositories/daemon-config.repository';
 import type { IDaemonProcessRepository } from '../repositories/daemon-process.repository';
 import type { ILaunchdRepository } from '../repositories/launchd.repository';
 import { WORKFLOW_TOKENS } from '../tokens';
 import type { DaemonConfig, DaemonRuntimePaths } from '../types';
+import type { IPollSchedulerService } from './poll-scheduler.service';
 
 export interface DaemonInstallOptions {
   /** Override LaunchAgents directory (tests). */
@@ -52,18 +53,27 @@ export class DaemonLifecycleService implements IDaemonLifecycleService {
     @inject(WORKFLOW_TOKENS.DaemonProcessRepository)
     private readonly _processRepo: IDaemonProcessRepository,
     @inject(WORKFLOW_TOKENS.LaunchdRepository)
-    private readonly _launchdRepo: ILaunchdRepository
+    private readonly _launchdRepo: ILaunchdRepository,
+    @inject(WORKFLOW_TOKENS.PollSchedulerService)
+    @optional()
+    private readonly _poller?: IPollSchedulerService
   ) {}
 
   async run(workspaceRoot: string): Promise<DaemonRuntimePaths> {
-    const { paths } = this._configRepo.load(workspaceRoot);
+    const { config, paths } = this._configRepo.load(workspaceRoot);
     this._processRepo.writePid({
       pidFile: paths.pidFile,
       logPath: paths.logPath
     });
     try {
+      if (this._poller !== undefined) {
+        this._poller.start(workspaceRoot, config.defaultPollSeconds);
+      }
       await this._processRepo.waitForShutdown();
     } finally {
+      if (this._poller !== undefined) {
+        this._poller.stop();
+      }
       this._processRepo.clearPid(paths.pidFile, process.pid);
     }
     return paths;

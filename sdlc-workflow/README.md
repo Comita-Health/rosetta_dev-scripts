@@ -108,9 +108,9 @@ bun run dev -- queue-run --spec ../specs/PRD-0011/phase-4-spec.md --repo ..
 # List queued launch records (FIFO, oldest first)
 bun run dev -- status --queue
 
-# Per-workspace SDLC event daemon (SPEC-PRD-0020-P1 T-01/T-03) — process
-# bootstrap, durable storage, and watch registry; polling lands later. Config is
-# `.sdlc/daemon.json` under the workspace root (DaemonConfig contract).
+# Per-workspace SDLC event daemon (SPEC-PRD-0020-P1 T-01/T-04) — process
+# bootstrap, durable storage, watch registry, and bounded poll scheduler.
+# Config is `.sdlc/daemon.json` under the workspace root (DaemonConfig contract).
 # `install` creates `.sdlc/daemon/` + touches the log before launchd load;
 # load is transactional (enable failure → bootout + plist remove);
 # `uninstall` derives the label/plist from the workspace root alone so a
@@ -151,10 +151,18 @@ that store. A watch ID is derived from its kind and normalized structured
 target, so registering the same target and kind is idempotent. Every call is
 scoped by workspace root; registrations contain only durable values from the
 PRD-0020 `WatchRegistration` contract and no chat/session references. `list`
-returns active watches with `kind`, `target`, age in whole seconds, and
-`lastPollTime`. A declared expiry or a terminal result passed to `recordPoll`
+returns active watches with `kind`, `target`, age in whole seconds,
+`lastPollTime`, consecutive failures, and degraded state. A declared expiry or
+a terminal result passed to `recordPoll`
 durably expires the record and removes it from subsequent active queries while
 retaining it on disk for audit.
+
+`PollSchedulerService` starts with the daemon and evaluates each active watch
+on its declared cadence. An exclusive, expiring file lease prevents overlapping
+ticks from polling the same watch concurrently. Adapter signals use the durable
+wake ledger, so a retry after interruption resolves to the original wake ID.
+Adapter failures are recorded per watch; after three consecutive failures the
+watch remains visible as degraded but is skipped by subsequent ticks.
 
 `decompose` grounds the synthesized envelope in the target repo tree (#35):
 every `allowedPaths` glob must match at least one existing path in the

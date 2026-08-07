@@ -207,6 +207,14 @@ import {
   IWatchRegistryService,
   WatchRegistryService
 } from './services/watch-registry.service';
+import {
+  IPollSchedulerService,
+  PollSchedulerService
+} from './services/poll-scheduler.service';
+import {
+  IWatchSourceAdapterRegistry,
+  WatchSourceAdapterRegistry
+} from './services/watch-source-adapter';
 import { WORKFLOW_TOKENS } from './tokens';
 import { WorkflowError } from './types';
 import { resolveInferenceBackend } from './utils/backend-select';
@@ -377,6 +385,14 @@ container
 container
   .bind<IWatchRegistryService>(WORKFLOW_TOKENS.WatchRegistryService)
   .to(WatchRegistryService);
+container
+  .bind<IWatchSourceAdapterRegistry>(WORKFLOW_TOKENS.WatchSourceAdapterRegistry)
+  .to(WatchSourceAdapterRegistry)
+  .inSingletonScope();
+container
+  .bind<IPollSchedulerService>(WORKFLOW_TOKENS.PollSchedulerService)
+  .to(PollSchedulerService)
+  .inSingletonScope();
 container
   .bind<IDaemonHandler>(WORKFLOW_TOKENS.DaemonHandler)
   .to(DaemonHandler);

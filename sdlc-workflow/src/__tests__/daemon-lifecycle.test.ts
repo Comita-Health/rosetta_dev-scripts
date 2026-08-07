@@ -21,6 +21,7 @@ import {
   DaemonLifecycleService,
   type IDaemonLifecycleService
 } from '../services/daemon-lifecycle.service';
+import type { IPollSchedulerService } from '../services/poll-scheduler.service';
 import { WORKFLOW_TOKENS } from '../tokens';
 import { WorkflowError } from '../types';
 
@@ -236,10 +237,16 @@ describe('DaemonLifecycleService.run', () => {
       clearPid: jest.fn(),
       waitForShutdown: jest.fn().mockResolvedValue(undefined)
     };
+    const poller: IPollSchedulerService = {
+      start: jest.fn(),
+      tick: jest.fn().mockResolvedValue(undefined),
+      stop: jest.fn()
+    };
     const lifecycle = new DaemonLifecycleService(
       configRepo,
       processRepo,
-      new LaunchdRepository()
+      new LaunchdRepository(),
+      poller
     );
 
     const result = await lifecycle.run(root);
@@ -250,6 +257,8 @@ describe('DaemonLifecycleService.run', () => {
       logPath: paths.logPath
     });
     expect(processRepo.waitForShutdown).toHaveBeenCalled();
+    expect(poller.start).toHaveBeenCalledWith(root, 30);
+    expect(poller.stop).toHaveBeenCalled();
     expect(processRepo.clearPid).toHaveBeenCalledWith(
       paths.pidFile,
       process.pid

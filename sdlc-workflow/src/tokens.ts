@@ -62,5 +62,8 @@ export const WORKFLOW_TOKENS = {
   // SPEC-PRD-0020-P1 T-02
   DaemonStoreRepository: Symbol.for('DaemonStoreRepository'),
   // SPEC-PRD-0020-P1 T-03
-  WatchRegistryService: Symbol.for('WatchRegistryService')
+  WatchRegistryService: Symbol.for('WatchRegistryService'),
+  // SPEC-PRD-0020-P1 T-04
+  WatchSourceAdapterRegistry: Symbol.for('WatchSourceAdapterRegistry'),
+  PollSchedulerService: Symbol.for('PollSchedulerService')
 } as const;

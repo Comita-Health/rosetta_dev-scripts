@@ -33,12 +33,21 @@ export interface WakeWriteResult {
   created: boolean;
 }
 
+export interface PollLease {
+  watchId: string;
+  token: string;
+  acquiredAt: string;
+  expiresAt: string;
+}
+
 /** Absolute locations of every directory the store owns for one workspace. */
 export interface DaemonStorePaths {
   /** Per-workspace state root, shared with daemon lifecycle: `.sdlc/daemon/`. */
   root: string;
   /** One JSON file per watch registration. */
   watches: string;
+  /** Exclusive, expiring in-flight poll leases. */
+  pollLeases: string;
   /** Parent of the three wake directories. */
   wake: string;
   /** Canonical wake ledger: written once per wake ID, never removed. */
@@ -57,6 +66,12 @@ export interface IDaemonStoreRepository {
     id: string
   ): T | null;
   listWatches<T extends DurableWatchRecord>(workspaceRoot: string): T[];
+  tryAcquirePollLease(
+    workspaceRoot: string,
+    watchId: string,
+    leaseMilliseconds: number
+  ): PollLease | null;
+  releasePollLease(workspaceRoot: string, lease: PollLease): void;
   writeWake(workspaceRoot: string, input: WakeEventInput): WakeWriteResult;
   readWake(workspaceRoot: string, id: string): WakeEvent | null;
   listPendingWakes(workspaceRoot: string): WakeEvent[];
@@ -267,6 +282,7 @@ export class DaemonStoreRepository implements IDaemonStoreRepository {
     return {
       root,
       watches: path.join(root, 'watches'),
+      pollLeases: path.join(root, 'poll-leases'),
       wake,
       wakeRecords: path.join(wake, 'records'),
       pendingWakes: path.join(wake, 'pending'),
@@ -319,6 +335,98 @@ export class DaemonStoreRepository implements IDaemonStoreRepository {
    */
   listWatches<T extends DurableWatchRecord>(workspaceRoot: string): T[] {
     return listRecords<T>(this.paths(workspaceRoot).watches);
+  }
+
+  /**
+   * Acquire one expiring lease for a watch without a check-then-write race.
+   *
+   * The canonical lease file is published through the same exclusive
+   * hard-link primitive as wake records, so overlapping ticks have exactly
+   * one winner. An expired lease is removed before one retry, allowing a new
+   * daemon process to recover work abandoned by a crash.
+   */
+  tryAcquirePollLease(
+    workspaceRoot: string,
+    watchId: string,
+    leaseMilliseconds: number
+  ): PollLease | null {
+    if (
+      Number.isSafeInteger(leaseMilliseconds) === false ||
+      leaseMilliseconds <= 0
+    ) {
+      throw new TypeError('Poll lease duration must be a positive integer');
+    }
+    const directory = this.paths(workspaceRoot).pollLeases;
+    mkdirSync(directory, { recursive: true });
+    const file = recordFile(directory, watchId);
+
+    const acquire = (): PollLease | null => {
+      const acquiredAt = new Date().toISOString();
+      const lease: PollLease = {
+        watchId,
+        token: randomBytes(16).toString('hex'),
+        acquiredAt,
+        expiresAt: new Date(
+          Date.parse(acquiredAt) + leaseMilliseconds
+        ).toISOString()
+      };
+      return writeFileExclusiveAtomic(
+        file,
+        `${JSON.stringify(lease, null, 2)}\n`
+      )
+        ? lease
+        : null;
+    };
+
+    const lease = acquire();
+    if (lease !== null) {
+      return lease;
+    }
+    let existing: PollLease;
+    try {
+      existing = parseRecord<PollLease>(file);
+    } catch (error) {
+      if (isErrorCode(error, 'ENOENT') === true) {
+        return acquire();
+      }
+      throw error;
+    }
+    if (Date.parse(existing.expiresAt) > Date.now()) {
+      return null;
+    }
+    try {
+      unlinkSync(file);
+      syncDirectory(directory);
+    } catch (error) {
+      if (isErrorCode(error, 'ENOENT') === false) {
+        throw error;
+      }
+    }
+    return acquire();
+  }
+
+  /**
+   * Release only the lease represented by `token`; a late completion can
+   * never remove a successor lease acquired after its own expiry.
+   */
+  releasePollLease(workspaceRoot: string, lease: PollLease): void {
+    const directory = this.paths(workspaceRoot).pollLeases;
+    const file = recordFile(directory, lease.watchId);
+    if (existsSync(file) === false) {
+      return;
+    }
+    const current = parseRecord<PollLease>(file);
+    if (current.token !== lease.token) {
+      return;
+    }
+    try {
+      unlinkSync(file);
+      syncDirectory(directory);
+    } catch (error) {
+      if (isErrorCode(error, 'ENOENT') === false) {
+        throw error;
+      }
+    }
   }
 
   /**

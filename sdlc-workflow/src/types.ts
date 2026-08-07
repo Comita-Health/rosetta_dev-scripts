@@ -578,6 +578,9 @@ export type WatchRegistrationInput = Omit<WatchRegistration, 'id'>;
 export interface DurableWatchRecord extends WatchRegistration {
   createdAt: string;
   lastPollTime?: string;
+  consecutiveFailures?: number;
+  lastError?: string;
+  degradedAt?: string;
   expiredAt?: string;
   terminalState?: string;
 }
@@ -587,6 +590,9 @@ export interface ActiveWatch extends WatchRegistration {
   /** Whole seconds since registration. */
   age: number;
   lastPollTime: string | null;
+  consecutiveFailures: number;
+  lastError: string | null;
+  degradedAt: string | null;
 }
 
 /** Input whose identity is the `(kind, target, signal)` tuple. */

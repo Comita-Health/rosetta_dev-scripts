@@ -92,6 +92,18 @@ export interface IWatchRegistryService {
     result?: WatchPollResult
   ): DurableWatchRecord | null;
   /**
+   * Persist one failed adapter attempt and degrade at `failureCap`.
+   *
+   * Degraded watches remain active and visible to status, but poll schedulers
+   * must skip them until a later phase supplies an explicit recovery path.
+   */
+  recordPollFailure(
+    workspaceRoot: string,
+    id: string,
+    error: unknown,
+    failureCap: number
+  ): DurableWatchRecord | null;
+  /**
    * Expire an active watch now, labelled with `terminalState`.
    *
    * @remarks
@@ -377,7 +389,10 @@ export class WatchRegistryService implements IWatchRegistryService {
           0,
           Math.floor((nowMilliseconds - Date.parse(record.createdAt)) / 1_000)
         ),
-        lastPollTime: record.lastPollTime ?? null
+        lastPollTime: record.lastPollTime ?? null,
+        consecutiveFailures: record.consecutiveFailures ?? 0,
+        lastError: record.lastError ?? null,
+        degradedAt: record.degradedAt ?? null
       }));
   }
 
@@ -402,13 +417,46 @@ export class WatchRegistryService implements IWatchRegistryService {
       return null;
     }
     const now = new Date().toISOString();
-    const updated: DurableWatchRecord = { ...record, lastPollTime: now };
+    const {
+      consecutiveFailures: _consecutiveFailures,
+      lastError: _lastError,
+      degradedAt: _degradedAt,
+      ...healthy
+    } = record;
+    const updated: DurableWatchRecord = { ...healthy, lastPollTime: now };
     if (result.terminalState !== undefined) {
       updated.terminalState = requireText(
         result.terminalState,
         'terminalState'
       );
       updated.expiredAt = now;
+    }
+    return this._store.writeWatch(workspaceRoot, updated);
+  }
+
+  recordPollFailure(
+    workspaceRoot: string,
+    id: string,
+    error: unknown,
+    failureCap: number
+  ): DurableWatchRecord | null {
+    if (Number.isSafeInteger(failureCap) === false || failureCap <= 0) {
+      throw new TypeError('Watch poll failure cap must be a positive integer');
+    }
+    const record = this.get(workspaceRoot, id);
+    if (record === null || record.degradedAt !== undefined) {
+      return record;
+    }
+    const now = new Date().toISOString();
+    const consecutiveFailures = (record.consecutiveFailures ?? 0) + 1;
+    const updated: DurableWatchRecord = {
+      ...record,
+      lastPollTime: now,
+      consecutiveFailures,
+      lastError: error instanceof Error ? error.message : String(error)
+    };
+    if (consecutiveFailures >= failureCap) {
+      updated.degradedAt = now;
     }
     return this._store.writeWatch(workspaceRoot, updated);
   }
