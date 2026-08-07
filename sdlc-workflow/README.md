@@ -108,8 +108,8 @@ bun run dev -- queue-run --spec ../specs/PRD-0011/phase-4-spec.md --repo ..
 # List queued launch records (FIFO, oldest first)
 bun run dev -- status --queue
 
-# Per-workspace SDLC event daemon (SPEC-PRD-0020-P1 T-01) — process
-# bootstrap only; watch/poll modules land in later tasks. Config is
+# Per-workspace SDLC event daemon (SPEC-PRD-0020-P1 T-01/T-02) — process
+# bootstrap plus durable storage; watch/poll modules land in later tasks. Config is
 # `.sdlc/daemon.json` under the workspace root (DaemonConfig contract).
 # `install` creates `.sdlc/daemon/` + touches the log before launchd load;
 # load is transactional (enable failure → bootout + plist remove);
@@ -123,6 +123,28 @@ bun run dev -- daemon uninstall --workspace ../..
 #   --plist-dir   LaunchAgents directory (default: ~/Library/LaunchAgents)
 #   --no-load     write the plist without calling launchctl (tests / dry-run)
 ```
+
+The daemon store derives its root from the workspace exactly as lifecycle
+does: `.sdlc/daemon/`. Watch registrations are independent JSON files under
+`watches/`. Wake events keep the existing inbox shape — `wake/pending/`, moved
+to `wake/consumed/` when claimed — on top of a `wake/records/` ledger:
+
+```text
+wake/records/<wakeId>.json    written once per wake ID, never removed
+wake/pending/<wakeId>.json    hard link to the ledger entry: unclaimed
+wake/consumed/<wakeId>.json   that same link, renamed by the winning claim
+```
+
+A wake ID is the SHA-256 digest of its `(kind, target, signal)` tuple, so
+detecting one signal again resolves to the original record. The ledger entry
+is created with `link(2)`, which fails rather than clobbers, making it a
+permanent atomic "has this ever been published" gate; only the writer that
+wins it links the wake into `wake/pending/`. A pending link therefore exists at
+most once per ID, so the `rename(2)` that claims it can succeed at most once —
+a re-detected signal cannot resurrect a claimed wake, and a claim can never
+replace an existing consumed record. Content and directory entries are fsynced
+before a write is reported, so records survive a kill or a reboot with no
+database, broker, or live session.
 
 `decompose` grounds the synthesized envelope in the target repo tree (#35):
 every `allowedPaths` glob must match at least one existing path in the

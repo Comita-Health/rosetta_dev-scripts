@@ -199,6 +199,10 @@ import {
   DaemonLifecycleService,
   IDaemonLifecycleService
 } from './services/daemon-lifecycle.service';
+import {
+  DaemonStoreRepository,
+  IDaemonStoreRepository
+} from './repositories/daemon-store.repository';
 import { WORKFLOW_TOKENS } from './tokens';
 import { WorkflowError } from './types';
 import { resolveInferenceBackend } from './utils/backend-select';
@@ -363,6 +367,9 @@ container
 container
   .bind<IDaemonLifecycleService>(WORKFLOW_TOKENS.DaemonLifecycleService)
   .to(DaemonLifecycleService);
+container
+  .bind<IDaemonStoreRepository>(WORKFLOW_TOKENS.DaemonStoreRepository)
+  .to(DaemonStoreRepository);
 container
   .bind<IDaemonHandler>(WORKFLOW_TOKENS.DaemonHandler)
   .to(DaemonHandler);

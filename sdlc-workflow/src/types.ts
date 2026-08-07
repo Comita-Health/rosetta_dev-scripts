@@ -527,6 +527,29 @@ export interface DaemonRuntimePaths {
   launchdLabel: string;
 }
 
+/** File-backed watch payload; T-03 extends this storage boundary. */
+export interface DurableWatchRecord {
+  id: string;
+  kind: string;
+  target: string;
+  [key: string]: unknown;
+}
+
+/** Input whose identity is the `(kind, target, signal)` tuple. */
+export interface WakeEventInput {
+  kind: string;
+  target: string;
+  signal: string;
+  createdAt: string;
+  prompt?: string;
+  data?: Record<string, unknown>;
+}
+
+/** Durable wake payload with its deterministic idempotency key. */
+export interface WakeEvent extends WakeEventInput {
+  id: string;
+}
+
 export type WorkflowErrorCode =
   | 'PRD_NOT_FOUND'
   | 'PRD_MALFORMED'

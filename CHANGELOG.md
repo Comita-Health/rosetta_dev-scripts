@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** add the per-workspace durable daemon store with one JSON
+  file per watch and wake, idempotent wake IDs, fsynced publication, and
+  atomic-rename wake claims. A write-once `wake/records/` ledger gates
+  publication, so a re-detected signal cannot restore a pending file for an
+  already-claimed wake and buy a second claim (SPEC-PRD-0020-P1 T-02).
 - **sdlc-workflow:** a `daemon install` that cannot execute `launchctl` at all
   now names the cause. `spawnSync` reports that case as `status: null` with
   empty stdout/stderr, so the thrown `DAEMON_CONFIG_INVALID` carried a blank
@@ -20,7 +25,7 @@
   `daemon.log` before launchd bootstrap so StandardOutPath/StandardErrorPath
   exist at load time; `daemon uninstall` derives the label/plist path from the
   workspace root alone (no `.sdlc/daemon.json` required); and `launchctl
-  enable` failures after a successful bootstrap fail the install instead of
+enable` failures after a successful bootstrap fail the install instead of
   reporting `loaded: true` while the agent stays disabled (SPEC-PRD-0020-P1
   T-01 remediation).
 - **sdlc-workflow:** per-workspace event daemon skeleton (SPEC-PRD-0020-P1
@@ -525,7 +530,7 @@ prd-lint --prd <id> --docs-dir <dir>` — validates a PRD parses cleanly with
   `docs/addi-pr-automation-standard.md` + hardened
   `addi-merge-on-approve.yml` (repository_dispatch / workflow_run / schedule)
   - `addi-merge-webhook` bridge; `pr-approve-watch` demoted to triage when GHA
-  is enabled. Each organization uses its own Addi App Client ID + PEM
+    is enabled. Each organization uses its own Addi App Client ID + PEM
     under the same Action variable names.
 - **team-setup:** add `addi-authorship` rule — agent PRs/issues must be created
   as the workspace GitHub App (Addi); verify `viewer.login` before create; never
