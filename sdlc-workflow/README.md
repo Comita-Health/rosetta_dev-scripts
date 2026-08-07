@@ -726,7 +726,10 @@ Handler / Service / Repository with InversifyJS (workspace rule):
   (creates require Addi).
 - `utils/gh-auth.ts` / `utils/gh-cli.ts` — shared `gh` runner; mutating
   calls mint/reuse an Addi installation token (`SDLC_GH_ACTIVATE` /
-  `ROSETTA_GH_ACTIVATE` / `~/.config/*/github-app-activate.sh`).
+  `ROSETTA_GH_ACTIVATE` / `~/.config/*/github-app-activate.sh`). The script is
+  selected by the **owner being written to** — a workspace App is installed on
+  its own org only, so the wrong one authenticates and then fails the write
+  with `Resource not accessible by integration`.
 - `utils/gh-repo.ts` — `owner/repo` of the checkout's `origin`. Every `gh`
   call pins `--repo` to it: on a fork, an unqualified call resolves against
   the **upstream parent**, but task branches are pushed to `origin`, so PR

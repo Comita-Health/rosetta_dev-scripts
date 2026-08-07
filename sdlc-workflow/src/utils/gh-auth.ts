@@ -3,16 +3,44 @@ import { existsSync, readdirSync } from 'fs';
 import * as path from 'path';
 import { WorkflowError } from '../types';
 
+/** Activate scripts under ~/.config/<workspace>/, by workspace name. */
+const configuredWorkspaces = (
+  home: string
+): Array<{ name: string; script: string }> => {
+  const configRoot = path.join(home, '.config');
+  if (!existsSync(configRoot)) {
+    return [];
+  }
+  return readdirSync(configRoot, { withFileTypes: true })
+    .filter(entry => entry.isDirectory())
+    .map(entry => ({
+      name: entry.name,
+      script: path.join(configRoot, entry.name, 'github-app-activate.sh')
+    }))
+    .filter(entry => existsSync(entry.script))
+    .sort((left, right) => left.name.localeCompare(right.name));
+};
+
 /**
  * Resolve the workspace GitHub App activate script for mutating gh calls.
  *
- * Order matches the watch scripts (pr-approve-watch, etc.):
- * SDLC_GH_ACTIVATE -> ROSETTA_GH_ACTIVATE -> ~/.config/rosetta/... ->
- * first ~/.config/<workspace>/github-app-activate.sh.
+ * @param owner - GitHub owner the write targets. A workspace's App is
+ * installed on that workspace's org only, so writing to `Comita-Health` with
+ * the `rosetta` App fails `Resource not accessible by integration` — a
+ * permission error that reads like a missing grant but is the wrong App.
+ * When `owner` is given, a workspace whose directory name prefixes it
+ * (`comita` for `Comita-Health`) is preferred, longest match first.
+ *
+ * @remarks
+ * Explicit env overrides still win, so a caller that knows better than the
+ * name heuristic can say so. Without an `owner` the order is unchanged:
+ * SDLC_GH_ACTIVATE -> ROSETTA_GH_ACTIVATE -> ~/.config/rosetta/... -> first
+ * ~/.config/<workspace>/github-app-activate.sh.
  */
 export const discoverActivateScript = (
   home = process.env.HOME ?? '',
-  env: NodeJS.ProcessEnv = process.env
+  env: NodeJS.ProcessEnv = process.env,
+  owner?: string
 ): string | null => {
   for (const key of ['SDLC_GH_ACTIVATE', 'ROSETTA_GH_ACTIVATE'] as const) {
     const candidate = env[key];
@@ -27,6 +55,18 @@ export const discoverActivateScript = (
     return null;
   }
 
+  const workspaces = configuredWorkspaces(home);
+
+  if (owner !== undefined && owner.length > 0) {
+    const target = owner.toLowerCase();
+    const matched = workspaces
+      .filter(entry => target.startsWith(entry.name.toLowerCase()))
+      .sort((left, right) => right.name.length - left.name.length)[0];
+    if (matched !== undefined) {
+      return matched.script;
+    }
+  }
+
   const rosetta = path.join(
     home,
     '.config',
@@ -37,20 +77,7 @@ export const discoverActivateScript = (
     return rosetta;
   }
 
-  const configRoot = path.join(home, '.config');
-  if (!existsSync(configRoot)) {
-    return null;
-  }
-
-  const matches = readdirSync(configRoot, { withFileTypes: true })
-    .filter(entry => entry.isDirectory())
-    .map(entry =>
-      path.join(configRoot, entry.name, 'github-app-activate.sh')
-    )
-    .filter(candidate => existsSync(candidate))
-    .sort();
-
-  return matches.length > 0 ? matches[0] : null;
+  return workspaces.length > 0 ? workspaces[0].script : null;
 };
 
 /** True for Addi bot logins (addi-m[bot], app/addi-m, rosetta-s-addi-m[bot], ...). */
@@ -60,10 +87,7 @@ export const isAddiLogin = (login: string): boolean => /addi/i.test(login);
  * GraphQL viewer login under env. Installation tokens often 403 on
  * GET /user, so this uses the same viewer query operators already use.
  */
-export const viewerLogin = (
-  env: NodeJS.ProcessEnv,
-  cwd?: string
-): string => {
+export const viewerLogin = (env: NodeJS.ProcessEnv, cwd?: string): string => {
   const raw = execSync(
     "gh api graphql -f query='query { viewer { login } }' --jq '.data.viewer.login'",
     {
@@ -83,8 +107,7 @@ const mintInstallationToken = (activateScript: string): string => {
   );
   if (!existsSync(tokenScript)) {
     throw new WorkflowError(
-      'GitHub App token script missing next to activate script: ' +
-        tokenScript,
+      'GitHub App token script missing next to activate script: ' + tokenScript,
       'GH_NOT_ADDI',
       [activateScript]
     );
@@ -114,23 +137,37 @@ const mintInstallationToken = (activateScript: string): string => {
  * the activate/token scripts mint an installation token. Refusal to land on
  * Addi fails loud with WorkflowError code GH_NOT_ADDI rather than
  * falling through to the human.
+ *
+ * `options.owner` is the GitHub owner being written to. Being Addi is not
+ * sufficient when several workspaces each have their own App: the ambient
+ * session can be a *different* org's Addi, which authenticates fine and then
+ * fails the write with `Resource not accessible by integration`. So when an
+ * owner-specific activate script exists, its token is minted in preference to
+ * reusing whatever Addi the ambient session happens to hold.
  */
 export const envForAddiWrite = (
   baseEnv: NodeJS.ProcessEnv = process.env,
-  options: { home?: string; cwd?: string } = {}
+  options: { home?: string; cwd?: string; owner?: string } = {}
 ): NodeJS.ProcessEnv => {
   const home = options.home ?? baseEnv.HOME ?? process.env.HOME ?? '';
+  const activate = discoverActivateScript(home, baseEnv, options.owner);
+  const ownerScoped =
+    options.owner !== undefined &&
+    options.owner.length > 0 &&
+    activate !== null &&
+    discoverActivateScript(home, baseEnv) !== activate;
 
-  try {
-    const current = viewerLogin(baseEnv, options.cwd);
-    if (isAddiLogin(current)) {
-      return { ...baseEnv };
+  if (ownerScoped === false) {
+    try {
+      const current = viewerLogin(baseEnv, options.cwd);
+      if (isAddiLogin(current)) {
+        return { ...baseEnv };
+      }
+    } catch {
+      // Ambient session missing or unusable - try App activation below.
     }
-  } catch {
-    // Ambient session missing or unusable - try App activation below.
   }
 
-  const activate = discoverActivateScript(home, baseEnv);
   if (activate === null) {
     throw new WorkflowError(
       'Refusing gh write as ambient human auth - no GitHub App activate script found (set SDLC_GH_ACTIVATE or install ~/.config/<workspace>/github-app-activate.sh)',

@@ -14,6 +14,16 @@
   checks were green on the fork, and escalation issues landed on the wrong
   repository. `originSlug` resolves the remote once per checkout and fails
   loud rather than letting `gh` choose a repository the caller did not intend.
+- **sdlc-workflow:** the Addi activate script is now chosen by the **owner
+  being written to**, not by discovery order. A workspace's GitHub App is
+  installed on that workspace's org only, so a run in a `Comita-Health`
+  checkout that minted the `rosetta` App authenticated fine and then failed
+  the write with `Resource not accessible by integration` — a permission error
+  that reads like a missing grant but is the wrong App. Being Addi is likewise
+  not sufficient to reuse the ambient session, since that session can hold a
+  different org's Addi; when an owner-scoped script exists its token is minted
+  in preference. Explicit `SDLC_GH_ACTIVATE` / `ROSETTA_GH_ACTIVATE` overrides
+  still win.
 - **SPEC-PRD-0020-P1 T-04:** the poll-scheduler agent acceptance criterion
   required an Approve event on a watched PR to surface as a wake against a
   running daemon. That could never hold inside T-04: the `pr-review` adapter is
