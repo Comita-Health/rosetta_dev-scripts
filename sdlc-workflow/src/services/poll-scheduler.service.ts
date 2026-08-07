@@ -1,7 +1,7 @@
 import { inject, injectable } from 'inversify';
 import type { IDaemonStoreRepository } from '../repositories/daemon-store.repository';
 import { WORKFLOW_TOKENS } from '../tokens';
-import type { ActiveWatch, DurableWatchRecord } from '../types';
+import type { ActiveWatch, DurableWatchRecord, WatchKind } from '../types';
 import type { IWatchRegistryService } from './watch-registry.service';
 import type {
   IWatchSourceAdapterRegistry,
@@ -10,6 +10,8 @@ import type {
 
 export const DEFAULT_POLL_FAILURE_CAP = 3;
 export const DEFAULT_POLL_LEASE_MILLISECONDS = 5 * 60 * 1_000;
+/** Floor on the timer interval, so a 1-second watch cannot become a hot loop. */
+export const MINIMUM_POLL_TICK_MILLISECONDS = 1_000;
 
 export interface PollTickOptions {
   failureCap?: number;
@@ -17,9 +19,17 @@ export interface PollTickOptions {
 }
 
 export interface IPollSchedulerService {
+  /**
+   * Arm the loop, evaluating watches at least as often as the shortest
+   * declared cadence among them.
+   *
+   * @param maxTickSeconds - Idle cadence ceiling (the daemon's
+   * `defaultPollSeconds`): the timer never sleeps longer than this, and
+   * sleeps less when a watch declares a shorter `pollSeconds`.
+   */
   start(
     workspaceRoot: string,
-    tickSeconds: number,
+    maxTickSeconds: number,
     options?: PollTickOptions
   ): void;
   tick(workspaceRoot: string, options?: PollTickOptions): Promise<void>;
@@ -29,14 +39,31 @@ export interface IPollSchedulerService {
 /**
  * Cadence-aware watch poller with one durable in-flight lease per watch.
  *
+ * Each tick evaluates every active watch against *its own* `pollSeconds`, and
+ * the timer between ticks is the shortest cadence among the active watches
+ * (bounded below by {@link MINIMUM_POLL_TICK_MILLISECONDS} and above by the
+ * caller's ceiling). A watch that polls faster than the daemon's default
+ * cadence is therefore still visited on the cadence it declared.
+ *
  * Adapter signals are committed through the daemon store's permanent wake
  * ledger before poll success is recorded. A crash after that commit causes
  * the next poll to rediscover the same adapter signal, whose stable id maps
  * back to the original wake rather than publishing another.
+ *
+ * A watch whose kind has no registered source adapter is skipped, not failed:
+ * a missing adapter is a composition gap, not a signal-source fault, so it
+ * must not consume the watch's bounded failure budget or degrade it. While the
+ * adapter registry is empty the loop does no polling work at all — it says so
+ * once and keeps its timer, so registering an adapter (SPEC-PRD-0020-P1 T-05)
+ * starts polling from the next tick with no watch having been degraded in the
+ * meantime.
  */
 @injectable()
 export class PollSchedulerService implements IPollSchedulerService {
-  private _timer: ReturnType<typeof setInterval> | null = null;
+  private _timer: ReturnType<typeof setTimeout> | null = null;
+  private _running = false;
+  private _reportedEmptyRegistry = false;
+  private readonly _reportedMissingKinds = new Set<WatchKind>();
 
   constructor(
     @inject(WORKFLOW_TOKENS.WatchRegistryService)
@@ -49,20 +76,17 @@ export class PollSchedulerService implements IPollSchedulerService {
 
   start(
     workspaceRoot: string,
-    tickSeconds: number,
+    maxTickSeconds: number,
     options: PollTickOptions = {}
   ): void {
-    if (Number.isSafeInteger(tickSeconds) === false || tickSeconds <= 0) {
+    if (Number.isSafeInteger(maxTickSeconds) === false || maxTickSeconds <= 0) {
       throw new TypeError(
-        'Poll scheduler tickSeconds must be a positive integer'
+        'Poll scheduler maxTickSeconds must be a positive integer'
       );
     }
     this.stop();
-    void this.runTick(workspaceRoot, options);
-    this._timer = setInterval(
-      () => void this.runTick(workspaceRoot, options),
-      tickSeconds * 1_000
-    );
+    this._running = true;
+    void this.cycle(workspaceRoot, maxTickSeconds, options);
   }
 
   async tick(
@@ -74,7 +98,7 @@ export class PollSchedulerService implements IPollSchedulerService {
       options.leaseMilliseconds ?? DEFAULT_POLL_LEASE_MILLISECONDS;
     const due = this._watches
       .list(workspaceRoot)
-      .filter(watch => this.isDue(watch));
+      .filter(watch => this.isDue(watch) && this.hasAdapter(watch.kind));
     await Promise.all(
       due.map(watch =>
         this.pollWatch(workspaceRoot, watch, failureCap, leaseMilliseconds)
@@ -83,10 +107,35 @@ export class PollSchedulerService implements IPollSchedulerService {
   }
 
   stop(): void {
+    this._running = false;
     if (this._timer !== null) {
-      clearInterval(this._timer);
+      clearTimeout(this._timer);
       this._timer = null;
     }
+  }
+
+  /** One tick plus the timer for the next one, re-derived from live cadences. */
+  private async cycle(
+    workspaceRoot: string,
+    maxTickSeconds: number,
+    options: PollTickOptions
+  ): Promise<void> {
+    if (this._adapters.kinds().length === 0) {
+      // Nothing can be polled yet, and polling anyway would spend every
+      // watch's failure budget on the daemon's own wiring gap. The loop keeps
+      // its timer so registration picks up from the next tick onwards.
+      this.reportEmptyRegistry();
+    } else {
+      this._reportedEmptyRegistry = false;
+      await this.runTick(workspaceRoot, options);
+    }
+    if (this._running === false) {
+      return;
+    }
+    this._timer = setTimeout(
+      () => void this.cycle(workspaceRoot, maxTickSeconds, options),
+      this.nextTickMilliseconds(workspaceRoot, maxTickSeconds)
+    );
   }
 
   private async runTick(
@@ -99,6 +148,63 @@ export class PollSchedulerService implements IPollSchedulerService {
       const detail = error instanceof Error ? error.message : String(error);
       console.error(`[poll-scheduler] tick failed: ${detail}`);
     }
+  }
+
+  /**
+   * Sleep no longer than the shortest cadence any active watch declares, so
+   * per-watch cadence — not the daemon default — sets the evaluation rate.
+   * Falls back to the ceiling when the registry cannot be read; an unreadable
+   * registry is already reported by the tick itself.
+   */
+  private nextTickMilliseconds(
+    workspaceRoot: string,
+    maxTickSeconds: number
+  ): number {
+    const ceiling = maxTickSeconds * 1_000;
+    if (this._adapters.kinds().length === 0) {
+      // Nothing to poll: wake on the daemon's own cadence, not a watch's.
+      return ceiling;
+    }
+    let cadences: number[];
+    try {
+      cadences = this._watches
+        .list(workspaceRoot)
+        .filter(watch => watch.degradedAt === null)
+        .map(watch => watch.pollSeconds * 1_000);
+    } catch {
+      return ceiling;
+    }
+    return Math.max(
+      MINIMUM_POLL_TICK_MILLISECONDS,
+      Math.min(ceiling, ...cadences)
+    );
+  }
+
+  /** Say once, not every tick, that there is nothing to poll with. */
+  private reportEmptyRegistry(): void {
+    if (this._reportedEmptyRegistry === true) {
+      return;
+    }
+    this._reportedEmptyRegistry = true;
+    console.error(
+      '[poll-scheduler] no watch source adapters are registered; watches stay ' +
+        'registered and unpolled until source adapters are wired in'
+    );
+  }
+
+  private hasAdapter(kind: WatchKind): boolean {
+    if (this._adapters.get(kind) !== null) {
+      this._reportedMissingKinds.delete(kind);
+      return true;
+    }
+    if (this._reportedMissingKinds.has(kind) === false) {
+      this._reportedMissingKinds.add(kind);
+      console.error(
+        `[poll-scheduler] no source adapter registered for ${kind}; ` +
+          'its watches stay registered and unpolled'
+      );
+    }
+    return false;
   }
 
   private isDue(watch: ActiveWatch): boolean {
@@ -135,7 +241,7 @@ export class PollSchedulerService implements IPollSchedulerService {
       }
       const adapter = this._adapters.get(watch.kind);
       if (adapter === null) {
-        throw new Error(`No source adapter registered for ${watch.kind}`);
+        return;
       }
       const result = await adapter.poll(watch);
       for (const signal of result.signals) {

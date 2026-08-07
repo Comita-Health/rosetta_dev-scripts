@@ -36,6 +36,12 @@ export interface WakeWriteResult {
 export interface PollLease {
   watchId: string;
   token: string;
+  /**
+   * Monotonic sequence number of this lease for its watch. It is part of the
+   * lease's filename, which is what makes acquisition a compare-and-swap
+   * rather than a check-then-write.
+   */
+  generation: number;
   acquiredAt: string;
   expiresAt: string;
 }
@@ -92,12 +98,53 @@ const requireWorkspaceRoot = (workspaceRoot: string): string => {
  * contains separators that are not legal in a filename. Hashing gives a flat,
  * collision-free, traversal-proof name without encoding rules to get wrong.
  */
-const recordFile = (directory: string, id: string): string => {
+const recordName = (id: string): string => {
   if (typeof id !== 'string' || id.length === 0) {
     throw new TypeError('Daemon store record ID must be non-empty');
   }
-  const filename = createHash('sha256').update(id).digest('hex');
-  return path.join(directory, `${filename}${JSON_SUFFIX}`);
+  return createHash('sha256').update(id).digest('hex');
+};
+
+const recordFile = (directory: string, id: string): string =>
+  path.join(directory, `${recordName(id)}${JSON_SUFFIX}`);
+
+/** Width of the generation field, zero-padded so filenames sort numerically. */
+const LEASE_GENERATION_DIGITS = 12;
+const MAX_LEASE_GENERATION = 10 ** LEASE_GENERATION_DIGITS - 1;
+
+/**
+ * `<sha256(watchId)>.<generation>.json`.
+ *
+ * The generation is in the *name*, not only the contents, so "take the lease
+ * that follows the one I observed" is a single exclusive `link(2)` on a name
+ * only one process can create.
+ */
+const leaseFile = (
+  directory: string,
+  watchId: string,
+  generation: number
+): string => {
+  if (
+    Number.isSafeInteger(generation) === false ||
+    generation <= 0 ||
+    generation > MAX_LEASE_GENERATION
+  ) {
+    throw new TypeError('Poll lease generation must be a positive integer');
+  }
+  const padded = String(generation).padStart(LEASE_GENERATION_DIGITS, '0');
+  return path.join(directory, `${recordName(watchId)}.${padded}${JSON_SUFFIX}`);
+};
+
+/** Generations present on disk for one watch, highest first. */
+const leaseGenerations = (directory: string, watchId: string): number[] => {
+  const prefix = `${recordName(watchId)}.`;
+  return readdirSync(directory)
+    .filter(name => name.startsWith(prefix) && name.endsWith(JSON_SUFFIX))
+    .map(name =>
+      Number(name.slice(prefix.length, name.length - JSON_SUFFIX.length))
+    )
+    .filter(generation => Number.isSafeInteger(generation) && generation > 0)
+    .sort((left, right) => right - left);
 };
 
 /**
@@ -223,6 +270,7 @@ const linkIfAbsent = (existing: string, additional: string): void => {
  *
  * ```text
  * watches/<sha256(watchId)>.json   one registration per file
+ * poll-leases/<sha256(watchId)>.<generation>.json  in-flight poll lease
  * wake/records/<wakeId>.json       the wake ledger — written once, never removed
  * wake/pending/<wakeId>.json       hard link to the ledger entry: unclaimed
  * wake/consumed/<wakeId>.json      that same link, renamed by the winning claim
@@ -338,12 +386,28 @@ export class DaemonStoreRepository implements IDaemonStoreRepository {
   }
 
   /**
-   * Acquire one expiring lease for a watch without a check-then-write race.
+   * Acquire one expiring lease for a watch, or report that another holder has
+   * it.
    *
-   * The canonical lease file is published through the same exclusive
-   * hard-link primitive as wake records, so overlapping ticks have exactly
-   * one winner. An expired lease is removed before one retry, allowing a new
-   * daemon process to recover work abandoned by a crash.
+   * @remarks
+   * Acquisition is a compare-and-swap on the lease *filename*: the current
+   * lease is the highest generation present for the watch, and taking the
+   * lease means exclusively creating generation + 1 through the same
+   * `link(2)` primitive as wake records. Because a name can be created once,
+   * two overlapping ticks that both observe generation `g` cannot both create
+   * `g + 1` — exactly one wins and the loser is told the lease is held.
+   *
+   * This is what makes recovery from an abandoned lease safe. Reclaiming an
+   * expired lease *adds* a generation instead of removing the expired file,
+   * so no code path ever unlinks a lease it does not own, and a lease
+   * acquired between another caller's expiry check and its own next syscall
+   * cannot be destroyed by it. Superseded generations are pruned afterwards
+   * purely to keep the directory small; they are already invisible to every
+   * reader, which selects the highest generation.
+   *
+   * @returns the acquired lease, or null when a live lease is held or a
+   * concurrent caller won the same generation.
+   * @throws TypeError when `leaseMilliseconds` is not a positive integer.
    */
   tryAcquirePollLease(
     workspaceRoot: string,
@@ -358,64 +422,68 @@ export class DaemonStoreRepository implements IDaemonStoreRepository {
     }
     const directory = this.paths(workspaceRoot).pollLeases;
     mkdirSync(directory, { recursive: true });
-    const file = recordFile(directory, watchId);
 
-    const acquire = (): PollLease | null => {
-      const acquiredAt = new Date().toISOString();
-      const lease: PollLease = {
+    // One retry covers the benign case where the observed generation is
+    // pruned by its own successor's cleanup between the scan and the read.
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const current = leaseGenerations(directory, watchId)[0] ?? 0;
+      if (current > 0) {
+        let held: PollLease;
+        try {
+          held = parseRecord<PollLease>(leaseFile(directory, watchId, current));
+        } catch (error) {
+          if (isErrorCode(error, 'ENOENT') === true) {
+            continue;
+          }
+          throw error;
+        }
+        if (Date.parse(held.expiresAt) > Date.now()) {
+          return null;
+        }
+      }
+      if (current >= MAX_LEASE_GENERATION) {
+        throw new Error(
+          `Poll lease generations for ${watchId} are exhausted; remove ${directory}`
+        );
+      }
+      const lease = this.publishLease(
+        directory,
         watchId,
-        token: randomBytes(16).toString('hex'),
-        acquiredAt,
-        expiresAt: new Date(
-          Date.parse(acquiredAt) + leaseMilliseconds
-        ).toISOString()
-      };
-      return writeFileExclusiveAtomic(
-        file,
-        `${JSON.stringify(lease, null, 2)}\n`
-      )
-        ? lease
-        : null;
-    };
-
-    const lease = acquire();
-    if (lease !== null) {
+        current + 1,
+        leaseMilliseconds
+      );
+      if (lease === null) {
+        // Someone else created this generation: they are the holder now.
+        return null;
+      }
+      this.pruneLeases(directory, watchId, lease.generation);
       return lease;
     }
-    let existing: PollLease;
-    try {
-      existing = parseRecord<PollLease>(file);
-    } catch (error) {
-      if (isErrorCode(error, 'ENOENT') === true) {
-        return acquire();
-      }
-      throw error;
-    }
-    if (Date.parse(existing.expiresAt) > Date.now()) {
-      return null;
-    }
-    try {
-      unlinkSync(file);
-      syncDirectory(directory);
-    } catch (error) {
-      if (isErrorCode(error, 'ENOENT') === false) {
-        throw error;
-      }
-    }
-    return acquire();
+    return null;
   }
 
   /**
-   * Release only the lease represented by `token`; a late completion can
-   * never remove a successor lease acquired after its own expiry.
+   * Release only the exact lease that was acquired — its own generation *and*
+   * its own token.
+   *
+   * @remarks
+   * A late completion whose lease already expired therefore cannot remove the
+   * successor lease that replaced it: the successor lives under a different
+   * generation filename, and even a resurrected generation number carries a
+   * different token. Releasing an already-released lease is a no-op.
    */
   releasePollLease(workspaceRoot: string, lease: PollLease): void {
     const directory = this.paths(workspaceRoot).pollLeases;
-    const file = recordFile(directory, lease.watchId);
-    if (existsSync(file) === false) {
-      return;
+    const file = leaseFile(directory, lease.watchId, lease.generation);
+    let current: PollLease;
+    try {
+      current = parseRecord<PollLease>(file);
+    } catch (error) {
+      if (isErrorCode(error, 'ENOENT') === true) {
+        return;
+      }
+      throw error;
     }
-    const current = parseRecord<PollLease>(file);
     if (current.token !== lease.token) {
       return;
     }
@@ -426,6 +494,59 @@ export class DaemonStoreRepository implements IDaemonStoreRepository {
       if (isErrorCode(error, 'ENOENT') === false) {
         throw error;
       }
+    }
+  }
+
+  /** Exclusively create one generation of a watch's lease. */
+  private publishLease(
+    directory: string,
+    watchId: string,
+    generation: number,
+    leaseMilliseconds: number
+  ): PollLease | null {
+    const acquiredAt = new Date().toISOString();
+    const lease: PollLease = {
+      watchId,
+      token: randomBytes(16).toString('hex'),
+      generation,
+      acquiredAt,
+      expiresAt: new Date(
+        Date.parse(acquiredAt) + leaseMilliseconds
+      ).toISOString()
+    };
+    return writeFileExclusiveAtomic(
+      leaseFile(directory, watchId, generation),
+      `${JSON.stringify(lease, null, 2)}\n`
+    )
+      ? lease
+      : null;
+  }
+
+  /**
+   * Drop generations below `generation`, which no reader can select any more.
+   *
+   * Housekeeping only: a failure here leaves inert files behind, so it must
+   * never fail an acquisition that already succeeded.
+   */
+  private pruneLeases(
+    directory: string,
+    watchId: string,
+    generation: number
+  ): void {
+    for (const stale of leaseGenerations(directory, watchId)) {
+      if (stale >= generation) {
+        continue;
+      }
+      try {
+        unlinkSync(leaseFile(directory, watchId, stale));
+      } catch {
+        // Already gone, or not ours to remove.
+      }
+    }
+    try {
+      syncDirectory(directory);
+    } catch {
+      // Pruning is best effort; the lease itself is already durable.
     }
   }
 

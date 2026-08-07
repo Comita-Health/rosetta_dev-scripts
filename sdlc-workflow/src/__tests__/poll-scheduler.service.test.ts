@@ -48,11 +48,13 @@ const deferred = <T>(): {
 
 const setup = (
   adapter: IWatchSourceAdapter,
-  store: DaemonStoreRepository = new DaemonStoreRepository()
+  store: DaemonStoreRepository = new DaemonStoreRepository(),
+  pollSeconds = 30
 ): {
   workspace: string;
   store: DaemonStoreRepository;
   watches: WatchRegistryService;
+  adapters: WatchSourceAdapterRegistry;
   scheduler: PollSchedulerService;
 } => {
   const workspace = mkdtempSync(path.join(os.tmpdir(), 'poll-scheduler-'));
@@ -60,7 +62,7 @@ const setup = (
   watches.register(workspace, {
     kind: 'pr-review',
     target: { repo: 'owner/repo', number: 42 },
-    pollSeconds: 30,
+    pollSeconds,
     createdBy: 'test'
   });
   const adapters = new WatchSourceAdapterRegistry();
@@ -69,6 +71,7 @@ const setup = (
     workspace,
     store,
     watches,
+    adapters,
     scheduler: new PollSchedulerService(watches, store, adapters)
   };
 };
@@ -191,26 +194,167 @@ describe('PollSchedulerService', () => {
     expect(adapter.poll).toHaveBeenCalledTimes(2);
   });
 
-  it('records missing adapters and malformed signals as bounded failures', async () => {
-    expect(new WatchSourceAdapterRegistry().get('issue-state')).toBeNull();
-    const missingAdapter = {
-      get: jest.fn().mockReturnValue(null)
-    };
-    const missingSetup = setup({
+  it('evaluates a watch whose cadence is shorter than the tick ceiling', async () => {
+    const adapter: IWatchSourceAdapter = {
       poll: jest.fn().mockResolvedValue({ signals: [] })
-    });
-    const missingScheduler = new PollSchedulerService(
-      missingSetup.watches,
-      missingSetup.store,
-      missingAdapter
+    };
+    const { workspace, scheduler } = setup(
+      adapter,
+      new DaemonStoreRepository(),
+      5
     );
 
-    await missingScheduler.tick(missingSetup.workspace);
-    expect(missingSetup.watches.list(missingSetup.workspace)[0]).toMatchObject({
-      consecutiveFailures: 1,
-      lastError: 'No source adapter registered for pr-review'
-    });
+    scheduler.start(workspace, 30);
+    await jest.advanceTimersByTimeAsync(0);
+    expect(adapter.poll).toHaveBeenCalledTimes(1);
 
+    await jest.advanceTimersByTimeAsync(5_000);
+    expect(adapter.poll).toHaveBeenCalledTimes(2);
+    await jest.advanceTimersByTimeAsync(5_000);
+    expect(adapter.poll).toHaveBeenCalledTimes(3);
+
+    scheduler.stop();
+  });
+
+  it('skips a kind with no adapter instead of degrading its watches', async () => {
+    expect(new WatchSourceAdapterRegistry().get('issue-state')).toBeNull();
+    const consoleError = jest
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined);
+    const configured = setup({
+      poll: jest.fn().mockResolvedValue({ signals: [] })
+    });
+    const empty = new WatchSourceAdapterRegistry();
+    const scheduler = new PollSchedulerService(
+      configured.watches,
+      configured.store,
+      empty
+    );
+
+    for (let attempt = 0; attempt <= DEFAULT_POLL_FAILURE_CAP; attempt += 1) {
+      await scheduler.tick(configured.workspace);
+      jest.advanceTimersByTime(30_000);
+    }
+
+    expect(configured.watches.list(configured.workspace)[0]).toMatchObject({
+      consecutiveFailures: 0,
+      lastError: null,
+      degradedAt: null
+    });
+    expect(consoleError).toHaveBeenCalledTimes(1);
+
+    // A running loop over an empty registry polls nothing at all, and says so
+    // once rather than on every tick.
+    scheduler.start(configured.workspace, 30);
+    await jest.advanceTimersByTimeAsync(90_000);
+    expect(configured.watches.list(configured.workspace)[0]).toMatchObject({
+      consecutiveFailures: 0,
+      degradedAt: null
+    });
+    expect(consoleError).toHaveBeenCalledTimes(2);
+
+    // Registering an adapter later starts polling that same healthy watch.
+    const adapter: IWatchSourceAdapter = {
+      poll: jest.fn().mockResolvedValue(signalResult)
+    };
+    empty.register('pr-review', adapter);
+    expect(empty.kinds()).toEqual(['pr-review']);
+    await jest.advanceTimersByTimeAsync(30_000);
+    scheduler.stop();
+
+    expect(adapter.poll).toHaveBeenCalledTimes(1);
+    expect(
+      configured.store.listPendingWakes(configured.workspace)
+    ).toHaveLength(1);
+    consoleError.mockRestore();
+  });
+
+  it('does not rearm its timer when stopped mid-tick', async () => {
+    const pending = deferred<WatchSourcePollResult>();
+    const adapter: IWatchSourceAdapter = {
+      poll: jest.fn().mockReturnValue(pending.promise)
+    };
+    const { workspace, scheduler } = setup(
+      adapter,
+      new DaemonStoreRepository(),
+      5
+    );
+
+    scheduler.start(workspace, 30);
+    await jest.advanceTimersByTimeAsync(0);
+    expect(adapter.poll).toHaveBeenCalledTimes(1);
+
+    scheduler.stop();
+    pending.resolve({ signals: [] });
+    await jest.advanceTimersByTimeAsync(60_000);
+    expect(adapter.poll).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips a watch whose adapter disappears after the lease is taken', async () => {
+    const adapter: IWatchSourceAdapter = {
+      poll: jest.fn().mockResolvedValue(signalResult)
+    };
+    const configured = setup(adapter);
+    const racing = {
+      kinds: jest.fn().mockReturnValue(['pr-review']),
+      get: jest.fn().mockReturnValueOnce(adapter).mockReturnValue(null)
+    };
+    const scheduler = new PollSchedulerService(
+      configured.watches,
+      configured.store,
+      racing
+    );
+
+    await scheduler.tick(configured.workspace);
+
+    expect(adapter.poll).not.toHaveBeenCalled();
+    expect(configured.watches.list(configured.workspace)[0]).toMatchObject({
+      consecutiveFailures: 0,
+      degradedAt: null
+    });
+    // The lease is released, so the next tick can still poll the watch.
+    expect(
+      configured.store.tryAcquirePollLease(
+        configured.workspace,
+        configured.watches.list(configured.workspace)[0].id,
+        1_000
+      )
+    ).not.toBeNull();
+  });
+
+  it('publishes a watched Approve as a wake within one poll interval', async () => {
+    let approved = false;
+    const adapter: IWatchSourceAdapter = {
+      poll: jest
+        .fn()
+        .mockImplementation(async () =>
+          approved ? signalResult : { signals: [] }
+        )
+    };
+    const { workspace, store, scheduler } = setup(
+      adapter,
+      new DaemonStoreRepository(),
+      5
+    );
+
+    scheduler.start(workspace, 30);
+    await jest.advanceTimersByTimeAsync(0);
+    expect(store.listPendingWakes(workspace)).toEqual([]);
+
+    approved = true;
+    await jest.advanceTimersByTimeAsync(5_000);
+    scheduler.stop();
+
+    const wakes = store.listPendingWakes(workspace);
+    expect(wakes).toHaveLength(1);
+    expect(wakes[0]).toMatchObject({
+      kind: 'pr-review',
+      signal: 'review-123:APPROVED',
+      prompt: 'PR approved'
+    });
+  });
+
+  it('records malformed signals as bounded failures', async () => {
     const malformedAdapter: IWatchSourceAdapter = {
       poll: jest
         .fn()

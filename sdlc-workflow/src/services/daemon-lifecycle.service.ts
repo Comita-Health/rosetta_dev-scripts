@@ -67,6 +67,8 @@ export class DaemonLifecycleService implements IDaemonLifecycleService {
     });
     try {
       if (this._poller !== undefined) {
+        // `defaultPollSeconds` is the idle ceiling, not the tick: a watch that
+        // declares a shorter cadence is still evaluated on its own cadence.
         this._poller.start(workspaceRoot, config.defaultPollSeconds);
       }
       await this._processRepo.waitForShutdown();

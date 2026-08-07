@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** add the daemon poll scheduler: every active watch is
+  evaluated on its own declared cadence (the daemon's `defaultPollSeconds` is
+  the idle ceiling, not the tick), each poll runs under an exclusive expiring
+  per-watch lease, and adapter signals are committed through the durable wake
+  ledger so an overlapping or retried poll cannot publish a second wake for one
+  source event. A lease is acquired by exclusively creating the generation after
+  the highest one on disk, so recovering a lease abandoned by a crash never
+  unlinks a lease it does not own. Adapter failures are bounded: at three
+  consecutive failures the watch is marked degraded and stops being retried
+  inline while staying visible to status. A kind with no registered source
+  adapter is skipped rather than failed, and the loop polls nothing at all until
+  adapters are registered, so no watch is degraded by the daemon's own wiring
+  (SPEC-PRD-0020-P1 T-04).
 - **sdlc-workflow:** add the workspace-scoped durable watch registry lifecycle
   API with deterministic kind/target deduplication, active-watch age and
   last-poll projections, explicit expiry, and automatic expiry when a poll

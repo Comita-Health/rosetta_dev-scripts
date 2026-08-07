@@ -24,6 +24,12 @@ export interface IWatchSourceAdapter {
 /** Late-bound adapter lookup keeps the scheduler source-agnostic. */
 export interface IWatchSourceAdapterRegistry {
   get(kind: WatchKind): IWatchSourceAdapter | null;
+  /**
+   * Kinds this registry can poll. The scheduler consults it before arming its
+   * timer, so a build with no adapters wired leaves watches registered and
+   * untouched instead of failing every one of them on the daemon's own gap.
+   */
+  kinds(): WatchKind[];
 }
 
 /**
@@ -42,5 +48,9 @@ export class WatchSourceAdapterRegistry implements IWatchSourceAdapterRegistry {
 
   get(kind: WatchKind): IWatchSourceAdapter | null {
     return this._adapters.get(kind) ?? null;
+  }
+
+  kinds(): WatchKind[] {
+    return [...this._adapters.keys()];
   }
 }

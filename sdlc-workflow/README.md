@@ -109,7 +109,8 @@ bun run dev -- queue-run --spec ../specs/PRD-0011/phase-4-spec.md --repo ..
 bun run dev -- status --queue
 
 # Per-workspace SDLC event daemon (SPEC-PRD-0020-P1 T-01/T-04) — process
-# bootstrap, durable storage, watch registry, and bounded poll scheduler.
+# bootstrap, durable storage, watch registry, and bounded poll scheduler. The
+# scheduler polls nothing until source adapters (T-05) are registered.
 # Config is `.sdlc/daemon.json` under the workspace root (DaemonConfig contract).
 # `install` creates `.sdlc/daemon/` + touches the log before launchd load;
 # load is transactional (enable failure → bootout + plist remove);
@@ -158,11 +159,32 @@ durably expires the record and removes it from subsequent active queries while
 retaining it on disk for audit.
 
 `PollSchedulerService` starts with the daemon and evaluates each active watch
-on its declared cadence. An exclusive, expiring file lease prevents overlapping
-ticks from polling the same watch concurrently. Adapter signals use the durable
-wake ledger, so a retry after interruption resolves to the original wake ID.
-Adapter failures are recorded per watch; after three consecutive failures the
-watch remains visible as degraded but is skipped by subsequent ticks.
+on its own declared cadence: the interval between ticks is the shortest
+`pollSeconds` among active watches, so `defaultPollSeconds` from
+`.sdlc/daemon.json` is the _idle ceiling_ rather than the tick, and a watch that
+asks to be polled faster than the default gets it.
+
+An exclusive, expiring lease keeps overlapping ticks off the same watch. Leases
+live at `poll-leases/<sha256(watchId)>.<generation>.json`, and taking one means
+exclusively creating the generation after the highest one on disk. Recovering a
+lease abandoned by a crashed poll therefore _adds_ a generation instead of
+removing the expired file, so no code path unlinks a lease it does not own and
+two concurrent recoveries cannot both end up holding the watch. A release only
+removes its own generation _and_ token, so a late completion can never drop a
+successor's lease.
+
+Adapter signals are committed through the durable wake ledger before poll
+success is recorded, so a retry after interruption resolves to the original wake
+ID. Adapter failures are recorded per watch; after three consecutive failures
+the watch remains visible as degraded but is skipped by subsequent ticks.
+
+A watch whose kind has no registered source adapter is _skipped, not failed_ — a
+missing adapter is a wiring gap, not a signal-source fault, so it neither
+consumes the watch's failure budget nor degrades it. While the adapter registry
+is empty the loop does no polling work at all: it logs that once and keeps its
+timer. Phase 1's GitHub adapters (SPEC-PRD-0020-P1 T-05, which depends on this
+task) register into `WatchSourceAdapterRegistry`, and polling starts from the
+next tick with no scheduler change and no watch degraded in the meantime.
 
 `decompose` grounds the synthesized envelope in the target repo tree (#35):
 every `allowedPaths` glob must match at least one existing path in the
