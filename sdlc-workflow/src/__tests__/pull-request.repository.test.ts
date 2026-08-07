@@ -1,16 +1,24 @@
 import 'reflect-metadata';
 
 jest.mock('child_process', () => ({ execSync: jest.fn() }));
+jest.mock('../utils/gh-auth', () => ({
+  envForAddiWrite: jest.fn(() => ({ ...process.env, GH_TOKEN: 'addi-test' }))
+}));
 
 import { execSync } from 'child_process';
 import { PullRequestRepository } from '../repositories/pull-request.repository';
+import { envForAddiWrite } from '../utils/gh-auth';
 
 const execMock = execSync as jest.Mock;
+const addiEnv = envForAddiWrite as jest.Mock;
 
 describe('PullRequestRepository (P3 T-02)', () => {
   const repo = new PullRequestRepository();
 
-  afterEach(() => execMock.mockReset());
+  afterEach(() => {
+    execMock.mockReset();
+    addiEnv.mockClear();
+  });
 
   it('finds the open PR for a branch', () => {
     execMock.mockReturnValue(
@@ -51,6 +59,8 @@ describe('PullRequestRepository (P3 T-02)', () => {
     expect(command).toContain('gh pr create --head "sdlc/run-1/T-01"');
     expect(command).toContain('--body-file -');
     expect(options.input).toBe('## Summary\nmachine-generated');
+    expect(addiEnv).toHaveBeenCalledTimes(1);
+    expect(options.env.GH_TOKEN).toBe('addi-test');
   });
 
   it('throws typed on gh failure with the tool output as detail', () => {

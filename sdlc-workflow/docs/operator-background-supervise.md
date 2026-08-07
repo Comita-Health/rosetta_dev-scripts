@@ -9,6 +9,10 @@ Each `run` invocation processes **one dependency wave**. After an enforce auto-m
 ## CLI
 
 ```bash
+# Activate Addi first so escalate issues / SDLC PRs are App-authored even if
+# ambient gh is the human (engine also refuses human auth on create).
+eval "$(bash ~/.config/comita/github-app-activate.sh)"   # or ~/.config/rosetta/…
+
 # Recommended operator / agent launch (likely future default for --supervise):
 bunx tsx src/index.ts run \
   --spec "$SPEC" \

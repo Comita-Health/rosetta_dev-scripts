@@ -525,7 +525,12 @@ export type WorkflowErrorCode =
   /** T-02: a state.json write was refused because the run is foreign-locked. */
   | 'RUN_LOCK_NOT_HELD'
   | 'GIT_FAILED'
-  | 'GH_FAILED';
+  | 'GH_FAILED'
+  /**
+   * Mutating `gh` (issue/PR create) refused to run as the ambient human login
+   * and could not activate an Addi GitHub App identity.
+   */
+  | 'GH_NOT_ADDI';
 
 export class WorkflowError extends Error {
   constructor(
