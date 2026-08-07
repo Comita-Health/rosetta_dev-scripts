@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** the engine now mints and refreshes its own GitHub token
+  instead of living on the one the operator exported at launch. A GitHub App
+  installation token is valid for 60 minutes; a detached supervised run lasts
+  hours. So roughly an hour into every long run the inherited token went 401
+  and took each consumer with it — `gh run watch` inside the repo-owned
+  sandbox script (recorded as `sandbox gate: breach - deploy command failed`
+  for a deploy workflow that had in fact succeeded), the CI gate's check-run
+  query (`checkRuns` swallows any error and returns `null`, which the gate
+  reports as `no CI results`), and the escalation `gh issue` call that was
+  supposed to tell a human about it. One expired credential surfaced as three
+  unrelated-looking gate failures and no issue, so a healthy PR sat unmergeable
+  with nothing on GitHub explaining why — the operator had to notice by hand.
+  Tokens are now cached per activate script and re-minted at 45 minutes, an
+  auth failure re-mints and retries once, and reads use the same identity as
+  writes so no code path is left on a separately-expiring credential.
+  Repo-owned subprocesses receive the refreshed token too, since they shell out
+  to `gh` themselves. Failure detail now includes `stderr`, which is where
+  `gh` puts the reason — reporting `message` alone reduced every failure to
+  `Command failed`.
 - **sdlc-workflow:** every `gh` call now pins `--repo` to the checkout's
   `origin` remote. On a fork, an unqualified `gh pr create` / `gh issue create`
   resolves against the fork's **upstream parent**, while the engine pushes task

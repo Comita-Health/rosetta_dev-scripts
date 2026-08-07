@@ -16,6 +16,11 @@ import {
 } from '../services/sandbox-deploy.service';
 import { WORKFLOW_TOKENS } from '../tokens';
 import { SandboxContract } from '../types';
+import { ghEnv } from '../utils/gh-cli';
+
+jest.mock('../utils/gh-cli', () => ({ ghEnv: jest.fn(() => ({})) }));
+
+const ghEnvMock = ghEnv as jest.Mock;
 
 const CONTRACT: SandboxContract = {
   deployCommand: './deploy-to-sandbox.sh',
@@ -49,6 +54,7 @@ describe('SandboxDeployService (T-03)', () => {
   });
 
   beforeEach(() => {
+    ghEnvMock.mockReset().mockReturnValue({});
     loadSandbox = jest.fn().mockReturnValue(CONTRACT);
     run = jest.fn().mockReturnValue({ ok: true, output: 'sha=abc123 healthy' });
     records = new DeployRecordRepository();
@@ -103,6 +109,32 @@ describe('SandboxDeployService (T-03)', () => {
     expect(outcome.verdict).toMatchObject({ gate: 'sandbox', outcome: 'pass' });
     expect(outcome.record).toMatchObject({ sha: 'abc123', status: 'healthy' });
     expect(outcome.healthReport).toBe('sha=abc123 healthy');
+  });
+
+  // The deploy and health scripts shell out to gh. Left to inherit this
+  // process's environment they get the token the operator exported at
+  // launch, which expires an hour in while the run keeps going — so a
+  // workflow that actually succeeded is reported as a failed deploy.
+  it('hands the deploy and health commands a refreshed gh token', async () => {
+    ghEnvMock.mockReturnValue({ GH_TOKEN: 'ghs_refreshed' });
+
+    await service.deploy({ worktreePath: '/wt', sha: 'abc123' });
+
+    for (const call of run.mock.calls) {
+      expect(call[2]).toMatchObject({
+        GH_TOKEN: 'ghs_refreshed',
+        GITHUB_TOKEN: 'ghs_refreshed'
+      });
+    }
+    expect(ghEnvMock).toHaveBeenCalledWith('/wt');
+  });
+
+  it('leaves the command environment alone when no gh token is available', async () => {
+    ghEnvMock.mockReturnValue({});
+
+    await service.deploy({ worktreePath: '/wt', sha: 'abc123' });
+
+    expect(run.mock.calls[0][2]).toEqual({ SDLC_SANDBOX_SHA: 'abc123' });
   });
 
   it('skips the deploy command when the same SHA is already healthy (idempotent no-op)', async () => {

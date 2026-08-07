@@ -4,6 +4,7 @@ import type { IDeployRecordRepository } from '../repositories/deploy-record.repo
 import type { IShellCommandRepository } from '../repositories/shell-command.repository';
 import { WORKFLOW_TOKENS } from '../tokens';
 import { DeployTrigger, GateVerdict, SandboxRecord } from '../types';
+import { ghEnv } from '../utils/gh-cli';
 
 export interface SandboxDeployInput {
   /** Worktree of the task branch — contract and commands run from here. */
@@ -176,6 +177,19 @@ export class SandboxDeployService implements ISandboxDeployService {
             SDLC_SANDBOX_SHA: input.sha,
             SDLC_SANDBOX_BASE_SHA: input.baseSha
           };
+
+    // The deploy and health commands are repo-owned scripts that call gh
+    // (workflow dispatch, run watch). They would otherwise inherit this
+    // process's token, which in a detached run is whatever the operator
+    // exported at launch and has expired long before a later task deploys -
+    // surfacing as "deploy command failed" for a workflow that in fact
+    // succeeded. Handing them a refreshed credential keeps the gate's
+    // verdict about the deploy rather than about our own auth.
+    const creds = ghEnv(input.worktreePath);
+    if (typeof creds.GH_TOKEN === 'string' && creds.GH_TOKEN.length > 0) {
+      env.GH_TOKEN = creds.GH_TOKEN;
+      env.GITHUB_TOKEN = creds.GH_TOKEN;
+    }
     const timeoutMs = contract.timeoutMinutes * 60_000;
     // Either source of truth counts as live. Run state keeps only the most
     // recent deploy, so a second trigger for content this run already shipped

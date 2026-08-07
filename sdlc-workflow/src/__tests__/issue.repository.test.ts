@@ -52,7 +52,11 @@ describe('IssueRepository (fail-loud T-04)', () => {
     expect(command).toContain('gh issue list');
     expect(command).toContain('in:title');
     expect(options.cwd).toBe('/repo');
-    expect(addiEnv).not.toHaveBeenCalled();
+    // Reads take the App identity too. Ambient auth in a detached run is the
+    // operator's launch-time token, which expires while the run continues -
+    // a lookup on that token 401s and the caller reads the failure as "no
+    // such issue", so escalation posts a duplicate.
+    expect(addiEnv).toHaveBeenCalled();
   });
 
   it('returns null when no exact title match exists', () => {
