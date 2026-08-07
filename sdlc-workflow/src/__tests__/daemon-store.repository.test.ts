@@ -18,11 +18,11 @@ import {
 } from '../repositories/daemon-store.repository';
 
 const watch: DurableWatchRecord = {
-  id: 'pr-review:owner/repo#42',
+  id: 'pr-review:{"repo":"owner/repo","number":42}',
   kind: 'pr-review',
-  target: 'owner/repo#42',
+  target: { repo: 'owner/repo', number: 42 },
   pollSeconds: 30,
-  creator: 'test',
+  createdBy: 'test',
   createdAt: '2026-08-07T10:00:00.000Z'
 };
 

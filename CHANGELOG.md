@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** add the workspace-scoped durable watch registry lifecycle
+  API with deterministic kind/target deduplication, active-watch age and
+  last-poll projections, explicit expiry, and automatic expiry when a poll
+  reports a terminal target state (SPEC-PRD-0020-P1 T-03).
 - **sdlc-workflow:** add the per-workspace durable daemon store with one JSON
   file per watch and wake, idempotent wake IDs, fsynced publication, and
   atomic-rename wake claims. A write-once `wake/records/` ledger gates

@@ -108,8 +108,8 @@ bun run dev -- queue-run --spec ../specs/PRD-0011/phase-4-spec.md --repo ..
 # List queued launch records (FIFO, oldest first)
 bun run dev -- status --queue
 
-# Per-workspace SDLC event daemon (SPEC-PRD-0020-P1 T-01/T-02) — process
-# bootstrap plus durable storage; watch/poll modules land in later tasks. Config is
+# Per-workspace SDLC event daemon (SPEC-PRD-0020-P1 T-01/T-03) — process
+# bootstrap, durable storage, and watch registry; polling lands later. Config is
 # `.sdlc/daemon.json` under the workspace root (DaemonConfig contract).
 # `install` creates `.sdlc/daemon/` + touches the log before launchd load;
 # load is transactional (enable failure → bootout + plist remove);
@@ -145,6 +145,16 @@ a re-detected signal cannot resurrect a claimed wake, and a claim can never
 replace an existing consumed record. Content and directory entries are fsynced
 before a write is reported, so records survive a kill or a reboot with no
 database, broker, or live session.
+
+`WatchRegistryService` is the internal registration and poll-loop API over
+that store. A watch ID is derived from its kind and normalized structured
+target, so registering the same target and kind is idempotent. Every call is
+scoped by workspace root; registrations contain only durable values from the
+PRD-0020 `WatchRegistration` contract and no chat/session references. `list`
+returns active watches with `kind`, `target`, age in whole seconds, and
+`lastPollTime`. A declared expiry or a terminal result passed to `recordPoll`
+durably expires the record and removes it from subsequent active queries while
+retaining it on disk for audit.
 
 `decompose` grounds the synthesized envelope in the target repo tree (#35):
 every `allowedPaths` glob must match at least one existing path in the

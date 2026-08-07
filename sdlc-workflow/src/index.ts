@@ -203,6 +203,10 @@ import {
   DaemonStoreRepository,
   IDaemonStoreRepository
 } from './repositories/daemon-store.repository';
+import {
+  IWatchRegistryService,
+  WatchRegistryService
+} from './services/watch-registry.service';
 import { WORKFLOW_TOKENS } from './tokens';
 import { WorkflowError } from './types';
 import { resolveInferenceBackend } from './utils/backend-select';
@@ -370,6 +374,9 @@ container
 container
   .bind<IDaemonStoreRepository>(WORKFLOW_TOKENS.DaemonStoreRepository)
   .to(DaemonStoreRepository);
+container
+  .bind<IWatchRegistryService>(WORKFLOW_TOKENS.WatchRegistryService)
+  .to(WatchRegistryService);
 container
   .bind<IDaemonHandler>(WORKFLOW_TOKENS.DaemonHandler)
   .to(DaemonHandler);
