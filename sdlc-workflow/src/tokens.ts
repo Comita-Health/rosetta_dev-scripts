@@ -52,5 +52,11 @@ export const WORKFLOW_TOKENS = {
   DeployRecordRepository: Symbol.for('DeployRecordRepository'),
   // SPEC-PRD-0023-P1 T-01 / T-02
   CloseoutAggregateService: Symbol.for('CloseoutAggregateService'),
-  CloseoutService: Symbol.for('CloseoutService')
+  CloseoutService: Symbol.for('CloseoutService'),
+  // SPEC-PRD-0020-P1 T-01
+  DaemonConfigRepository: Symbol.for('DaemonConfigRepository'),
+  DaemonProcessRepository: Symbol.for('DaemonProcessRepository'),
+  LaunchdRepository: Symbol.for('LaunchdRepository'),
+  DaemonLifecycleService: Symbol.for('DaemonLifecycleService'),
+  DaemonHandler: Symbol.for('DaemonHandler')
 } as const;

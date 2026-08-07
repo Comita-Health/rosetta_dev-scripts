@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** a `daemon install` that cannot execute `launchctl` at all
+  now names the cause. `spawnSync` reports that case as `status: null` with
+  empty stdout/stderr, so the thrown `DAEMON_CONFIG_INVALID` carried a blank
+  detail and told the operator only that "bootstrap failed"; the spawn error
+  (e.g. `ENOENT` off macOS) is now surfaced, and a failure with genuinely no
+  output no longer pads `details` with an empty string (SPEC-PRD-0020-P1 T-01).
+- **sdlc-workflow:** `daemon install --no-load` works again — the flag is
+  yargs' negation of `--load` (default true); declaring a literal `no-load`
+  option made strict mode reject `--no-load` as `Unknown argument: load`
+  (SPEC-PRD-0020-P1 T-01).
+- **sdlc-workflow:** `daemon install` is transactional on macOS launchd —
+  after a successful `launchctl bootstrap`, a failed `launchctl enable` boots
+  the agent out and removes the plist so install never reports failure while
+  leaving a loaded KeepAlive agent on disk (SPEC-PRD-0020-P1 T-01).
+- **sdlc-workflow:** `daemon install` now creates `.sdlc/daemon/` and touches
+  `daemon.log` before launchd bootstrap so StandardOutPath/StandardErrorPath
+  exist at load time; `daemon uninstall` derives the label/plist path from the
+  workspace root alone (no `.sdlc/daemon.json` required); and `launchctl
+  enable` failures after a successful bootstrap fail the install instead of
+  reporting `loaded: true` while the agent stays disabled (SPEC-PRD-0020-P1
+  T-01 remediation).
+- **sdlc-workflow:** per-workspace event daemon skeleton (SPEC-PRD-0020-P1
+  T-01). `sdlc-workflow daemon --workspace <root>` is a long-running process
+  whose only required input is the workspace root; `DaemonConfig` (activate
+  script, runs dir, poll cadence, headless runner) is loaded from
+  `.sdlc/daemon.json` under that root, and pid/log/launchd label are derived
+  per workspace so two roots never share a process. `daemon install` /
+  `daemon uninstall` write (or remove) a KeepAlive=true launchd plist with a
+  workspace-unique label. Bootstrap and lifecycle only — no watch/poll yet.
 - **sdlc-workflow:** the reviewer prompt no longer ships domain-specific
   vocabulary as examples of invariants worth documenting. Examples are now
   generic ("authorization, data-sensitivity boundaries, idempotency, ordering,

@@ -505,6 +505,28 @@ export interface DiffStat {
   totalLines: number;
 }
 
+/**
+ * PRD-0020 §4 — consumer-owned daemon configuration. Values come from files
+ * under the workspace root; the engine never compiles in org/repo/path
+ * opinions. Runtime paths (pid, log, launchd label) are derived from
+ * `workspaceRoot` by the config loader.
+ */
+export interface DaemonConfig {
+  workspaceRoot: string;
+  activateScript: string;
+  runsDir: string;
+  defaultPollSeconds: number;
+  headlessRunner: string;
+}
+
+/** Process-local paths and launchd identity derived for one workspace root. */
+export interface DaemonRuntimePaths {
+  stateDir: string;
+  pidFile: string;
+  logPath: string;
+  launchdLabel: string;
+}
+
 export type WorkflowErrorCode =
   | 'PRD_NOT_FOUND'
   | 'PRD_MALFORMED'
@@ -525,7 +547,9 @@ export type WorkflowErrorCode =
   /** T-02: a state.json write was refused because the run is foreign-locked. */
   | 'RUN_LOCK_NOT_HELD'
   | 'GIT_FAILED'
-  | 'GH_FAILED';
+  | 'GH_FAILED'
+  /** SPEC-PRD-0020-P1 T-01: workspace root missing or daemon config unusable. */
+  | 'DAEMON_CONFIG_INVALID';
 
 export class WorkflowError extends Error {
   constructor(

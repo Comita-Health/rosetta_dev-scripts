@@ -179,6 +179,26 @@ import {
   SuperviseService,
   ISuperviseService
 } from './services/supervise.service';
+import {
+  DaemonHandler,
+  IDaemonHandler
+} from './handlers/daemon.handler';
+import {
+  DaemonConfigRepository,
+  IDaemonConfigRepository
+} from './repositories/daemon-config.repository';
+import {
+  DaemonProcessRepository,
+  IDaemonProcessRepository
+} from './repositories/daemon-process.repository';
+import {
+  LaunchdRepository,
+  ILaunchdRepository
+} from './repositories/launchd.repository';
+import {
+  DaemonLifecycleService,
+  IDaemonLifecycleService
+} from './services/daemon-lifecycle.service';
 import { WORKFLOW_TOKENS } from './tokens';
 import { WorkflowError } from './types';
 import { resolveInferenceBackend } from './utils/backend-select';
@@ -331,6 +351,21 @@ container.bind<IRunHandler>(WORKFLOW_TOKENS.RunHandler).to(RunHandler);
 container
   .bind<ISuperviseService>(WORKFLOW_TOKENS.SuperviseService)
   .to(SuperviseService);
+container
+  .bind<IDaemonConfigRepository>(WORKFLOW_TOKENS.DaemonConfigRepository)
+  .to(DaemonConfigRepository);
+container
+  .bind<IDaemonProcessRepository>(WORKFLOW_TOKENS.DaemonProcessRepository)
+  .to(DaemonProcessRepository);
+container
+  .bind<ILaunchdRepository>(WORKFLOW_TOKENS.LaunchdRepository)
+  .to(LaunchdRepository);
+container
+  .bind<IDaemonLifecycleService>(WORKFLOW_TOKENS.DaemonLifecycleService)
+  .to(DaemonLifecycleService);
+container
+  .bind<IDaemonHandler>(WORKFLOW_TOKENS.DaemonHandler)
+  .to(DaemonHandler);
 
 yargs(hideBin(process.argv))
   .command(
@@ -837,6 +872,127 @@ yargs(hideBin(process.argv))
         }
         process.exit(1);
       }
+    }
+  )
+  .command(
+    'daemon',
+    'Per-workspace SDLC event daemon — run, or install/uninstall the launchd agent (SPEC-PRD-0020-P1 T-01)',
+    y =>
+      y
+        .command(
+          '$0',
+          'Run the daemon in the foreground for --workspace (KeepAlive relaunches via launchd)',
+          y2 =>
+            y2.option('workspace', {
+              type: 'string',
+              describe: 'Absolute or relative path to the workspace root'
+            }),
+          async argv => {
+            const handler = container.get<IDaemonHandler>(
+              WORKFLOW_TOKENS.DaemonHandler
+            );
+            try {
+              await handler.run({
+                workspaceRoot: argv.workspace
+              });
+            } catch (err) {
+              if (err instanceof WorkflowError) {
+                console.error(chalk.red(`\n✗ ${err.code}: ${err.message}`));
+                for (const detail of err.details) {
+                  console.error(chalk.red(`  - ${detail}`));
+                }
+              } else {
+                console.error(chalk.red(`\n✗ ${err}`));
+              }
+              process.exit(1);
+            }
+          }
+        )
+        .command(
+          'install',
+          'Generate and load a KeepAlive launchd plist for --workspace',
+          y2 =>
+            y2
+              .option('workspace', {
+                type: 'string',
+                describe: 'Absolute or relative path to the workspace root'
+              })
+              .option('plist-dir', {
+                type: 'string',
+                describe:
+                  'Directory for the plist (default: ~/Library/LaunchAgents)'
+              })
+              // Name the positive flag `load` so yargs' built-in `--no-load`
+              // negation works. Declaring `no-load` as its own option makes
+              // strict mode reject `--no-load` as "Unknown argument: load".
+              .option('load', {
+                type: 'boolean',
+                default: true,
+                describe:
+                  'Call launchctl bootstrap/enable (use --no-load to write the plist only)'
+              }),
+          argv => {
+            const handler = container.get<IDaemonHandler>(
+              WORKFLOW_TOKENS.DaemonHandler
+            );
+            try {
+              handler.install({
+                workspaceRoot: argv.workspace,
+                plistDir: argv['plist-dir'],
+                load: argv.load !== false,
+                cliEntry: __filename,
+                program: process.execPath
+              });
+            } catch (err) {
+              if (err instanceof WorkflowError) {
+                console.error(chalk.red(`\n✗ ${err.code}: ${err.message}`));
+                for (const detail of err.details) {
+                  console.error(chalk.red(`  - ${detail}`));
+                }
+              } else {
+                console.error(chalk.red(`\n✗ ${err}`));
+              }
+              process.exit(1);
+            }
+          }
+        )
+        .command(
+          'uninstall',
+          'Unload and remove the launchd plist for --workspace',
+          y2 =>
+            y2
+              .option('workspace', {
+                type: 'string',
+                describe: 'Absolute or relative path to the workspace root'
+              })
+              .option('plist-dir', {
+                type: 'string',
+                describe:
+                  'Directory holding the plist (default: ~/Library/LaunchAgents)'
+              }),
+          argv => {
+            const handler = container.get<IDaemonHandler>(
+              WORKFLOW_TOKENS.DaemonHandler
+            );
+            try {
+              handler.uninstall({
+                workspaceRoot: argv.workspace,
+                plistDir: argv['plist-dir']
+              });
+            } catch (err) {
+              if (err instanceof WorkflowError) {
+                console.error(chalk.red(`\n✗ ${err.code}: ${err.message}`));
+              } else {
+                console.error(chalk.red(`\n✗ ${err}`));
+              }
+              process.exit(1);
+            }
+          }
+        )
+        .demandCommand(0)
+        .recommendCommands(),
+    () => {
+      // Parent handler unused — subcommands own dispatch.
     }
   )
   .command(
