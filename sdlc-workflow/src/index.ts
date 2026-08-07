@@ -975,7 +975,7 @@ yargs(hideBin(process.argv))
   )
   .command(
     'daemon',
-    'Per-workspace SDLC event daemon — run, status, or install/uninstall the launchd agent (SPEC-PRD-0020-P1)',
+    'Per-workspace SDLC event daemon — run, status, watch, or install/uninstall the launchd agent (SPEC-PRD-0020-P1)',
     y =>
       y
         .command(
@@ -1117,6 +1117,78 @@ yargs(hideBin(process.argv))
             } catch (err) {
               if (err instanceof WorkflowError) {
                 console.error(chalk.red(`\n✗ ${err.code}: ${err.message}`));
+              } else {
+                console.error(chalk.red(`\n✗ ${err}`));
+              }
+              process.exit(1);
+            }
+          }
+        )
+        .command(
+          'watch [targets..]',
+          'Register durable watch(es) for owner/repo#N targets and exit (SPEC-PRD-0020-P1 T-08)',
+          y2 =>
+            y2
+              .option('workspace', {
+                type: 'string',
+                describe: 'Absolute or relative path to the workspace root'
+              })
+              .option('kind', {
+                type: 'string',
+                default: 'pr-review',
+                describe:
+                  'Watch kind (default: pr-review; Phase 1 also supports pr-checks)'
+              })
+              .option('poll-seconds', {
+                type: 'number',
+                describe:
+                  'Poll cadence in seconds (default: workspace defaultPollSeconds)'
+              })
+              .option('created-by', {
+                type: 'string',
+                default: 'cli',
+                describe: 'Registration attribution (skill id or operator)'
+              })
+              .option('json', {
+                type: 'boolean',
+                default: false,
+                describe: 'Emit registered watch records as JSON'
+              })
+              .positional('targets', {
+                type: 'string',
+                array: true,
+                describe: 'One or more owner/repo#N targets'
+              }),
+          argv => {
+            const handler = container.get<IDaemonHandler>(
+              WORKFLOW_TOKENS.DaemonHandler
+            );
+            const targets = Array.isArray(argv.targets)
+              ? argv.targets.filter(
+                  (value): value is string => typeof value === 'string'
+                )
+              : [];
+            try {
+              handler.watch({
+                workspaceRoot: argv.workspace,
+                kind: argv.kind as
+                  | 'pr-review'
+                  | 'pr-checks'
+                  | 'issue-state'
+                  | 'workflow-run'
+                  | 'run-supervisor'
+                  | 'queue-item',
+                targets,
+                pollSeconds: argv['poll-seconds'],
+                createdBy: argv['created-by'],
+                json: argv.json === true
+              });
+            } catch (err) {
+              if (err instanceof WorkflowError) {
+                console.error(chalk.red(`\n✗ ${err.code}: ${err.message}`));
+                for (const detail of err.details) {
+                  console.error(chalk.red(`  - ${detail}`));
+                }
               } else {
                 console.error(chalk.red(`\n✗ ${err}`));
               }

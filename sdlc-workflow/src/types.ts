@@ -701,6 +701,8 @@ export type WorkflowErrorCode =
   | 'GH_FAILED'
   /** SPEC-PRD-0020-P1 T-01: workspace root missing or daemon config unusable. */
   | 'DAEMON_CONFIG_INVALID'
+  /** SPEC-PRD-0020-P1 T-08: malformed daemon watch kind/target/cadence. */
+  | 'DAEMON_WATCH_INVALID'
   /**
    * Mutating `gh` (issue/PR create) refused to run as the ambient human login
    * and could not activate an Addi GitHub App identity.

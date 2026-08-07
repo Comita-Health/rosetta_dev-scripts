@@ -1,5 +1,6 @@
 import { inject, injectable } from 'inversify';
 import chalk from 'chalk';
+import type { IDaemonConfigRepository } from '../repositories/daemon-config.repository';
 import type {
   DaemonInstallOptions,
   DaemonInstallResult,
@@ -9,8 +10,14 @@ import {
   formatWatchTarget,
   type IDaemonStatusService
 } from '../services/daemon-status.service';
+import type { IWatchRegistryService } from '../services/watch-registry.service';
 import { WORKFLOW_TOKENS } from '../tokens';
-import type { DaemonRuntimePaths, DaemonStatusReport } from '../types';
+import type {
+  DaemonRuntimePaths,
+  DaemonStatusReport,
+  DurableWatchRecord,
+  WatchKind
+} from '../types';
 import { WorkflowError } from '../types';
 
 export interface DaemonCommandInput {
@@ -28,11 +35,55 @@ export interface DaemonStatusCommandInput {
   json?: boolean;
 }
 
+export interface DaemonWatchCommandInput {
+  workspaceRoot: string | undefined;
+  /** Watch kind; Phase 1 thin clients use `pr-review`. */
+  kind: WatchKind;
+  /** Positional `owner/repo#N` targets (PR-shaped kinds only). */
+  targets: string[];
+  /** Override poll cadence; defaults to workspace `defaultPollSeconds`. */
+  pollSeconds?: number;
+  /** Who registered the watch (skill id or operator). */
+  createdBy?: string;
+  /** When true, print registered records as JSON. */
+  json?: boolean;
+}
+
+const WATCH_KINDS: ReadonlySet<string> = new Set([
+  'pr-review',
+  'pr-checks',
+  'issue-state',
+  'workflow-run',
+  'run-supervisor',
+  'queue-item'
+]);
+
+const PR_TARGET_PATTERN = /^([^/#\s]+\/[^/#\s]+)#([1-9][0-9]*)$/;
+
+/**
+ * Parse a skill/CLI `owner/repo#N` target into structured fields.
+ *
+ * @throws {WorkflowError} `DAEMON_WATCH_INVALID` when the token is malformed.
+ */
+export const parsePrWatchTarget = (
+  raw: string
+): { repo: string; number: number } => {
+  const match = PR_TARGET_PATTERN.exec(raw.trim());
+  if (match === null) {
+    throw new WorkflowError(
+      `daemon watch target must be owner/repo#N (got ${JSON.stringify(raw)})`,
+      'DAEMON_WATCH_INVALID'
+    );
+  }
+  return { repo: match[1], number: Number.parseInt(match[2], 10) };
+};
+
 /**
  * CLI entry for `sdlc-workflow daemon` — parses args and delegates lifecycle
  * to {@link IDaemonLifecycleService}. No business logic beyond fail-fast
  * validation of the required workspace root (SPEC-PRD-0020-P1 T-01).
  * Status (T-07) delegates assembly to {@link IDaemonStatusService}.
+ * Watch registration (T-08) delegates to {@link IWatchRegistryService}.
  */
 export interface IDaemonHandler {
   /**
@@ -70,6 +121,19 @@ export interface IDaemonHandler {
    *   missing/empty or the daemon contract under the root is unusable.
    */
   status(input: DaemonStatusCommandInput): DaemonStatusReport;
+  /**
+   * Register one or more durable watches and exit (SPEC-PRD-0020-P1 T-08).
+   *
+   * @remarks
+   * Identity is kind + target; re-registering an active watch is a no-op read.
+   * Polling stays in the long-lived daemon — this CLI never sleeps.
+   *
+   * @throws {WorkflowError} `DAEMON_CONFIG_INVALID` when `--workspace` is
+   *   missing/empty or the daemon contract is unusable.
+   * @throws {WorkflowError} `DAEMON_WATCH_INVALID` when kind/targets/cadence
+   *   are malformed.
+   */
+  watch(input: DaemonWatchCommandInput): DurableWatchRecord[];
 }
 
 @injectable()
@@ -78,7 +142,11 @@ export class DaemonHandler implements IDaemonHandler {
     @inject(WORKFLOW_TOKENS.DaemonLifecycleService)
     private readonly _lifecycle: IDaemonLifecycleService,
     @inject(WORKFLOW_TOKENS.DaemonStatusService)
-    private readonly _status: IDaemonStatusService
+    private readonly _status: IDaemonStatusService,
+    @inject(WORKFLOW_TOKENS.WatchRegistryService)
+    private readonly _registry: IWatchRegistryService,
+    @inject(WORKFLOW_TOKENS.DaemonConfigRepository)
+    private readonly _config: IDaemonConfigRepository
   ) {}
 
   /**
@@ -161,6 +229,86 @@ export class DaemonHandler implements IDaemonHandler {
     }
     this.renderTable(report);
     return report;
+  }
+
+  /**
+   * Register durable watches for each `owner/repo#N` target and exit.
+   *
+   * @throws {WorkflowError} `DAEMON_CONFIG_INVALID` / `DAEMON_WATCH_INVALID`
+   *   on missing workspace, empty targets, or malformed kind/target/cadence.
+   */
+  watch(input: DaemonWatchCommandInput): DurableWatchRecord[] {
+    const workspaceRoot = this.requireWorkspace(input.workspaceRoot);
+    if (WATCH_KINDS.has(input.kind) === false) {
+      throw new WorkflowError(
+        `daemon watch kind must be one of ${[...WATCH_KINDS].join(', ')}`,
+        'DAEMON_WATCH_INVALID'
+      );
+    }
+    if (input.targets.length === 0) {
+      throw new WorkflowError(
+        'daemon watch requires at least one owner/repo#N target',
+        'DAEMON_WATCH_INVALID'
+      );
+    }
+
+    const resolved = this._config.load(workspaceRoot);
+    const pollSeconds =
+      input.pollSeconds !== undefined
+        ? input.pollSeconds
+        : resolved.config.defaultPollSeconds;
+    if (
+      typeof pollSeconds !== 'number' ||
+      Number.isNaN(pollSeconds) ||
+      pollSeconds <= 0
+    ) {
+      throw new WorkflowError(
+        'daemon watch --poll-seconds must be a positive number',
+        'DAEMON_WATCH_INVALID'
+      );
+    }
+
+    const createdBy =
+      input.createdBy !== undefined && input.createdBy.trim().length > 0
+        ? input.createdBy.trim()
+        : 'cli';
+
+    const records: DurableWatchRecord[] = [];
+    for (const raw of input.targets) {
+      const target = parsePrWatchTarget(raw);
+      try {
+        records.push(
+          this._registry.register(workspaceRoot, {
+            kind: input.kind,
+            target,
+            pollSeconds,
+            createdBy
+          })
+        );
+      } catch (error) {
+        if (error instanceof TypeError) {
+          throw new WorkflowError(error.message, 'DAEMON_WATCH_INVALID');
+        }
+        throw error;
+      }
+    }
+
+    if (input.json === true) {
+      console.log(JSON.stringify(records, null, 2));
+      return records;
+    }
+
+    console.log(chalk.bold(`\nRegistered ${records.length} watch(es)\n`));
+    for (const record of records) {
+      console.log(
+        `  ${record.kind} ${formatWatchTarget(record.target)}` +
+          chalk.gray(
+            ` id=${record.id} poll=${record.pollSeconds}s by=${record.createdBy}`
+          )
+      );
+    }
+    console.log('');
+    return records;
   }
 
   private renderTable(report: DaemonStatusReport): void {
