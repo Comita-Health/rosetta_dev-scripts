@@ -481,4 +481,123 @@ describe('DaemonStoreRepository', () => {
       }
     ]);
   });
+
+  it('appends further failures after the first and omits a blank channel', () => {
+    const workspace = mkdtempSync(
+      path.join(os.tmpdir(), 'daemon-store-action-fail-append-')
+    );
+    const store = new DaemonStoreRepository();
+    const written = store.writeWake(workspace, wake).record;
+
+    store.recordWakeActionFailure(workspace, written.id, {
+      actionId: ' notify ',
+      at: '2026-08-07T12:00:01.000Z',
+      error: 'banner exploded'
+    });
+    const second = store.recordWakeActionFailure(workspace, written.id, {
+      actionId: 'notify',
+      channelId: '   ',
+      at: '',
+      error: '  pipe closed  '
+    });
+
+    expect(second.actionFailures).toHaveLength(2);
+    expect(second.actionFailures?.[0]).toEqual({
+      actionId: 'notify',
+      at: '2026-08-07T12:00:01.000Z',
+      error: 'banner exploded'
+    });
+    expect(second.actionFailures?.[1]).toEqual({
+      actionId: 'notify',
+      // An absent timestamp is stamped at record time rather than dropped.
+      at: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+      error: 'pipe closed'
+    });
+    expect(store.readWake(workspace, written.id)?.actionFailures).toHaveLength(
+      2
+    );
+  });
+
+  it('rejects consumption and failure records the loop must never write', () => {
+    const workspace = mkdtempSync(
+      path.join(os.tmpdir(), 'daemon-store-record-guards-')
+    );
+    const store = new DaemonStoreRepository();
+    const written = store.writeWake(workspace, wake).record;
+    const unknownId = 'b'.repeat(64);
+
+    expect(() => store.recordWakeConsumed(workspace, written.id, '  ')).toThrow(
+      TypeError
+    );
+    expect(() =>
+      store.recordWakeConsumed(
+        workspace,
+        written.id,
+        undefined as unknown as string
+      )
+    ).toThrow(/non-empty string/);
+    expect(() =>
+      store.recordWakeConsumed(workspace, unknownId, 'daemon')
+    ).toThrow(`Cannot record consumption for unknown wake ${unknownId}`);
+
+    expect(() =>
+      store.recordWakeActionFailure(workspace, written.id, {
+        actionId: ' ',
+        at: '2026-08-07T12:00:01.000Z',
+        error: 'banner exploded'
+      })
+    ).toThrow(/non-empty actionId/);
+    expect(() =>
+      store.recordWakeActionFailure(workspace, written.id, {
+        actionId: undefined as unknown as string,
+        at: '2026-08-07T12:00:01.000Z',
+        error: 'banner exploded'
+      })
+    ).toThrow(/non-empty actionId/);
+    expect(() =>
+      store.recordWakeActionFailure(workspace, written.id, {
+        actionId: 'notify',
+        at: '2026-08-07T12:00:01.000Z',
+        error: '   '
+      })
+    ).toThrow(/non-empty error/);
+    expect(() =>
+      store.recordWakeActionFailure(workspace, written.id, {
+        actionId: 'notify',
+        at: '2026-08-07T12:00:01.000Z',
+        error: undefined as unknown as string
+      })
+    ).toThrow(/non-empty error/);
+    expect(() =>
+      store.recordWakeActionFailure(workspace, unknownId, {
+        actionId: 'notify',
+        at: '2026-08-07T12:00:01.000Z',
+        error: 'banner exploded'
+      })
+    ).toThrow(`Cannot record action failure for unknown wake ${unknownId}`);
+
+    expect(store.readWake(workspace, written.id)).toEqual(written);
+  });
+
+  it('overwrites cleanly when the in-place rewrite shrinks the record', () => {
+    const workspace = mkdtempSync(
+      path.join(os.tmpdir(), 'daemon-store-shrink-')
+    );
+    const store = new DaemonStoreRepository();
+    const written = store.writeWake(workspace, {
+      ...wake,
+      prompt: 'x'.repeat(500)
+    }).record;
+
+    store.recordWakeConsumed(workspace, written.id, 'daemon');
+    const shortened = store.recordWakeConsumed(workspace, written.id, 'd');
+    const ledgerPath = path.join(
+      store.paths(workspace).wakeRecords,
+      `${written.id}.json`
+    );
+
+    expect(shortened.consumedBy).toBe('d');
+    // A truncating rewrite must not leave trailing bytes behind.
+    expect(JSON.parse(readFileSync(ledgerPath, 'utf-8'))).toEqual(shortened);
+  });
 });

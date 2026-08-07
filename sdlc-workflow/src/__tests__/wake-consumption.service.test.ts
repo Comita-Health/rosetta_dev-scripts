@@ -1,8 +1,11 @@
 import { mkdtempSync, readdirSync } from 'fs';
 import os from 'os';
 import path from 'path';
-import { DaemonStoreRepository } from '../repositories/daemon-store.repository';
-import type { WakeEventInput } from '../types';
+import {
+  DaemonStoreRepository,
+  type IDaemonStoreRepository
+} from '../repositories/daemon-store.repository';
+import type { WakeEvent, WakeEventInput } from '../types';
 import {
   ChatMirrorNotificationChannel,
   NotifyWakeAction,
@@ -13,7 +16,11 @@ import {
   type IWakeAction,
   type WakeActionContext
 } from '../services/wake-action';
-import { WakeConsumptionService } from '../services/wake-consumption.service';
+import {
+  DEFAULT_WAKE_CONSUMER_ID,
+  MINIMUM_CONSUME_TICK_MILLISECONDS,
+  WakeConsumptionService
+} from '../services/wake-consumption.service';
 
 const wakeInput = (signal: string): WakeEventInput => ({
   kind: 'pr-review',
@@ -23,6 +30,18 @@ const wakeInput = (signal: string): WakeEventInput => ({
   prompt: 'PR approved',
   data: { reviewId: 1 }
 });
+
+/** Only the four store methods the consumption loop actually reaches. */
+const stubStore = (
+  overrides: Partial<IDaemonStoreRepository> = {}
+): IDaemonStoreRepository =>
+  ({
+    listPendingWakes: jest.fn().mockReturnValue([]),
+    claimWake: jest.fn().mockResolvedValue(null),
+    recordWakeConsumed: jest.fn(),
+    recordWakeActionFailure: jest.fn(),
+    ...overrides
+  }) as unknown as IDaemonStoreRepository;
 
 const setup = (
   actions: IWakeAction[] = []
@@ -153,5 +172,277 @@ describe('WakeConsumptionService (SPEC-PRD-0020-P1 T-06)', () => {
     expect(seen[0]).not.toHaveProperty('thread');
     expect(seen[0].consumedBy).toBe('cli');
     expect(seen[0].workspaceRoot).toBe(workspace);
+  });
+
+  it.each([
+    ['no options at all', undefined],
+    ['a blank consumerId', { consumerId: '   ' }]
+  ])('stamps the default consumer id given %s', async (_label, options) => {
+    const { workspace, store, consumer } = setup();
+    const { record } = store.writeWake(workspace, wakeInput('approved:5'));
+
+    const result = await consumer.tick(workspace, options);
+
+    expect(result.claimed[0].consumedBy).toBe(DEFAULT_WAKE_CONSUMER_ID);
+    expect(store.readWake(workspace, record.id)?.consumedBy).toBe(
+      DEFAULT_WAKE_CONSUMER_ID
+    );
+  });
+
+  it('skips a pending wake that another consumer claimed first', async () => {
+    const { workspace, store, consumer } = setup();
+    store.writeWake(workspace, wakeInput('approved:6'));
+    const claim = jest.spyOn(store, 'claimWake').mockResolvedValue(null);
+    const consumed = jest.spyOn(store, 'recordWakeConsumed');
+
+    const result = await consumer.tick(workspace);
+
+    expect(claim).toHaveBeenCalled();
+    expect(consumed).not.toHaveBeenCalled();
+    expect(result).toEqual({ claimed: [], actionFailures: [] });
+  });
+
+  it('records an action that throws instead of returning a result', async () => {
+    const action: IWakeAction = {
+      id: 'explodes',
+      execute: async () => {
+        throw new Error('dispatch exploded');
+      }
+    };
+    const { workspace, store, consumer } = setup([action]);
+    const { record } = store.writeWake(workspace, wakeInput('approved:7'));
+
+    const result = await consumer.tick(workspace);
+
+    expect(result.claimed).toHaveLength(1);
+    expect(result.actionFailures).toHaveLength(1);
+    const durable = store.readWake(workspace, record.id);
+    expect(durable?.consumedBy).toBe(DEFAULT_WAKE_CONSUMER_ID);
+    expect(durable?.actionFailures).toEqual([
+      expect.objectContaining({
+        actionId: 'explodes',
+        error: 'dispatch exploded'
+      })
+    ]);
+    expect(durable?.actionFailures?.[0]).not.toHaveProperty('channelId');
+  });
+
+  it('records a non-Error thrown by an action', async () => {
+    const action: IWakeAction = {
+      id: 'rejects',
+      execute: async () => {
+        throw 'plain string failure';
+      }
+    };
+    const { workspace, store, consumer } = setup([action]);
+    const { record } = store.writeWake(workspace, wakeInput('approved:8'));
+
+    await consumer.tick(workspace);
+
+    expect(store.readWake(workspace, record.id)?.actionFailures).toEqual([
+      expect.objectContaining({ error: 'plain string failure' })
+    ]);
+  });
+
+  it('substitutes a message for a failure reported without one', async () => {
+    const action: IWakeAction = {
+      id: 'quiet',
+      execute: async () => ({ ok: false, error: '   ' })
+    };
+    const { workspace, store, consumer } = setup([action]);
+    const { record } = store.writeWake(workspace, wakeInput('approved:9'));
+
+    await consumer.tick(workspace);
+
+    expect(store.readWake(workspace, record.id)?.actionFailures).toEqual([
+      expect.objectContaining({
+        actionId: 'quiet',
+        error: 'action failed without a message'
+      })
+    ]);
+  });
+
+  it('reports only the wakes whose actions failed, not the ones that passed', async () => {
+    const action: IWakeAction = {
+      id: 'selective',
+      execute: async context =>
+        context.wake.signal === 'approved:11'
+          ? { ok: false, error: 'nope' }
+          : { ok: true }
+    };
+    const { workspace, store, consumer } = setup([action]);
+    store.writeWake(workspace, wakeInput('approved:10'));
+    const failing = store.writeWake(workspace, wakeInput('approved:11')).record;
+
+    const result = await consumer.tick(workspace);
+
+    expect(result.claimed).toHaveLength(2);
+    expect(result.actionFailures.map(wake => wake.id)).toEqual([failing.id]);
+  });
+
+  it('falls back to the default consumer id when the stored wake has none', async () => {
+    const pending: WakeEvent = {
+      id: 'b'.repeat(64),
+      kind: 'pr-review',
+      target: 'owner/repo#42',
+      signal: 'approved:12',
+      createdAt: '2026-08-07T12:00:00.000Z'
+    };
+    const seen: WakeActionContext[] = [];
+    const registry = new WakeActionRegistry();
+    registry.register({
+      id: 'probe',
+      execute: async context => {
+        seen.push(context);
+        return { ok: true };
+      }
+    });
+    const store = stubStore({
+      listPendingWakes: jest.fn().mockReturnValue([pending]),
+      claimWake: jest.fn().mockResolvedValue(pending),
+      // A store that never stamped consumedBy must not crash dispatch.
+      recordWakeConsumed: jest.fn().mockReturnValue(pending)
+    });
+
+    await new WakeConsumptionService(store, registry).tick('/tmp/workspace');
+
+    expect(seen[0].consumedBy).toBe(DEFAULT_WAKE_CONSUMER_ID);
+  });
+});
+
+describe('WakeConsumptionService loop control', () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it.each([0, -1, 1.5, Number.NaN])(
+    'refuses to arm the loop on interval %p',
+    interval => {
+      const consumer = new WakeConsumptionService(
+        stubStore(),
+        new WakeActionRegistry()
+      );
+
+      expect(() => consumer.start('/tmp/workspace', interval)).toThrow(
+        TypeError
+      );
+    }
+  );
+
+  it('ticks immediately and then on the configured interval until stopped', async () => {
+    const list = jest.fn().mockReturnValue([]);
+    const consumer = new WakeConsumptionService(
+      stubStore({ listPendingWakes: list }),
+      new WakeActionRegistry()
+    );
+
+    consumer.start('/tmp/workspace', 5, { consumerId: 'daemon' });
+    await jest.advanceTimersByTimeAsync(0);
+    expect(list).toHaveBeenCalledTimes(1);
+
+    await jest.advanceTimersByTimeAsync(4_999);
+    expect(list).toHaveBeenCalledTimes(1);
+
+    await jest.advanceTimersByTimeAsync(1);
+    expect(list).toHaveBeenCalledTimes(2);
+
+    consumer.stop();
+    await jest.advanceTimersByTimeAsync(20_000);
+    expect(list).toHaveBeenCalledTimes(2);
+    expect(jest.getTimerCount()).toBe(0);
+  });
+
+  it('holds the tick floor for a one-second interval', async () => {
+    const list = jest.fn().mockReturnValue([]);
+    const consumer = new WakeConsumptionService(
+      stubStore({ listPendingWakes: list }),
+      new WakeActionRegistry()
+    );
+
+    consumer.start('/tmp/workspace', 1);
+    await jest.advanceTimersByTimeAsync(MINIMUM_CONSUME_TICK_MILLISECONDS - 1);
+    expect(list).toHaveBeenCalledTimes(1);
+
+    await jest.advanceTimersByTimeAsync(1);
+    expect(list).toHaveBeenCalledTimes(2);
+
+    consumer.stop();
+  });
+
+  it('re-arms a fresh loop when start is called twice', async () => {
+    const list = jest.fn().mockReturnValue([]);
+    const consumer = new WakeConsumptionService(
+      stubStore({ listPendingWakes: list }),
+      new WakeActionRegistry()
+    );
+
+    consumer.start('/tmp/workspace', 5);
+    await jest.advanceTimersByTimeAsync(0);
+    consumer.start('/tmp/workspace', 5);
+    await jest.advanceTimersByTimeAsync(0);
+    expect(list).toHaveBeenCalledTimes(2);
+
+    await jest.advanceTimersByTimeAsync(5_000);
+    expect(list).toHaveBeenCalledTimes(3);
+
+    consumer.stop();
+  });
+
+  it('is safe to stop a loop that was never started', () => {
+    const consumer = new WakeConsumptionService(
+      stubStore(),
+      new WakeActionRegistry()
+    );
+
+    expect(() => consumer.stop()).not.toThrow();
+  });
+
+  it.each([
+    ['an Error', new Error('store unreadable'), 'store unreadable'],
+    ['a non-Error', 'store unreadable', 'store unreadable']
+  ])(
+    'logs %s from a failed tick and keeps ticking',
+    async (_label, thrown, expected) => {
+      const list = jest.fn().mockImplementationOnce(() => {
+        throw thrown;
+      });
+      list.mockReturnValue([]);
+      const error = jest.spyOn(console, 'error').mockImplementation(() => {});
+      const consumer = new WakeConsumptionService(
+        stubStore({ listPendingWakes: list }),
+        new WakeActionRegistry()
+      );
+
+      consumer.start('/tmp/workspace', 5);
+      await jest.advanceTimersByTimeAsync(0);
+      const logged = error.mock.calls.map(call => String(call[0]));
+      await jest.advanceTimersByTimeAsync(5_000);
+      consumer.stop();
+      error.mockRestore();
+
+      expect(logged).toEqual([`[wake-consumption] tick failed: ${expected}`]);
+      expect(list).toHaveBeenCalledTimes(2);
+    }
+  );
+
+  it('does not schedule another tick when stopped mid-tick', async () => {
+    const consumer = new WakeConsumptionService(
+      stubStore({
+        listPendingWakes: jest.fn().mockImplementation(() => {
+          consumer.stop();
+          return [];
+        })
+      }),
+      new WakeActionRegistry()
+    );
+
+    consumer.start('/tmp/workspace', 5);
+    await jest.advanceTimersByTimeAsync(0);
+
+    expect(jest.getTimerCount()).toBe(0);
   });
 });
