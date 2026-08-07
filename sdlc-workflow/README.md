@@ -718,8 +718,15 @@ Handler / Service / Repository with InversifyJS (workspace rule):
   assigned needs-human GitHub issues (`--operator` / `SDLC_OPERATOR`), and
   durable wake-inbox events (idempotent by title **and** `occurrenceKey`, so
   the same finding on a new head SHA re-notifies). Swallowed GitHub failures
-  append a loud `monitor.log` warning without blocking the run.
-- `repositories/issue.repository.ts` — `gh issue` create / find-by-title.
+  append a loud `monitor.log` warning without blocking the run. Issue creates
+  always run as the workspace GitHub App (Addi) via `envForAddiWrite` —
+  ambient human `gh` auth is refused with `GH_NOT_ADDI` rather than filing
+  under the operator's login.
+- `repositories/issue.repository.ts` — `gh issue` create / find-by-title
+  (creates require Addi).
+- `utils/gh-auth.ts` / `utils/gh-cli.ts` — shared `gh` runner; mutating
+  calls mint/reuse an Addi installation token (`SDLC_GH_ACTIVATE` /
+  `ROSETTA_GH_ACTIVATE` / `~/.config/*/github-app-activate.sh`).
 - `repositories/wake-inbox.repository.ts` — durable `~/.rosetta/wake` emits.
   `emitOnce` dedupes per (title, `occurrenceKey`); the occurrence is hashed
   into the marker so a long dedupe key cannot truncate it away.

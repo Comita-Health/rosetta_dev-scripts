@@ -1,6 +1,6 @@
-import { execSync } from 'child_process';
 import { injectable } from 'inversify';
 import { WorkflowError } from '../types';
+import { runGh } from '../utils/gh-cli';
 
 export interface IssueRef {
   url: string;
@@ -15,9 +15,14 @@ export interface CreateIssueInput {
 }
 
 /**
- * GitHub issue operations via the operator's `gh` session — same pattern as
- * `PullRequestRepository`. Resource access only: escalation idempotence and
- * monitor-log warnings live in EscalationService.
+ * GitHub issue operations via `gh` — same pattern as `PullRequestRepository`.
+ * Resource access only: escalation idempotence and monitor-log warnings live
+ * in EscalationService.
+ *
+ * @remarks
+ * Creates always run as the workspace GitHub App (Addi). Ambient human auth
+ * is refused with `GH_NOT_ADDI` rather than filing needs-human issues under
+ * the operator's login (see {@link runGh} / `envForAddiWrite`).
  */
 export interface IIssueRepository {
   /** Open issue whose title exactly matches, or null. */
@@ -25,28 +30,12 @@ export interface IIssueRepository {
   create(repoPath: string, input: CreateIssueInput): IssueRef;
 }
 
-const gh = (repoPath: string, command: string, stdin?: string): string => {
-  try {
-    return execSync(command, {
-      cwd: repoPath,
-      encoding: 'utf-8',
-      input: stdin,
-      stdio: ['pipe', 'pipe', 'pipe']
-    });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new WorkflowError(`gh ${command.split(' ')[1]} failed`, 'GH_FAILED', [
-      message.slice(0, 1000)
-    ]);
-  }
-};
-
 @injectable()
 export class IssueRepository implements IIssueRepository {
   findByTitle(repoPath: string, title: string): IssueRef | null {
     // Quote for shell; exact title match is applied after JSON parse.
     const escaped = title.replace(/"/g, '\\"');
-    const raw = gh(
+    const raw = runGh(
       repoPath,
       `gh issue list --state open --search "in:title \\"${escaped}\\"" --json url,number,title --limit 20`
     );
@@ -72,10 +61,10 @@ export class IssueRepository implements IIssueRepository {
       input.assignee !== undefined && input.assignee.length > 0
         ? ` --assignee "${input.assignee.replace(/"/g, '\\"')}"`
         : '';
-    const url = gh(
+    const url = runGh(
       repoPath,
       `gh issue create --title "${input.title.replace(/"/g, '\\"')}"${assigneeFlag} --body-file -`,
-      input.body
+      { stdin: input.body, requireAddi: true }
     ).trim();
     const match = url.match(/\/issues\/(\d+)\s*$/);
     if (match === null) {

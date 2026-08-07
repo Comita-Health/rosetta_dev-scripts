@@ -1,6 +1,6 @@
-import { execSync } from 'child_process';
 import { injectable } from 'inversify';
 import { WorkflowError } from '../types';
+import { runGh } from '../utils/gh-cli';
 
 export interface PrRef {
   url: string;
@@ -15,9 +15,13 @@ export interface PrStateRef extends PrRef {
 }
 
 /**
- * GitHub pull-request operations via the operator's `gh` session (P3 T-02)
- * — the same operator-auth pattern as `ci-status`. Resource access only:
+ * GitHub pull-request operations via `gh` (P3 T-02). Resource access only:
  * idempotency and title/body composition live in the PR-lifecycle service.
+ *
+ * @remarks
+ * Creates, merges, and comments require an Addi GitHub App identity — ambient
+ * human auth is refused with `GH_NOT_ADDI` (same contract as
+ * {@link IIssueRepository.create}).
  */
 export interface IPullRequestRepository {
   /** The open PR whose head is `branch`, or null when none exists. */
@@ -57,26 +61,10 @@ export interface IPullRequestRepository {
   updateBody(repoPath: string, number: number, body: string): void;
 }
 
-const gh = (repoPath: string, command: string, stdin?: string): string => {
-  try {
-    return execSync(command, {
-      cwd: repoPath,
-      encoding: 'utf-8',
-      input: stdin,
-      stdio: ['pipe', 'pipe', 'pipe']
-    });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new WorkflowError(`gh ${command.split(' ')[1]} failed`, 'GH_FAILED', [
-      message.slice(0, 1000)
-    ]);
-  }
-};
-
 @injectable()
 export class PullRequestRepository implements IPullRequestRepository {
   findByBranch(repoPath: string, branch: string): PrRef | null {
-    const raw = gh(
+    const raw = runGh(
       repoPath,
       `gh pr list --head "${branch}" --state open --json url,number --limit 1`
     );
@@ -94,7 +82,7 @@ export class PullRequestRepository implements IPullRequestRepository {
   }
 
   latestForBranch(repoPath: string, branch: string): PrStateRef | null {
-    const raw = gh(
+    const raw = runGh(
       repoPath,
       `gh pr list --head "${branch}" --state all --json url,number,state --limit 1`
     );
@@ -116,10 +104,10 @@ export class PullRequestRepository implements IPullRequestRepository {
     input: { branch: string; title: string; body: string }
   ): PrRef {
     // Body via stdin (--body-file -) so Markdown survives shell quoting.
-    const url = gh(
+    const url = runGh(
       repoPath,
       `gh pr create --head "${input.branch}" --title "${input.title.replace(/"/g, '\\"')}" --body-file -`,
-      input.body
+      { stdin: input.body, requireAddi: true }
     ).trim();
     const match = url.match(/\/pull\/(\d+)\s*$/);
     if (match === null) {
@@ -133,7 +121,7 @@ export class PullRequestRepository implements IPullRequestRepository {
   }
 
   merge(repoPath: string, number: number): string {
-    gh(repoPath, `gh pr merge ${number} --merge`);
+    runGh(repoPath, `gh pr merge ${number} --merge`, { requireAddi: true });
     const sha = this.mergeCommitOid(repoPath, number);
     if (sha === null) {
       throw new WorkflowError(
@@ -146,7 +134,7 @@ export class PullRequestRepository implements IPullRequestRepository {
   }
 
   mergeCommitOid(repoPath: string, number: number): string | null {
-    const sha = gh(
+    const sha = runGh(
       repoPath,
       `gh pr view ${number} --json mergeCommit --jq ".mergeCommit.oid // empty"`
     ).trim();
@@ -157,10 +145,16 @@ export class PullRequestRepository implements IPullRequestRepository {
   }
 
   comment(repoPath: string, number: number, body: string): void {
-    gh(repoPath, `gh pr comment ${number} --body-file -`, body);
+    runGh(repoPath, `gh pr comment ${number} --body-file -`, {
+      stdin: body,
+      requireAddi: true
+    });
   }
 
   updateBody(repoPath: string, number: number, body: string): void {
-    gh(repoPath, `gh pr edit ${number} --body-file -`, body);
+    runGh(repoPath, `gh pr edit ${number} --body-file -`, {
+      stdin: body,
+      requireAddi: true
+    });
   }
 }
