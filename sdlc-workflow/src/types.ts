@@ -605,9 +605,30 @@ export interface WakeEventInput {
   data?: Record<string, unknown>;
 }
 
+/**
+ * A follow-up action failure that must not undo consumption
+ * (SPEC-PRD-0020-P1 T-06). Recorded on the wake so operators can see a
+ * broken mirror channel without the wake staying pending forever.
+ */
+export interface WakeActionFailure {
+  /** Registry id of the action that failed (`notify`, later headless ids). */
+  actionId: string;
+  /** Optional channel within a multi-channel action (e.g. `desktop`). */
+  channelId?: string;
+  at: string;
+  error: string;
+}
+
 /** Durable wake payload with its deterministic idempotency key. */
 export interface WakeEvent extends WakeEventInput {
   id: string;
+  /**
+   * Who claimed this wake (`daemon`, `stop-hook`, `cli`, …). Absent while
+   * pending; set by the winning consumer after the atomic rename claim.
+   */
+  consumedBy?: string;
+  /** Best-effort action failures; never clears {@link consumedBy}. */
+  actionFailures?: WakeActionFailure[];
 }
 
 export type WorkflowErrorCode =

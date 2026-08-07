@@ -3,6 +3,7 @@ import {
   closeSync,
   existsSync,
   fsyncSync,
+  ftruncateSync,
   linkSync,
   mkdirSync,
   openSync,
@@ -15,11 +16,21 @@ import {
 import { injectable } from 'inversify';
 import path from 'path';
 import { deriveDaemonRuntimePaths } from './daemon-config.repository';
-import { DurableWatchRecord, WakeEvent, WakeEventInput } from '../types';
+import {
+  DurableWatchRecord,
+  WakeActionFailure,
+  WakeEvent,
+  WakeEventInput
+} from '../types';
 import { writeFileAtomic } from '../utils/atomic-write';
 import { wakeEventId } from '../utils/wake-event-id';
 
-export type { DurableWatchRecord, WakeEvent, WakeEventInput };
+export type {
+  DurableWatchRecord,
+  WakeActionFailure,
+  WakeEvent,
+  WakeEventInput
+};
 export { wakeEventId };
 
 /**
@@ -82,6 +93,24 @@ export interface IDaemonStoreRepository {
   readWake(workspaceRoot: string, id: string): WakeEvent | null;
   listPendingWakes(workspaceRoot: string): WakeEvent[];
   claimWake(workspaceRoot: string, id: string): Promise<WakeEvent | null>;
+  /**
+   * Stamp `consumedBy` onto an already-claimed wake. Writes in place so the
+   * ledger and consumed hard link stay the same inode.
+   */
+  recordWakeConsumed(
+    workspaceRoot: string,
+    id: string,
+    consumedBy: string
+  ): WakeEvent;
+  /**
+   * Append an action failure without clearing consumption. Notification /
+   * headless failures are observability, never a reason to re-queue.
+   */
+  recordWakeActionFailure(
+    workspaceRoot: string,
+    id: string,
+    failure: WakeActionFailure
+  ): WakeEvent;
 }
 
 const JSON_SUFFIX = '.json';
@@ -192,6 +221,23 @@ const syncDirectory = (directory: string): void => {
   } finally {
     closeSync(fd);
   }
+};
+
+/**
+ * Overwrite an existing file without replacing its inode, so every hard link
+ * (ledger + consumed) observes the same updated bytes.
+ */
+const writeFileInPlace = (file: string, contents: string): void => {
+  const bytes = Buffer.from(contents, 'utf-8');
+  const fd = openSync(file, 'r+');
+  try {
+    writeAll(fd, contents);
+    ftruncateSync(fd, bytes.length);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+  syncDirectory(path.dirname(file));
 };
 
 const isErrorCode = (error: unknown, code: string): boolean =>
@@ -664,5 +710,80 @@ export class DaemonStoreRepository implements IDaemonStoreRepository {
         reject(error);
       });
     });
+  }
+
+  /**
+   * Record which consumer won the claim. Must be called only after a
+   * successful {@link claimWake}: the wake is already in `consumed/`, and this
+   * stamps `consumedBy` onto the shared ledger inode.
+   *
+   * @throws when the wake was never published, or `consumedBy` is empty.
+   */
+  recordWakeConsumed(
+    workspaceRoot: string,
+    id: string,
+    consumedBy: string
+  ): WakeEvent {
+    if (typeof consumedBy !== 'string' || consumedBy.trim().length === 0) {
+      throw new TypeError('Wake consumedBy must be a non-empty string');
+    }
+    const ledgerFile = wakeFile(this.paths(workspaceRoot).wakeRecords, id);
+    if (existsSync(ledgerFile) === false) {
+      throw new Error(`Cannot record consumption for unknown wake ${id}`);
+    }
+    const current = parseRecord<WakeEvent>(ledgerFile);
+    const updated: WakeEvent = {
+      ...current,
+      consumedBy: consumedBy.trim()
+    };
+    writeFileInPlace(ledgerFile, `${JSON.stringify(updated, null, 2)}\n`);
+    return updated;
+  }
+
+  /**
+   * Append a follow-up action failure onto a consumed wake. Does not move the
+   * wake back to pending and does not clear `consumedBy`.
+   *
+   * @throws when the wake was never published.
+   */
+  recordWakeActionFailure(
+    workspaceRoot: string,
+    id: string,
+    failure: WakeActionFailure
+  ): WakeEvent {
+    if (
+      typeof failure.actionId !== 'string' ||
+      failure.actionId.trim().length === 0
+    ) {
+      throw new TypeError('Wake action failure requires a non-empty actionId');
+    }
+    if (
+      typeof failure.error !== 'string' ||
+      failure.error.trim().length === 0
+    ) {
+      throw new TypeError('Wake action failure requires a non-empty error');
+    }
+    const ledgerFile = wakeFile(this.paths(workspaceRoot).wakeRecords, id);
+    if (existsSync(ledgerFile) === false) {
+      throw new Error(`Cannot record action failure for unknown wake ${id}`);
+    }
+    const current = parseRecord<WakeEvent>(ledgerFile);
+    const entry: WakeActionFailure = {
+      actionId: failure.actionId.trim(),
+      at:
+        typeof failure.at === 'string' && failure.at.length > 0
+          ? failure.at
+          : new Date().toISOString(),
+      error: failure.error.trim(),
+      ...(failure.channelId !== undefined && failure.channelId.trim().length > 0
+        ? { channelId: failure.channelId.trim() }
+        : {})
+    };
+    const updated: WakeEvent = {
+      ...current,
+      actionFailures: [...(current.actionFailures ?? []), entry]
+    };
+    writeFileInPlace(ledgerFile, `${JSON.stringify(updated, null, 2)}\n`);
+    return updated;
   }
 }

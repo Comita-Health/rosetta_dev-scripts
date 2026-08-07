@@ -242,11 +242,17 @@ describe('DaemonLifecycleService.run', () => {
       tick: jest.fn().mockResolvedValue(undefined),
       stop: jest.fn()
     };
+    const consumer = {
+      start: jest.fn(),
+      tick: jest.fn().mockResolvedValue({ claimed: [], actionFailures: [] }),
+      stop: jest.fn()
+    };
     const lifecycle = new DaemonLifecycleService(
       configRepo,
       processRepo,
       new LaunchdRepository(),
-      poller
+      poller,
+      consumer
     );
 
     const result = await lifecycle.run(root);
@@ -258,7 +264,9 @@ describe('DaemonLifecycleService.run', () => {
     });
     expect(processRepo.waitForShutdown).toHaveBeenCalled();
     expect(poller.start).toHaveBeenCalledWith(root, 30);
+    expect(consumer.start).toHaveBeenCalledWith(root, 30);
     expect(poller.stop).toHaveBeenCalled();
+    expect(consumer.stop).toHaveBeenCalled();
     expect(processRepo.clearPid).toHaveBeenCalledWith(
       paths.pidFile,
       process.pid

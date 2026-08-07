@@ -216,6 +216,15 @@ import {
 } from './repositories/github-watch-source.repository';
 import { PrReviewWatchSourceAdapter } from './services/pr-review-watch-source.adapter';
 import { PrChecksWatchSourceAdapter } from './services/pr-checks-watch-source.adapter';
+import {
+  IWakeActionRegistry,
+  WakeActionRegistry
+} from './services/wake-action';
+import { NotifyWakeAction } from './services/notify-wake.action';
+import {
+  IWakeConsumptionService,
+  WakeConsumptionService
+} from './services/wake-consumption.service';
 import { WORKFLOW_TOKENS } from './tokens';
 import { WorkflowError } from './types';
 import { resolveInferenceBackend } from './utils/backend-select';
@@ -405,6 +414,14 @@ container
   .bind<IPollSchedulerService>(WORKFLOW_TOKENS.PollSchedulerService)
   .to(PollSchedulerService)
   .inSingletonScope();
+container
+  .bind<IWakeActionRegistry>(WORKFLOW_TOKENS.WakeActionRegistry)
+  .to(WakeActionRegistry)
+  .inSingletonScope();
+container
+  .bind<IWakeConsumptionService>(WORKFLOW_TOKENS.WakeConsumptionService)
+  .to(WakeConsumptionService)
+  .inSingletonScope();
 
 {
   // Phase 1 wires only pr-review and pr-checks. Remaining kinds are Phase 3
@@ -424,6 +441,13 @@ container
       WORKFLOW_TOKENS.PrChecksWatchSourceAdapter
     )
   );
+
+  // Phase 1 follow-up: best-effort chat/desktop notify. Phase 3 headless
+  // dispatch registers beside this without changing the consumption loop.
+  const actions = container.get<IWakeActionRegistry>(
+    WORKFLOW_TOKENS.WakeActionRegistry
+  );
+  actions.register(new NotifyWakeAction());
 }
 
 container.bind<IDaemonHandler>(WORKFLOW_TOKENS.DaemonHandler).to(DaemonHandler);

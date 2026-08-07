@@ -112,9 +112,12 @@ bun run dev -- queue-run --spec ../specs/PRD-0011/phase-4-spec.md --repo ..
 # List queued launch records (FIFO, oldest first)
 bun run dev -- status --queue
 
-# Per-workspace SDLC event daemon (SPEC-PRD-0020-P1 T-01/T-04) — process
-# bootstrap, durable storage, watch registry, and bounded poll scheduler. The
-# scheduler polls with the Phase 1 GitHub adapters (pr-review / pr-checks).
+# Per-workspace SDLC event daemon (SPEC-PRD-0020-P1 T-01/T-04/T-06) — process
+# bootstrap, durable storage, watch registry, bounded poll scheduler, and the
+# wake consumption loop (atomic claim → consumedBy → registered actions).
+# The scheduler polls with the Phase 1 GitHub adapters (pr-review / pr-checks);
+# consumption dispatches the Phase 1 notify mirror (chat/desktop), with headless
+# dispatch left for Phase 3 on the same action interface.
 # Config is `.sdlc/daemon.json` under the workspace root (DaemonConfig contract).
 # `install` creates `.sdlc/daemon/` + touches the log before launchd load;
 # load is transactional (enable failure → bootout + plist remove);
@@ -202,6 +205,18 @@ and return signals only — the scheduler commits them through the shared
 wake-inbox writer (`commitWatchSignal`) so no adapter can bypass exactly-once
 delivery. Remaining watch kinds (`issue-state`, `workflow-run`,
 `run-supervisor`, `queue-item`) stay unregistered until Phase 3.
+
+`WakeConsumptionService` is the consumer side of that inbox. It lists
+`wake/pending/`, claims each wake with the store's atomic rename (exactly one
+winner under concurrency), stamps `consumedBy` onto the shared ledger inode,
+then invokes every action registered in `WakeActionRegistry`. Phase 1 registers
+only the `notify` action — best-effort desktop (`osascript`) and chat-mirror
+(`AGENT_LOOP_WAKE_*` stdout) channels, the same mirrors `wake-inbox.sh` already
+used. A channel failure is appended to the wake's `actionFailures` and never
+moves the wake back to pending: notification is observability, not a gate.
+The action context is `{ workspaceRoot, wake, consumedBy }` with no
+chat/conversation/session object, so Phase 3 headless agent dispatch can
+register beside `notify` without reshaping the loop.
 
 `decompose` grounds the synthesized envelope in the target repo tree (#35):
 every `allowedPaths` glob must match at least one existing path in the
