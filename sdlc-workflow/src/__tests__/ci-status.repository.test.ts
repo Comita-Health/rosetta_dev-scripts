@@ -1,4 +1,7 @@
 jest.mock('child_process', () => ({ execSync: jest.fn() }));
+jest.mock('../utils/gh-repo', () => ({
+  originSlug: jest.fn(() => 'org/repo')
+}));
 
 import { execSync } from 'child_process';
 import { CiStatusRepository } from '../repositories/ci-status.repository';
@@ -22,7 +25,7 @@ describe('CiStatusRepository', () => {
     const summary = repo.checkRuns('/repo', 'abc123');
 
     expect(execMock.mock.calls[0][0]).toContain(
-      'repos/{owner}/{repo}/commits/abc123/check-runs'
+      'repos/org/repo/commits/abc123/check-runs'
     );
     expect(execMock.mock.calls[0][1]).toEqual(
       expect.objectContaining({ cwd: '/repo' })
@@ -87,7 +90,7 @@ describe('CiStatusRepository', () => {
     });
 
     const [command, options] = execMock.mock.calls[0];
-    expect(command).toContain('repos/{owner}/{repo}/statuses/abc123');
+    expect(command).toContain('repos/org/repo/statuses/abc123');
     expect(command).toContain('--input -');
     expect(JSON.parse(options.input)).toEqual({
       state: 'success',

@@ -4,6 +4,9 @@ jest.mock('child_process', () => ({ execSync: jest.fn() }));
 jest.mock('../utils/gh-auth', () => ({
   envForAddiWrite: jest.fn(() => ({ ...process.env, GH_TOKEN: 'addi-test' }))
 }));
+jest.mock('../utils/gh-repo', () => ({
+  originSlug: jest.fn(() => 'org/repo')
+}));
 
 import { execSync } from 'child_process';
 import { IssueRepository } from '../repositories/issue.repository';

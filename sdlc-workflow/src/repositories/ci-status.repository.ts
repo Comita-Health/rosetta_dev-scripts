@@ -1,6 +1,7 @@
 import { execSync } from 'child_process';
 import { injectable } from 'inversify';
 import { WorkflowError } from '../types';
+import { originSlug } from '../utils/gh-repo';
 
 export interface CheckRunSummary {
   total: number;
@@ -45,7 +46,7 @@ export class CiStatusRepository implements ICiStatusRepository {
     let raw: string;
     try {
       raw = execSync(
-        `gh api "repos/{owner}/{repo}/commits/${sha}/check-runs" --jq "[.check_runs[] | {name, status, conclusion}]"`,
+        `gh api "repos/${originSlug(repoPath)}/commits/${sha}/check-runs" --jq "[.check_runs[] | {name, status, conclusion}]"`,
         { cwd: repoPath, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
       );
     } catch {
@@ -123,7 +124,7 @@ export class CiStatusRepository implements ICiStatusRepository {
     }
     try {
       execSync(
-        `gh api --method POST "repos/{owner}/{repo}/statuses/${sha}" --input -`,
+        `gh api --method POST "repos/${originSlug(repoPath)}/statuses/${sha}" --input -`,
         {
           cwd: repoPath,
           encoding: 'utf-8',

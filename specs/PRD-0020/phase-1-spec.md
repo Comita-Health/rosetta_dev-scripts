@@ -77,7 +77,7 @@ Implement the tick loop that iterates active watches and invokes their source ad
 - [ ] test: simulating two overlapping ticks for the same watch and underlying signal produces exactly one wake record.
 - [ ] test: retrying a poll after a simulated crash mid-write does not produce a duplicate wake for the same source event.
 - [ ] test: a watch whose adapter call fails N consecutive times is marked degraded and stops being retried inline, instead of looping indefinitely.
-- [ ] agent: an Approve event on a watched PR is reflected as a wake record within one configured poll interval when checked against the running daemon.
+- [ ] agent: against a daemon started on a scratch workspace root with a stub source adapter registered, a watch whose adapter reports a signal yields exactly one wake record within one configured poll interval, and re-reporting that same signal adds no second wake.
 
 ## Task T-05: GitHub signal adapters for the pr-review and pr-checks watch kinds
 

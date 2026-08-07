@@ -1,6 +1,7 @@
 import { execSync } from 'child_process';
 import { WorkflowError } from '../types';
 import { envForAddiWrite } from './gh-auth';
+import { originSlug } from './gh-repo';
 
 export interface RunGhOptions {
   stdin?: string;
@@ -10,6 +11,19 @@ export interface RunGhOptions {
    */
   requireAddi?: boolean;
 }
+
+/**
+ * Owner of the checkout's origin, or undefined when it cannot be resolved.
+ * A write still has to be attempted in that case: failing auth selection is
+ * the caller's problem to report, not a reason to skip the command.
+ */
+const ownerOf = (repoPath: string): string | undefined => {
+  try {
+    return originSlug(repoPath).split('/')[0];
+  } catch {
+    return undefined;
+  }
+};
 
 /**
  * Run a gh CLI command in repoPath.
@@ -26,7 +40,10 @@ export const runGh = (
 ): string => {
   const requireAddi = options.requireAddi === true;
   const env = requireAddi
-    ? envForAddiWrite(process.env, { cwd: repoPath })
+    ? envForAddiWrite(process.env, {
+        cwd: repoPath,
+        owner: ownerOf(repoPath)
+      })
     : { ...process.env };
 
   try {

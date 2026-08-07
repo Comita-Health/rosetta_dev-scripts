@@ -1,6 +1,7 @@
 import { injectable } from 'inversify';
 import { WorkflowError } from '../types';
 import { runGh } from '../utils/gh-cli';
+import { originSlug } from '../utils/gh-repo';
 
 export interface PrRef {
   url: string;
@@ -66,7 +67,7 @@ export class PullRequestRepository implements IPullRequestRepository {
   findByBranch(repoPath: string, branch: string): PrRef | null {
     const raw = runGh(
       repoPath,
-      `gh pr list --head "${branch}" --state open --json url,number --limit 1`
+      `gh pr list --repo "${originSlug(repoPath)}" --head "${branch}" --state open --json url,number --limit 1`
     );
     let refs: PrRef[];
     try {
@@ -84,7 +85,7 @@ export class PullRequestRepository implements IPullRequestRepository {
   latestForBranch(repoPath: string, branch: string): PrStateRef | null {
     const raw = runGh(
       repoPath,
-      `gh pr list --head "${branch}" --state all --json url,number,state --limit 1`
+      `gh pr list --repo "${originSlug(repoPath)}" --head "${branch}" --state all --json url,number,state --limit 1`
     );
     let refs: PrStateRef[];
     try {
@@ -106,7 +107,7 @@ export class PullRequestRepository implements IPullRequestRepository {
     // Body via stdin (--body-file -) so Markdown survives shell quoting.
     const url = runGh(
       repoPath,
-      `gh pr create --head "${input.branch}" --title "${input.title.replace(/"/g, '\\"')}" --body-file -`,
+      `gh pr create --repo "${originSlug(repoPath)}" --head "${input.branch}" --title "${input.title.replace(/"/g, '\\"')}" --body-file -`,
       { stdin: input.body, requireAddi: true }
     ).trim();
     const match = url.match(/\/pull\/(\d+)\s*$/);
@@ -121,7 +122,11 @@ export class PullRequestRepository implements IPullRequestRepository {
   }
 
   merge(repoPath: string, number: number): string {
-    runGh(repoPath, `gh pr merge ${number} --merge`, { requireAddi: true });
+    runGh(
+      repoPath,
+      `gh pr merge ${number} --repo "${originSlug(repoPath)}" --merge`,
+      { requireAddi: true }
+    );
     const sha = this.mergeCommitOid(repoPath, number);
     if (sha === null) {
       throw new WorkflowError(
@@ -136,7 +141,7 @@ export class PullRequestRepository implements IPullRequestRepository {
   mergeCommitOid(repoPath: string, number: number): string | null {
     const sha = runGh(
       repoPath,
-      `gh pr view ${number} --json mergeCommit --jq ".mergeCommit.oid // empty"`
+      `gh pr view ${number} --repo "${originSlug(repoPath)}" --json mergeCommit --jq ".mergeCommit.oid // empty"`
     ).trim();
     if (!/^[0-9a-f]{7,40}$/.test(sha)) {
       return null;
@@ -145,16 +150,24 @@ export class PullRequestRepository implements IPullRequestRepository {
   }
 
   comment(repoPath: string, number: number, body: string): void {
-    runGh(repoPath, `gh pr comment ${number} --body-file -`, {
-      stdin: body,
-      requireAddi: true
-    });
+    runGh(
+      repoPath,
+      `gh pr comment ${number} --repo "${originSlug(repoPath)}" --body-file -`,
+      {
+        stdin: body,
+        requireAddi: true
+      }
+    );
   }
 
   updateBody(repoPath: string, number: number, body: string): void {
-    runGh(repoPath, `gh pr edit ${number} --body-file -`, {
-      stdin: body,
-      requireAddi: true
-    });
+    runGh(
+      repoPath,
+      `gh pr edit ${number} --repo "${originSlug(repoPath)}" --body-file -`,
+      {
+        stdin: body,
+        requireAddi: true
+      }
+    );
   }
 }
