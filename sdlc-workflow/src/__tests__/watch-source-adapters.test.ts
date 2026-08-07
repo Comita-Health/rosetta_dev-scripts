@@ -401,7 +401,47 @@ describe('watch source adapters (SPEC-PRD-0020-P1 T-05)', () => {
       expect(result.signals[0].data?.signal).toBe('checks_success');
     });
 
-    it('emits nothing while checks or status contexts are still pending', async () => {
+    // A GitHub Actions-only commit reports combined status `pending` with an
+    // empty `statuses` array forever, because that rollup means "no statuses or
+    // a context is pending". Reading the rollup as blocking would wedge the
+    // watch on every Actions PR, so the contexts are the authority.
+    it.each([
+      ['success', 'checks_success', []],
+      ['failure', 'checks_failed', ['ci']]
+    ])(
+      'emits %s from check runs alone when the commit has no status contexts',
+      async (conclusion, expectedSignal, failedChecks) => {
+        const github = githubStub({
+          listCheckRuns: jest.fn().mockReturnValue([
+            {
+              id: 1,
+              name: 'ci',
+              status: 'completed',
+              conclusion,
+              completedAt: '2026-08-07T10:09:00.000Z'
+            }
+          ]),
+          getCombinedStatus: jest
+            .fn()
+            .mockReturnValue({ state: 'pending', statuses: [] })
+        });
+        const adapter = new PrChecksWatchSourceAdapter(github);
+
+        const result = await adapter.poll('/workspace', prWatch('pr-checks'));
+
+        expect(result.signals).toHaveLength(1);
+        expect(result.signals[0]).toMatchObject({
+          id: `${expectedSignal}:abc123def456`,
+          observedAt: '2026-08-07T10:09:00.000Z',
+          data: { signal: expectedSignal, statusState: 'none' }
+        });
+        if (expectedSignal === 'checks_failed') {
+          expect(result.signals[0].data?.failedChecks).toEqual(failedChecks);
+        }
+      }
+    );
+
+    it('emits nothing while a check run is still in progress', async () => {
       const github = githubStub({
         listCheckRuns: jest.fn().mockReturnValue([
           {
@@ -423,15 +463,39 @@ describe('watch source adapters (SPEC-PRD-0020-P1 T-05)', () => {
       ).resolves.toEqual({ signals: [] });
     });
 
+    it('emits nothing while a status context is still pending', async () => {
+      const github = githubStub({
+        listCheckRuns: jest.fn().mockReturnValue([
+          {
+            id: 1,
+            name: 'ci',
+            status: 'completed',
+            conclusion: 'success',
+            completedAt: '2026-08-07T10:09:00.000Z'
+          }
+        ]),
+        getCombinedStatus: jest.fn().mockReturnValue({
+          state: 'pending',
+          statuses: [
+            {
+              context: 'legacy/deploy',
+              state: 'pending',
+              updatedAt: '2026-08-07T10:09:00.000Z'
+            }
+          ]
+        })
+      });
+      const adapter = new PrChecksWatchSourceAdapter(github);
+
+      await expect(
+        adapter.poll('/workspace', prWatch('pr-checks'))
+      ).resolves.toEqual({ signals: [] });
+    });
+
     // Green with no CI configured is indistinguishable from CI that has not
     // reported yet, so the adapter keeps polling instead of waking on nothing.
     it('emits nothing when the head SHA has no CI surface at all', async () => {
-      const github = githubStub({
-        getCombinedStatus: jest
-          .fn()
-          .mockReturnValue({ state: 'success', statuses: [] })
-      });
-      const adapter = new PrChecksWatchSourceAdapter(github);
+      const adapter = new PrChecksWatchSourceAdapter(githubStub());
 
       await expect(
         adapter.poll('/workspace', prWatch('pr-checks'))

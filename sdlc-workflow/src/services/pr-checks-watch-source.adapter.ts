@@ -57,6 +57,30 @@ const failingCheckNames = (checks: readonly GitHubCheckRun[]): string[] =>
     .map(run => run.name);
 
 /**
+ * Roll the individual status contexts up, ignoring `combined.state`.
+ *
+ * The combined commit-status API defines the rollup `pending` as "no statuses
+ * or a context is pending", so a Checks-API-only commit (every GitHub Actions
+ * PR) reports `pending` forever with an empty `statuses` array. Reading the
+ * rollup directly would wedge those watches, so the contexts are the authority
+ * and `none` marks a commit with no legacy status contexts at all.
+ */
+const rollUpStatuses = (
+  statuses: GitHubCombinedStatus
+): { state: string; pending: boolean; failed: boolean } => {
+  if (statuses.statuses.length === 0) {
+    return { state: 'none', pending: false, failed: false };
+  }
+  return {
+    state: statuses.state,
+    pending: statuses.statuses.some(status => status.state === 'pending'),
+    failed: statuses.statuses.some(
+      status => status.state === 'failure' || status.state === 'error'
+    )
+  };
+};
+
+/**
  * Phase 1 `pr-checks` source adapter (SPEC-PRD-0020-P1 T-05).
  *
  * Normalizes Checks API terminal states and commit status-context terminal
@@ -88,9 +112,9 @@ export class PrChecksWatchSourceAdapter implements IWatchSourceAdapter {
       pr.headSha
     );
 
+    const status = rollUpStatuses(combined);
     const checksPending = checks.some(run => run.status !== 'completed');
-    const statusPending = combined.state === 'pending';
-    if (checksPending || statusPending) {
+    if (checksPending || status.pending) {
       return { signals: [] };
     }
 
@@ -100,12 +124,10 @@ export class PrChecksWatchSourceAdapter implements IWatchSourceAdapter {
     }
 
     const failed = failingCheckNames(checks);
-    const statusFailed =
-      combined.state === 'failure' || combined.state === 'error';
     const now = new Date().toISOString();
     const observedAt = latestTimestamp(checks, combined, now);
 
-    if (failed.length > 0 || statusFailed === true) {
+    if (failed.length > 0 || status.failed === true) {
       const signal: WatchSourceSignal = {
         id: `checks_failed:${pr.headSha}`,
         observedAt,
@@ -116,7 +138,7 @@ export class PrChecksWatchSourceAdapter implements IWatchSourceAdapter {
           number,
           sha: pr.headSha,
           failedChecks: failed,
-          statusState: combined.state
+          statusState: status.state
         }
       };
       return { signals: [signal] };
@@ -131,7 +153,7 @@ export class PrChecksWatchSourceAdapter implements IWatchSourceAdapter {
         repo,
         number,
         sha: pr.headSha,
-        statusState: combined.state
+        statusState: status.state
       }
     };
     return { signals: [signal] };

@@ -105,11 +105,16 @@ describe('GitHubWatchSourceRepository', () => {
       .mockReturnValueOnce(
         JSON.stringify([
           {
-            id: 3,
-            name: 'ci',
-            status: 'completed',
-            conclusion: 'success',
-            completed_at: '2026-08-07T10:02:00Z'
+            total_count: 1,
+            check_runs: [
+              {
+                id: 3,
+                name: 'ci',
+                status: 'completed',
+                conclusion: 'success',
+                completed_at: '2026-08-07T10:02:00Z'
+              }
+            ]
           }
         ])
       )
@@ -145,6 +150,64 @@ describe('GitHubWatchSourceRepository', () => {
         }
       ]
     });
+  });
+
+  // check-runs answers with an object rather than an array, so a busy commit's
+  // runs arrive across several slurped pages. Dropping the later pages would
+  // let a terminal verdict be read off an incomplete first page.
+  it('merges every slurped page of check runs for a commit SHA', () => {
+    const workspace = workspaceWithConfig();
+    ghMock.mockReturnValue(
+      JSON.stringify([
+        {
+          total_count: 3,
+          check_runs: [
+            {
+              id: 1,
+              name: 'page-one',
+              status: 'completed',
+              conclusion: 'success',
+              completed_at: '2026-08-07T10:02:00Z'
+            }
+          ]
+        },
+        { total_count: 3, check_runs: null },
+        {
+          total_count: 3,
+          check_runs: [
+            {
+              id: 2,
+              name: 'page-three',
+              status: 'in_progress',
+              conclusion: null,
+              completed_at: null
+            }
+          ]
+        }
+      ])
+    );
+
+    expect(repo.listCheckRuns(workspace, 'Acme/widgets', 'sha')).toEqual([
+      {
+        id: 1,
+        name: 'page-one',
+        status: 'completed',
+        conclusion: 'success',
+        completedAt: '2026-08-07T10:02:00Z'
+      },
+      {
+        id: 2,
+        name: 'page-three',
+        status: 'in_progress',
+        conclusion: null,
+        completedAt: null
+      }
+    ]);
+    expect(ghMock).toHaveBeenCalledWith(
+      workspace,
+      expect.stringContaining('--paginate --slurp'),
+      expect.objectContaining({ requireAddi: true, owner: 'Acme' })
+    );
   });
 
   it('rejects a target repo that is not owner/name', () => {

@@ -190,7 +190,13 @@ timer. Phase 1 registers the GitHub `pr-review` and `pr-checks` source adapters
 (SPEC-PRD-0020-P1 T-05) into `WatchSourceAdapterRegistry` at process start:
 `pr-review` normalizes Approve, Request-changes, and new inline review comments
 into distinct signals; `pr-checks` normalizes Checks API and commit
-status-context terminal success/failure for the PR head SHA. Both call GitHub
+status-context terminal success/failure for the PR head SHA. `pr-checks` reads
+the individual commit status contexts rather than the combined rollup, because
+the combined `pending` state means "no statuses **or** a context is pending" —
+trusting the rollup would wedge every Checks-API-only PR (any repo on GitHub
+Actions), which reports `pending` with no contexts forever. All pages of check
+runs are fetched before a verdict is taken, so a busy commit cannot be called
+green off an incomplete first page. Both call GitHub
 under the workspace daemon contract's Addi activate script (with token refresh)
 and return signals only — the scheduler commits them through the shared
 wake-inbox writer (`commitWatchSignal`) so no adapter can bypass exactly-once

@@ -241,27 +241,36 @@ export class GitHubWatchSourceRepository implements IGitHubWatchSourceRepository
     sha: string
   ): GitHubCheckRun[] {
     const { slug } = requireRepo(repo);
+    // check-runs answers with an object, not an array, so --paginate alone
+    // would emit one JSON object per page. --slurp wraps the pages in an outer
+    // array; it cannot be combined with --jq, so the pages are merged here.
+    // Without this a busy commit's later pages are invisible and a terminal
+    // verdict can be read off an incomplete first page.
     const raw = this.gh(
       workspaceRoot,
       repo,
-      `gh api "repos/${slug}/commits/${sha}/check-runs" --jq ".check_runs"`
+      `gh api --paginate --slurp "repos/${slug}/commits/${sha}/check-runs?per_page=100"`
     );
-    const rows = parseJson<
+    const pages = parseJson<
       Array<{
-        id: number;
-        name: string;
-        status: string;
-        conclusion: string | null;
-        completed_at: string | null;
+        check_runs?: Array<{
+          id: number;
+          name: string;
+          status: string;
+          conclusion: string | null;
+          completed_at: string | null;
+        }> | null;
       }>
     >(raw, 'list check-runs');
-    return rows.map(row => ({
-      id: row.id,
-      name: row.name,
-      status: row.status,
-      conclusion: row.conclusion,
-      completedAt: row.completed_at
-    }));
+    return pages.flatMap(page =>
+      (page.check_runs ?? []).map(row => ({
+        id: row.id,
+        name: row.name,
+        status: row.status,
+        conclusion: row.conclusion,
+        completedAt: row.completed_at
+      }))
+    );
   }
 
   getCombinedStatus(

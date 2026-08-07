@@ -4,7 +4,10 @@
 
 - **sdlc-workflow:** add Phase 1 GitHub watch source adapters for `pr-review`
   (Approve, Request-changes, new review comments) and `pr-checks` (Checks API
-  and status-context terminal states). Both emit normalized signals that the
+  and status-context terminal states). `pr-checks` judges CI from the individual
+  status contexts and every page of check runs, not the combined status rollup,
+  whose `pending` state also means "no statuses" and would otherwise never let a
+  Checks-API-only PR report terminal CI. Both emit normalized signals that the
   poll scheduler commits only through the shared wake-inbox writer under the
   workspace Addi activate-script identity with token refresh; Phase 3 kinds are
   not stubbed (SPEC-PRD-0020-P1 T-05).
