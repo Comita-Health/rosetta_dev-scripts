@@ -58,5 +58,7 @@ export const WORKFLOW_TOKENS = {
   DaemonProcessRepository: Symbol.for('DaemonProcessRepository'),
   LaunchdRepository: Symbol.for('LaunchdRepository'),
   DaemonLifecycleService: Symbol.for('DaemonLifecycleService'),
-  DaemonHandler: Symbol.for('DaemonHandler')
+  DaemonHandler: Symbol.for('DaemonHandler'),
+  // SPEC-PRD-0020-P1 T-02
+  DaemonStoreRepository: Symbol.for('DaemonStoreRepository')
 } as const;

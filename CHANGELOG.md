@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** add the per-workspace durable daemon store with one JSON
+  file per watch and wake, idempotent wake IDs, fsynced publication, and
+  atomic-rename wake claims (SPEC-PRD-0020-P1 T-02).
 - **sdlc-workflow:** a `daemon install` that cannot execute `launchctl` at all
   now names the cause. `spawnSync` reports that case as `status: null` with
   empty stdout/stderr, so the thrown `DAEMON_CONFIG_INVALID` carried a blank

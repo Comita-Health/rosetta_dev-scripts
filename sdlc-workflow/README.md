@@ -108,8 +108,8 @@ bun run dev -- queue-run --spec ../specs/PRD-0011/phase-4-spec.md --repo ..
 # List queued launch records (FIFO, oldest first)
 bun run dev -- status --queue
 
-# Per-workspace SDLC event daemon (SPEC-PRD-0020-P1 T-01) — process
-# bootstrap only; watch/poll modules land in later tasks. Config is
+# Per-workspace SDLC event daemon (SPEC-PRD-0020-P1 T-01/T-02) — process
+# bootstrap plus durable storage; watch/poll modules land in later tasks. Config is
 # `.sdlc/daemon.json` under the workspace root (DaemonConfig contract).
 # `install` creates `.sdlc/daemon/` + touches the log before launchd load;
 # load is transactional (enable failure → bootout + plist remove);
@@ -123,6 +123,15 @@ bun run dev -- daemon uninstall --workspace ../..
 #   --plist-dir   LaunchAgents directory (default: ~/Library/LaunchAgents)
 #   --no-load     write the plist without calling launchctl (tests / dry-run)
 ```
+
+The daemon store derives its root from the workspace exactly as lifecycle
+does: `.sdlc/daemon/`. Watch registrations are independent JSON files under
+`watches/`; wake events retain the existing inbox shape under
+`wake/pending/` and move to `wake/consumed/` when claimed. A wake ID is the
+SHA-256 digest of its `(kind, target, signal)` tuple, so detecting one signal
+again resolves to the original record. Writes fsync content and directory
+metadata. Consumption atomically renames the sole pending file, which gives
+concurrent consumers exactly one winner without a database or live session.
 
 `decompose` grounds the synthesized envelope in the target repo tree (#35):
 every `allowedPaths` glob must match at least one existing path in the
