@@ -527,12 +527,55 @@ export interface DaemonRuntimePaths {
   launchdLabel: string;
 }
 
-/** File-backed watch payload; T-03 extends this storage boundary. */
-export interface DurableWatchRecord {
+export type WatchKind =
+  | 'pr-review'
+  | 'pr-checks'
+  | 'issue-state'
+  | 'workflow-run'
+  | 'run-supervisor'
+  | 'queue-item';
+
+export interface WatchTarget {
+  repo?: string;
+  number?: number;
+  runId?: string;
+}
+
+export interface HeadlessAction {
+  kind: 'agent-dispatch' | 'engine-command';
+  prompt?: string;
+  argv?: string[];
+  transcriptDir: string;
+}
+
+/** PRD-0020 §4 durable watch registration contract. */
+export interface WatchRegistration {
+  /** Stable identity derived from `kind + target`. */
   id: string;
-  kind: string;
-  target: string;
-  [key: string]: unknown;
+  kind: WatchKind;
+  target: WatchTarget;
+  pollSeconds: number;
+  action?: HeadlessAction;
+  createdBy: string;
+  expiresAt?: string;
+}
+
+/** Input accepted by the registry; identity and lifecycle fields are derived. */
+export type WatchRegistrationInput = Omit<WatchRegistration, 'id'>;
+
+/** File-backed registration plus registry-owned lifecycle metadata. */
+export interface DurableWatchRecord extends WatchRegistration {
+  createdAt: string;
+  lastPollTime?: string;
+  expiredAt?: string;
+  terminalState?: string;
+}
+
+/** Active-watch projection consumed by status surfaces. */
+export interface ActiveWatch extends WatchRegistration {
+  /** Whole seconds since registration. */
+  age: number;
+  lastPollTime: string | null;
 }
 
 /** Input whose identity is the `(kind, target, signal)` tuple. */
