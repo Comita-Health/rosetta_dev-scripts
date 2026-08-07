@@ -1,17 +1,28 @@
-jest.mock('child_process', () => ({ execSync: jest.fn() }));
+jest.mock('../utils/gh-cli', () => ({ runGh: jest.fn() }));
+jest.mock('../utils/gh-repo', () => ({
+  originSlug: jest.fn(() => 'org/repo')
+}));
 
-import { execSync } from 'child_process';
 import { CiStatusRepository } from '../repositories/ci-status.repository';
+import { runGh } from '../utils/gh-cli';
 
-const execMock = execSync as jest.Mock;
+const ghMock = runGh as jest.Mock;
+
+/** [command, options] for the nth gh call (arg 0 is the repo path). */
+const callArgs = (
+  index: number
+): [string, { stdin?: string; requireAddi?: boolean } | undefined] => [
+  ghMock.mock.calls[index][1],
+  ghMock.mock.calls[index][2]
+];
 
 describe('CiStatusRepository', () => {
   const repo = new CiStatusRepository();
 
-  beforeEach(() => execMock.mockReset());
+  beforeEach(() => ghMock.mockReset());
 
   it('queries check runs for the SHA via gh in the repo directory', () => {
-    execMock.mockReturnValue(
+    ghMock.mockReturnValue(
       JSON.stringify([
         { name: 'ci', status: 'completed', conclusion: 'success' },
         { name: 'dco', status: 'completed', conclusion: 'neutral' },
@@ -21,17 +32,15 @@ describe('CiStatusRepository', () => {
 
     const summary = repo.checkRuns('/repo', 'abc123');
 
-    expect(execMock.mock.calls[0][0]).toContain(
-      'repos/{owner}/{repo}/commits/abc123/check-runs'
-    );
-    expect(execMock.mock.calls[0][1]).toEqual(
-      expect.objectContaining({ cwd: '/repo' })
+    expect(ghMock.mock.calls[0][0]).toBe('/repo');
+    expect(callArgs(0)[0]).toContain(
+      'repos/org/repo/commits/abc123/check-runs'
     );
     expect(summary).toEqual({ total: 3, failed: [], pending: [] });
   });
 
   it('reports failed and pending runs by name', () => {
-    execMock.mockReturnValue(
+    ghMock.mockReturnValue(
       JSON.stringify([
         { name: 'ci', status: 'completed', conclusion: 'failure' },
         { name: 'e2e', status: 'in_progress', conclusion: null }
@@ -46,7 +55,7 @@ describe('CiStatusRepository', () => {
   });
 
   it('returns null when gh fails (commit not on remote)', () => {
-    execMock.mockImplementation(() => {
+    ghMock.mockImplementation(() => {
       throw new Error('HTTP 422: No commit found');
     });
 
@@ -54,30 +63,30 @@ describe('CiStatusRepository', () => {
   });
 
   it('returns null on unparseable gh output', () => {
-    execMock.mockReturnValue('not json');
+    ghMock.mockReturnValue('not json');
 
     expect(repo.checkRuns('/repo', 'abc')).toBeNull();
   });
 
   it('fetches failed-step logs for the failing runs at a SHA (P3 T-03)', () => {
-    execMock
+    ghMock
       .mockReturnValueOnce('101\n102\n')
       .mockReturnValueOnce('run 101: TS2304 error\n')
       .mockReturnValueOnce('run 102: jest failed\n');
 
     const logs = repo.failedLogs('/repo', 'abc123');
 
-    expect(execMock.mock.calls[0][0]).toContain(
+    expect(callArgs(0)[0]).toContain(
       'gh run list --commit abc123 --status failure'
     );
-    expect(execMock.mock.calls[1][0]).toContain('gh run view 101 --log-failed');
-    expect(execMock.mock.calls[2][0]).toContain('gh run view 102 --log-failed');
+    expect(callArgs(1)[0]).toContain('gh run view 101 --log-failed');
+    expect(callArgs(2)[0]).toContain('gh run view 102 --log-failed');
     expect(logs).toContain('TS2304 error');
     expect(logs).toContain('jest failed');
   });
 
   it('creates a commit status via gh api --input JSON', () => {
-    execMock.mockReturnValue('{}');
+    ghMock.mockReturnValue('{}');
 
     repo.createStatus('/repo', 'abc123', {
       state: 'success',
@@ -86,10 +95,10 @@ describe('CiStatusRepository', () => {
       targetUrl: 'https://github.com/org/repo/pull/7'
     });
 
-    const [command, options] = execMock.mock.calls[0];
-    expect(command).toContain('repos/{owner}/{repo}/statuses/abc123');
+    const [command, options] = callArgs(0);
+    expect(command).toContain('repos/org/repo/statuses/abc123');
     expect(command).toContain('--input -');
-    expect(JSON.parse(options.input)).toEqual({
+    expect(JSON.parse(options?.stdin ?? '{}')).toEqual({
       state: 'success',
       context: 'sdlc/reviewer',
       description: 'T-01: pass',
@@ -97,20 +106,33 @@ describe('CiStatusRepository', () => {
     });
   });
 
+  // The reviewer gate shows up on the PR as a status check, so it has to be
+  // posted by the App rather than whoever happens to be authenticated.
+  it('posts the commit status as Addi', () => {
+    ghMock.mockReturnValue('{}');
+
+    repo.createStatus('/repo', 'abc', {
+      state: 'success',
+      context: 'sdlc/reviewer'
+    });
+
+    expect(callArgs(0)[1]?.requireAddi).toBe(true);
+  });
+
   it('omits empty optional status fields and wraps gh failures', () => {
-    execMock.mockReturnValue('{}');
+    ghMock.mockReturnValue('{}');
     repo.createStatus('/repo', 'sha', {
       state: 'pending',
       context: 'sdlc/reviewer',
       description: '',
       targetUrl: ''
     });
-    expect(JSON.parse(execMock.mock.calls[0][1].input)).toEqual({
+    expect(JSON.parse(callArgs(0)[1]?.stdin ?? '{}')).toEqual({
       state: 'pending',
       context: 'sdlc/reviewer'
     });
 
-    execMock.mockImplementation(() => {
+    ghMock.mockImplementation(() => {
       throw 'boom';
     });
     expect(() =>
@@ -122,13 +144,13 @@ describe('CiStatusRepository', () => {
   });
 
   it('failedLogs is best effort: empty string on failure, partial on one bad run', () => {
-    execMock.mockImplementation(() => {
+    ghMock.mockImplementation(() => {
       throw new Error('gh down');
     });
     expect(repo.failedLogs('/repo', 'abc')).toBe('');
 
-    execMock.mockReset();
-    execMock
+    ghMock.mockReset();
+    ghMock
       .mockReturnValueOnce('201\n202\n')
       .mockImplementationOnce(() => {
         throw new Error('log expired');

@@ -1,16 +1,27 @@
 import 'reflect-metadata';
 
 jest.mock('child_process', () => ({ execSync: jest.fn() }));
+jest.mock('../utils/gh-auth', () => ({
+  envForAddiWrite: jest.fn(() => ({ ...process.env, GH_TOKEN: 'addi-test' }))
+}));
+jest.mock('../utils/gh-repo', () => ({
+  originSlug: jest.fn(() => 'org/repo')
+}));
 
 import { execSync } from 'child_process';
 import { PullRequestRepository } from '../repositories/pull-request.repository';
+import { envForAddiWrite } from '../utils/gh-auth';
 
 const execMock = execSync as jest.Mock;
+const addiEnv = envForAddiWrite as jest.Mock;
 
 describe('PullRequestRepository (P3 T-02)', () => {
   const repo = new PullRequestRepository();
 
-  afterEach(() => execMock.mockReset());
+  afterEach(() => {
+    execMock.mockReset();
+    addiEnv.mockClear();
+  });
 
   it('finds the open PR for a branch', () => {
     execMock.mockReturnValue(
@@ -24,7 +35,9 @@ describe('PullRequestRepository (P3 T-02)', () => {
       number: 12
     });
     const [command, options] = execMock.mock.calls[0];
-    expect(command).toContain('gh pr list --head "sdlc/run-1/T-01"');
+    expect(command).toContain(
+      'gh pr list --repo "org/repo" --head "sdlc/run-1/T-01"'
+    );
     expect(options.cwd).toBe('/repo');
   });
 
@@ -48,9 +61,13 @@ describe('PullRequestRepository (P3 T-02)', () => {
       number: 13
     });
     const [command, options] = execMock.mock.calls[0];
-    expect(command).toContain('gh pr create --head "sdlc/run-1/T-01"');
+    expect(command).toContain(
+      'gh pr create --repo "org/repo" --head "sdlc/run-1/T-01"'
+    );
     expect(command).toContain('--body-file -');
     expect(options.input).toBe('## Summary\nmachine-generated');
+    expect(addiEnv).toHaveBeenCalledTimes(1);
+    expect(options.env.GH_TOKEN).toBe('addi-test');
   });
 
   it('throws typed on gh failure with the tool output as detail', () => {
@@ -80,7 +97,9 @@ describe('PullRequestRepository (P3 T-02)', () => {
     repo.comment('/repo', 12, '## reviewer\npass');
 
     const [command, options] = execMock.mock.calls[0];
-    expect(command).toContain('gh pr comment 12 --body-file -');
+    expect(command).toContain(
+      'gh pr comment 12 --repo "org/repo" --body-file -'
+    );
     expect(options.input).toBe('## reviewer\npass');
   });
 
@@ -93,7 +112,9 @@ describe('PullRequestRepository (P3 T-02)', () => {
       const sha = repo.merge('/repo', 14);
 
       expect(sha).toBe('abc123def4567890abc123def4567890abc123de');
-      expect(execMock.mock.calls[0][0]).toContain('gh pr merge 14 --merge');
+      expect(execMock.mock.calls[0][0]).toContain(
+        'gh pr merge 14 --repo "org/repo" --merge'
+      );
       expect(execMock.mock.calls[1][0]).toContain('gh pr view 14');
     });
 
@@ -124,7 +145,7 @@ describe('PullRequestRepository (P3 T-02)', () => {
         'abc123def4567890abc123def4567890abc123de'
       );
       expect(execMock.mock.calls[0][0]).toContain(
-        'gh pr view 14 --json mergeCommit'
+        'gh pr view 14 --repo "org/repo" --json mergeCommit'
       );
       expect(execMock.mock.calls[0][0]).toContain('.mergeCommit.oid // empty');
     });
@@ -165,7 +186,9 @@ describe('PullRequestRepository (P3 T-02)', () => {
       repo.latestForBranch('/repo', 'sdlc/closeout/SPEC-X');
 
       const [command, options] = execMock.mock.calls[0];
-      expect(command).toContain('gh pr list --head "sdlc/closeout/SPEC-X"');
+      expect(command).toContain(
+        'gh pr list --repo "org/repo" --head "sdlc/closeout/SPEC-X"'
+      );
       expect(command).toContain('--state all');
       expect(command).toContain('--limit 1');
       expect(options.cwd).toBe('/repo');
@@ -193,7 +216,7 @@ describe('PullRequestRepository (P3 T-02)', () => {
       repo.updateBody('/repo', 9, '## Summary\nderived from run-1');
 
       const [command, options] = execMock.mock.calls[0];
-      expect(command).toContain('gh pr edit 9 --body-file -');
+      expect(command).toContain('gh pr edit 9 --repo "org/repo" --body-file -');
       expect(options.input).toBe('## Summary\nderived from run-1');
     });
 

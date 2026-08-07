@@ -632,7 +632,12 @@ export type WorkflowErrorCode =
   | 'GIT_FAILED'
   | 'GH_FAILED'
   /** SPEC-PRD-0020-P1 T-01: workspace root missing or daemon config unusable. */
-  | 'DAEMON_CONFIG_INVALID';
+  | 'DAEMON_CONFIG_INVALID'
+  /**
+   * Mutating `gh` (issue/PR create) refused to run as the ambient human login
+   * and could not activate an Addi GitHub App identity.
+   */
+  | 'GH_NOT_ADDI';
 
 export class WorkflowError extends Error {
   constructor(

@@ -51,7 +51,7 @@ describe('layDownRootConfig', () => {
           'pr-approve-watch.md'
         ];
       if (p.endsWith(`${path.sep}commands`))
-        return ['review.md', 'add-repo.md', 'sdlc-status.md'];
+        return ['review.md', 'add-repo.md', 'sdlc-status.md', 'sdlc-run.md'];
       return [];
     });
     mockReadFileSync.mockReturnValue('# rule body\n');
@@ -98,6 +98,10 @@ describe('layDownRootConfig', () => {
     );
     expect(mockWriteFileSync).toHaveBeenCalledWith(
       path.join('/base', '.cursor', 'rules', 'command-sdlc-status.mdc'),
+      expect.stringContaining('alwaysApply: false')
+    );
+    expect(mockWriteFileSync).toHaveBeenCalledWith(
+      path.join('/base', '.cursor', 'rules', 'command-sdlc-run.mdc'),
       expect.stringContaining('alwaysApply: false')
     );
   });

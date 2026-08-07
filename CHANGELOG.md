@@ -53,6 +53,58 @@ enable` failures after a successful bootstrap fail the install instead of
   per workspace so two roots never share a process. `daemon install` /
   `daemon uninstall` write (or remove) a KeepAlive=true launchd plist with a
   workspace-unique label. Bootstrap and lifecycle only — no watch/poll yet.
+- **sdlc-workflow:** the engine now mints and refreshes its own GitHub token
+  instead of living on the one the operator exported at launch. A GitHub App
+  installation token is valid for 60 minutes; a detached supervised run lasts
+  hours. So roughly an hour into every long run the inherited token went 401
+  and took each consumer with it — `gh run watch` inside the repo-owned
+  sandbox script (recorded as `sandbox gate: breach - deploy command failed`
+  for a deploy workflow that had in fact succeeded), the CI gate's check-run
+  query (`checkRuns` swallows any error and returns `null`, which the gate
+  reports as `no CI results`), and the escalation `gh issue` call that was
+  supposed to tell a human about it. One expired credential surfaced as three
+  unrelated-looking gate failures and no issue, so a healthy PR sat unmergeable
+  with nothing on GitHub explaining why — the operator had to notice by hand.
+  Tokens are now cached per activate script and re-minted at 45 minutes, an
+  auth failure re-mints and retries once, and reads use the same identity as
+  writes so no code path is left on a separately-expiring credential.
+  Repo-owned subprocesses receive the refreshed token too, since they shell out
+  to `gh` themselves. Failure detail now includes `stderr`, which is where
+  `gh` puts the reason — reporting `message` alone reduced every failure to
+  `Command failed`.
+- **sdlc-workflow:** every `gh` call now pins `--repo` to the checkout's
+  `origin` remote. On a fork, an unqualified `gh pr create` / `gh issue create`
+  resolves against the fork's **upstream parent**, while the engine pushes task
+  branches to `origin` — so the PR call looked for a branch in a repository it
+  was never pushed to and failed with `No commits between main and <branch>` /
+  `Head ref must be a branch`. Wording that reads like a bad branch, but is a
+  wrong-repository lookup that no gate remediation can fix. The same bug made
+  `gh api repos/{owner}/{repo}/commits/<sha>/check-runs` query the parent, so
+  the CI gate reported `no check runs after waiting 300s` for commits whose
+  checks were green on the fork, and escalation issues landed on the wrong
+  repository. `originSlug` resolves the remote once per checkout and fails
+  loud rather than letting `gh` choose a repository the caller did not intend.
+- **sdlc-workflow:** the Addi activate script is now chosen by the **owner
+  being written to**, not by discovery order. A workspace's GitHub App is
+  installed on that workspace's org only, so a run in a `Comita-Health`
+  checkout that minted the `rosetta` App authenticated fine and then failed
+  the write with `Resource not accessible by integration` — a permission error
+  that reads like a missing grant but is the wrong App. Being Addi is likewise
+  not sufficient to reuse the ambient session, since that session can hold a
+  different org's Addi; when an owner-scoped script exists its token is minted
+  in preference. Explicit `SDLC_GH_ACTIVATE` / `ROSETTA_GH_ACTIVATE` overrides
+  still win.
+- **SPEC-PRD-0020-P1 T-04:** the poll-scheduler agent acceptance criterion
+  required an Approve event on a watched PR to surface as a wake against a
+  running daemon. That could never hold inside T-04: the `pr-review` adapter is
+  T-05's deliverable and T-05 depends on T-04, and `.sdlc/daemon.json` is a
+  consumer-owned contract the engine repo deliberately does not carry. The
+  criterion was unfalsifiable by construction, so verification breached on
+  every attempt and the task escalated with no remediation available. It is now
+  scoped to what T-04 delivers — cadence, the in-flight lease, and exactly-once
+  wake commit — through a stub source adapter; the live GitHub path stays
+  covered by T-05's existing criterion.
+
 - **sdlc-workflow:** the reviewer prompt no longer ships domain-specific
   vocabulary as examples of invariants worth documenting. Examples are now
   generic ("authorization, data-sensitivity boundaries, idempotency, ordering,

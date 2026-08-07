@@ -77,6 +77,10 @@ bun run dev -- run --spec ../specs/PRD-0011/phase-3-spec.md --repo .. \
 # in on wakes — do not block the agent chat on sandbox waits.
 # See docs/operator-background-supervise.md (team-setup skill: sdlc-run-supervise).
 
+# Operator default: --supervise --detach + --heartbeat, then check in on
+# wakes — do not block the agent chat on sandbox waits.
+# See docs/operator-background-supervise.md (team-setup skill: sdlc-run-supervise).
+
 # Record a human-approved merge in the run's Chronicle artifact (T-08);
 # --task marks that task merged, which unblocks its dependents (P3 T-01)
 bun run dev -- record-merge --run-id <run-id> --sha <merged-sha> \
@@ -422,8 +426,9 @@ record verdicts without merging, so there is nothing to document.
 `[heartbeat] {json}` lines with `runId`, `taskId`, `step`, `stepElapsedMs`,
 `agentAlive`, `worktreeDirty`, `worktreeHead`, and `lastLine`, and appends
 the same records to `<runsDir>/<runId>/heartbeat.jsonl`. Pass `--heartbeat 0`
-to disable. Prefer OS `nohup` for long detached runs (see #38 / #43 F2) —
-do not rely on IDE harness backgrounding.
+to disable. Prefer `--supervise --detach` for long detached runs (see #38 /
+#43 F2 and `docs/operator-background-supervise.md`) — do not rely on IDE
+harness backgrounding.
 
 ### Detached / supervise exit detection (#38)
 
@@ -502,7 +507,33 @@ declares them:
     "timeoutMinutes": 45 // default
   }
 }
+```
 
+Both commands run with these variables exported:
+
+| Variable                | Always set | Meaning                                             |
+| ----------------------- | ---------- | --------------------------------------------------- |
+| `SDLC_SANDBOX_SHA`      | yes        | The SHA being deployed. Health output must echo it. |
+| `SDLC_SANDBOX_BASE_SHA` | no         | The gate base the task is measured against.         |
+
+`SDLC_SANDBOX_BASE_SHA` (SPEC-PRD-0011-P4) is the task's integration tip —
+the same `baseRef` the envelope and reviewer gates diff against — so a repo
+can run `git diff $SDLC_SANDBOX_BASE_SHA..$SDLC_SANDBOX_SHA` and decide
+whether the change is worth shipping. At the phase boundary it is the run's
+frozen base, so the diff covers everything the phase merged. It is omitted
+where no base is meaningful (notably the `check-veto` redeploy, where the
+relevant diff is the revert itself); scripts should then fall back to their
+own `git merge-base`.
+
+**Path policy is repo-owned.** The engine stays path-agnostic: it exports the
+base and nothing more. Whether a given diff means skip, a partial deploy, or
+a full one is decided entirely by the repo's `deployCommand` — see
+`comita_admissions` (`.sdlc/sandbox-deploy-ignore.yml` plus
+`scripts/sdlc/sandbox-path-decision.py`) for the first implementation. A
+skipping repo must still echo `SDLC_SANDBOX_SHA` from its health command;
+that contract is unconditional.
+
+```jsonc
 // .sdlc/verification.json — scripted check for test-tier criteria.
 { "testCommand": "bun test" }
 
@@ -764,8 +795,34 @@ Handler / Service / Repository with InversifyJS (workspace rule):
   assigned needs-human GitHub issues (`--operator` / `SDLC_OPERATOR`), and
   durable wake-inbox events (idempotent by title **and** `occurrenceKey`, so
   the same finding on a new head SHA re-notifies). Swallowed GitHub failures
-  append a loud `monitor.log` warning without blocking the run.
-- `repositories/issue.repository.ts` — `gh issue` create / find-by-title.
+  append a loud `monitor.log` warning without blocking the run. Issue creates
+  always run as the workspace GitHub App (Addi) via `envForAddiWrite` —
+  ambient human `gh` auth is refused with `GH_NOT_ADDI` rather than filing
+  under the operator's login.
+- `repositories/issue.repository.ts` — `gh issue` create / find-by-title
+  (creates require Addi).
+- `utils/gh-auth.ts` / `utils/gh-cli.ts` — shared `gh` runner; calls mint or
+  reuse an Addi installation token (`SDLC_GH_ACTIVATE` /
+  `ROSETTA_GH_ACTIVATE` / `~/.config/*/github-app-activate.sh`). The script is
+  selected by the **owner being addressed** — a workspace App is installed on
+  its own org only, so the wrong one authenticates and then fails the write
+  with `Resource not accessible by integration`.
+  **Reads take the same identity as writes.** An installation token is valid
+  for 60 minutes and a detached run lasts far longer, so a run that inherits
+  the operator's launch-time token starts failing every `gh` call about an
+  hour in — the deploy watch, the CI poll and the escalation post at once,
+  each reported as its own gate failure rather than as the single expired
+  credential it is. Tokens are cached per activate script and re-minted at 45
+  minutes; an auth failure re-mints and retries once, so a token that dies
+  mid-call costs a retry rather than a wave. `ghEnv` exports the same
+  credential for repo-owned subprocesses (sandbox deploy/health), which shell
+  out to `gh` themselves. A read still falls back to ambient auth when no App
+  resolves; a write refuses with `GH_NOT_ADDI`.
+- `utils/gh-repo.ts` — `owner/repo` of the checkout's `origin`. Every `gh`
+  call pins `--repo` to it: on a fork, an unqualified call resolves against
+  the **upstream parent**, but task branches are pushed to `origin`, so PR
+  creation and check-run lookups silently address the wrong repository.
+  Resolves once per checkout and fails loud on a non-GitHub remote.
 - `repositories/wake-inbox.repository.ts` — durable `~/.rosetta/wake` emits.
   `emitOnce` dedupes per (title, `occurrenceKey`); the occurrence is hashed
   into the marker so a long dedupe key cannot truncate it away.
