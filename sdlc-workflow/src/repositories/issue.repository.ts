@@ -1,6 +1,7 @@
 import { injectable } from 'inversify';
 import { WorkflowError } from '../types';
 import { runGh } from '../utils/gh-cli';
+import { originSlug } from '../utils/gh-repo';
 
 export interface IssueRef {
   url: string;
@@ -37,7 +38,7 @@ export class IssueRepository implements IIssueRepository {
     const escaped = title.replace(/"/g, '\\"');
     const raw = runGh(
       repoPath,
-      `gh issue list --state open --search "in:title \\"${escaped}\\"" --json url,number,title --limit 20`
+      `gh issue list --repo "${originSlug(repoPath)}" --state open --search "in:title \\"${escaped}\\"" --json url,number,title --limit 20`
     );
     let issues: Array<IssueRef & { title: string }>;
     try {
@@ -63,7 +64,7 @@ export class IssueRepository implements IIssueRepository {
         : '';
     const url = runGh(
       repoPath,
-      `gh issue create --title "${input.title.replace(/"/g, '\\"')}"${assigneeFlag} --body-file -`,
+      `gh issue create --repo "${originSlug(repoPath)}" --title "${input.title.replace(/"/g, '\\"')}"${assigneeFlag} --body-file -`,
       { stdin: input.body, requireAddi: true }
     ).trim();
     const match = url.match(/\/issues\/(\d+)\s*$/);

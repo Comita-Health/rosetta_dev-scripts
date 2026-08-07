@@ -727,6 +727,11 @@ Handler / Service / Repository with InversifyJS (workspace rule):
 - `utils/gh-auth.ts` / `utils/gh-cli.ts` — shared `gh` runner; mutating
   calls mint/reuse an Addi installation token (`SDLC_GH_ACTIVATE` /
   `ROSETTA_GH_ACTIVATE` / `~/.config/*/github-app-activate.sh`).
+- `utils/gh-repo.ts` — `owner/repo` of the checkout's `origin`. Every `gh`
+  call pins `--repo` to it: on a fork, an unqualified call resolves against
+  the **upstream parent**, but task branches are pushed to `origin`, so PR
+  creation and check-run lookups silently address the wrong repository.
+  Resolves once per checkout and fails loud on a non-GitHub remote.
 - `repositories/wake-inbox.repository.ts` — durable `~/.rosetta/wake` emits.
   `emitOnce` dedupes per (title, `occurrenceKey`); the occurrence is hashed
   into the marker so a long dedupe key cannot truncate it away.

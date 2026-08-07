@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** every `gh` call now pins `--repo` to the checkout's
+  `origin` remote. On a fork, an unqualified `gh pr create` / `gh issue create`
+  resolves against the fork's **upstream parent**, while the engine pushes task
+  branches to `origin` — so the PR call looked for a branch in a repository it
+  was never pushed to and failed with `No commits between main and <branch>` /
+  `Head ref must be a branch`. Wording that reads like a bad branch, but is a
+  wrong-repository lookup that no gate remediation can fix. The same bug made
+  `gh api repos/{owner}/{repo}/commits/<sha>/check-runs` query the parent, so
+  the CI gate reported `no check runs after waiting 300s` for commits whose
+  checks were green on the fork, and escalation issues landed on the wrong
+  repository. `originSlug` resolves the remote once per checkout and fails
+  loud rather than letting `gh` choose a repository the caller did not intend.
+- **SPEC-PRD-0020-P1 T-04:** the poll-scheduler agent acceptance criterion
+  required an Approve event on a watched PR to surface as a wake against a
+  running daemon. That could never hold inside T-04: the `pr-review` adapter is
+  T-05's deliverable and T-05 depends on T-04, and `.sdlc/daemon.json` is a
+  consumer-owned contract the engine repo deliberately does not carry. The
+  criterion was unfalsifiable by construction, so verification breached on
+  every attempt and the task escalated with no remediation available. It is now
+  scoped to what T-04 delivers — cadence, the in-flight lease, and exactly-once
+  wake commit — through a stub source adapter; the live GitHub path stays
+  covered by T-05's existing criterion.
+
 - **sdlc-workflow:** the reviewer prompt no longer ships domain-specific
   vocabulary as examples of invariants worth documenting. Examples are now
   generic ("authorization, data-sensitivity boundaries, idempotency, ordering,
