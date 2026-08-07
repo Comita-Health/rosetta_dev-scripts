@@ -134,7 +134,8 @@ bun run dev -- daemon uninstall --workspace ../..
 # Options
 #   --workspace   required workspace root (all paths/ids derived from it)
 #   --json        machine-readable status / watch-registration output
-#   --kind        watch kind for `daemon watch` (default: pr-review)
+#   --kind        `daemon watch` kind: pr-review (default) or pr-checks —
+#                 the only kinds whose targets are owner/repo#N
 #   --poll-seconds  override cadence (default: workspace defaultPollSeconds)
 #   --created-by  registration attribution (default: cli)
 #   --plist-dir   LaunchAgents directory (default: ~/Library/LaunchAgents)
@@ -239,9 +240,11 @@ as a single object validated by a fixed schema.
 
 `daemon watch` (SPEC-PRD-0020-P1 T-08) is the register-and-exit CLI used by
 the thin `pr-approve-watch` skill client. It writes durable `pr-review`
-(or other kind) registrations through `WatchRegistryService` and returns —
-the long-lived daemon keeps polling. Re-registering an active kind+target is
-idempotent.
+registrations through `WatchRegistryService` and returns — the long-lived
+daemon keeps polling. Re-registering an active kind+target is idempotent.
+`--kind` accepts `pr-review` and `pr-checks` only: every target on this
+command is parsed as `owner/repo#N`, which the run-id kinds cannot express,
+and the remaining Phase 3 kinds have no source adapter to poll them yet.
 
 `decompose` grounds the synthesized envelope in the target repo tree (#35):
 every `allowedPaths` glob must match at least one existing path in the

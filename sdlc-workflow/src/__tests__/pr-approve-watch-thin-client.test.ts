@@ -10,7 +10,11 @@ import {
 import { Container } from 'inversify';
 import os from 'os';
 import path from 'path';
-import { DaemonHandler, parsePrWatchTarget } from '../handlers/daemon.handler';
+import {
+  DaemonHandler,
+  PR_WATCH_KINDS,
+  parsePrWatchTarget
+} from '../handlers/daemon.handler';
 import { DaemonConfigRepository } from '../repositories/daemon-config.repository';
 import { DaemonStoreRepository } from '../repositories/daemon-store.repository';
 import { KnownWatchTargetRepository } from '../repositories/known-watch-target.repository';
@@ -189,5 +193,71 @@ describe('pr-approve-watch thin daemon client (SPEC-PRD-0020-P1 T-08)', () => {
       repo: 'Acme/app',
       number: 9
     });
+  });
+
+  // Every target on this command is parsed as owner/repo#N, so the command may
+  // only advertise kinds that actually use that grammar. Offering a run-id kind
+  // here would register it under the wrong target shape.
+  it('registers only the owner/repo#N kinds and rejects the rest', () => {
+    const workspace = mkdtempSync(path.join(os.tmpdir(), 'daemon-watch-kind-'));
+    writeDaemonConfig(workspace);
+    const handler = buildHandler();
+    console.log = jest.fn();
+
+    expect(PR_WATCH_KINDS).toEqual(['pr-review', 'pr-checks']);
+
+    for (const kind of PR_WATCH_KINDS) {
+      const records = handler.watch({
+        workspaceRoot: workspace,
+        kind,
+        targets: ['Owner/Repo#7'],
+        json: true
+      });
+      expect(records[0]?.kind).toBe(kind);
+    }
+
+    for (const kind of [
+      'issue-state',
+      'workflow-run',
+      'run-supervisor',
+      'queue-item',
+      'not-a-kind'
+    ]) {
+      expect(() =>
+        handler.watch({
+          workspaceRoot: workspace,
+          kind,
+          targets: ['Owner/Repo#8']
+        })
+      ).toThrow(/--kind must be one of pr-review, pr-checks/);
+    }
+
+    // Rejected kinds must leave no registration behind.
+    const listed = new WatchRegistryService(new DaemonStoreRepository()).list(
+      workspace
+    );
+    expect(listed.map(watch => watch.kind).sort()).toEqual([
+      'pr-checks',
+      'pr-review'
+    ]);
+  });
+
+  // T-08 moves the transport only: the operator-facing wake contract in
+  // SKILL.md must still read exactly as it did before the daemon absorbed it.
+  it('keeps the documented Approve / Request-changes contract unchanged', () => {
+    for (const skill of [CURSOR_SKILL, CLAUDE_SKILL]) {
+      const doc = readFileSync(path.join(skill, 'SKILL.md'), 'utf-8');
+
+      expect(doc).toContain(
+        '| **Approve** | Once | Triage comments; merge only if GHA ' +
+          'merge-on-approve is **not** enabled |'
+      );
+      expect(doc).toContain(
+        '| **Request changes** | Once per new human review id | Fix / reply ' +
+          '/ push — **do not merge**; keep watching |'
+      );
+      expect(doc).toContain('Fix the feedback and keep watching.');
+      expect(doc).toContain('it keeps the target until Approve');
+    }
   });
 });

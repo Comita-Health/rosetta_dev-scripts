@@ -5,8 +5,11 @@
 - **sdlc-workflow / team-setup:** absorb `pr-approve-watch` into a thin daemon
   client (SPEC-PRD-0020-P1 T-08). The skill script registers durable
   `pr-review` watches via `sdlc-workflow daemon watch` and prints
-  `daemon status`, then exits — no local bash poll loop. `.cursor` and
-  `.claude` skill template copies stay content-identical (enforced by test).
+  `daemon status`, then exits — no local bash poll loop. The operator-facing
+  wake contract is unchanged; only the transport moved. `daemon watch --kind`
+  accepts `pr-review` and `pr-checks` — the kinds whose targets really are
+  `owner/repo#N`. `.cursor` and `.claude` skill template copies stay
+  content-identical (enforced by test).
 - **sdlc-workflow:** add `sdlc-workflow daemon status` (human table and
   `--json`) over the watch registry and wake inbox. Output covers active
   watches (`kind`, `target`, `age`, `lastPollTime`), pending/consumed wakes,

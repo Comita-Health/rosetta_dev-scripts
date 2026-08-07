@@ -1136,8 +1136,9 @@ yargs(hideBin(process.argv))
               .option('kind', {
                 type: 'string',
                 default: 'pr-review',
+                choices: ['pr-review', 'pr-checks'],
                 describe:
-                  'Watch kind (default: pr-review; Phase 1 also supports pr-checks)'
+                  'Watch kind — only the owner/repo#N kinds are registrable here'
               })
               .option('poll-seconds', {
                 type: 'number',
@@ -1171,13 +1172,7 @@ yargs(hideBin(process.argv))
             try {
               handler.watch({
                 workspaceRoot: argv.workspace,
-                kind: argv.kind as
-                  | 'pr-review'
-                  | 'pr-checks'
-                  | 'issue-state'
-                  | 'workflow-run'
-                  | 'run-supervisor'
-                  | 'queue-item',
+                kind: argv.kind,
                 targets,
                 pollSeconds: argv['poll-seconds'],
                 createdBy: argv['created-by'],

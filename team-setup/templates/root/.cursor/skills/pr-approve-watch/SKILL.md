@@ -21,8 +21,8 @@ local bash poller.
 
 | Signal | Wake | After wake |
 | ------ | ---- | ---------- |
-| **Approve** | Once per human APPROVED review | Triage comments; merge only if GHA merge-on-approve is **not** enabled |
-| **Request changes** | Once per new human review id | Fix / reply / push — **do not merge**; keep the daemon watch armed |
+| **Approve** | Once | Triage comments; merge only if GHA merge-on-approve is **not** enabled |
+| **Request changes** | Once per new human review id | Fix / reply / push — **do not merge**; keep watching |
 
 ## Merge authority (gold standard)
 
@@ -53,8 +53,7 @@ merge path below.
    `"changes_requested"` (review-comment wakes are informational).
 5. Prefer human (non-bot) reviews — the daemon `pr-review` adapter already
    filters bots.
-6. **Never merge on `changes_requested`.** Fix the feedback; the watch stays
-   registered until the PR reaches a terminal state.
+6. **Never merge on `changes_requested`.** Fix the feedback and keep watching.
 7. **Never merge on Approve alone while unresolved, unaddressed review
    comments remain** (human or bot).
 8. **Drain wakes even when chat notify is silent** — see Wake delivery below.
@@ -119,8 +118,7 @@ bunx tsx src/index.ts daemon status --workspace "$WORKSPACE"
 4. Reply on each thread with the fix SHA; `resolveReviewThread` when done.
 5. Wait for CI green after pushes.
 6. **Do not merge.** Report what you fixed and that the PR awaits re-review.
-7. Leave the daemon watch registered (it keeps the target until Approve /
-   terminal PR state).
+7. Leave the daemon watch registered (it keeps the target until Approve).
 
 ## On wake — `signal: approved`
 
