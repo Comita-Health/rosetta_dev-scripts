@@ -92,6 +92,8 @@ export interface IDaemonStoreRepository {
   writeWake(workspaceRoot: string, input: WakeEventInput): WakeWriteResult;
   readWake(workspaceRoot: string, id: string): WakeEvent | null;
   listPendingWakes(workspaceRoot: string): WakeEvent[];
+  /** Wakes already claimed (status / audit). Missing store: empty array. */
+  listConsumedWakes(workspaceRoot: string): WakeEvent[];
   claimWake(workspaceRoot: string, id: string): Promise<WakeEvent | null>;
   /**
    * Stamp `consumedBy` onto an already-claimed wake. Writes in place so the
@@ -654,6 +656,14 @@ export class DaemonStoreRepository implements IDaemonStoreRepository {
    */
   listPendingWakes(workspaceRoot: string): WakeEvent[] {
     return listRecords<WakeEvent>(this.paths(workspaceRoot).pendingWakes);
+  }
+
+  /**
+   * List wakes that have already been claimed, ordered by wake ID for a
+   * stable result. Missing store: empty array.
+   */
+  listConsumedWakes(workspaceRoot: string): WakeEvent[] {
+    return listRecords<WakeEvent>(this.paths(workspaceRoot).consumedWakes);
   }
 
   /**

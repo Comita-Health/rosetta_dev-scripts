@@ -72,5 +72,8 @@ export const WORKFLOW_TOKENS = {
   PrChecksWatchSourceAdapter: Symbol.for('PrChecksWatchSourceAdapter'),
   // SPEC-PRD-0020-P1 T-06
   WakeActionRegistry: Symbol.for('WakeActionRegistry'),
-  WakeConsumptionService: Symbol.for('WakeConsumptionService')
+  WakeConsumptionService: Symbol.for('WakeConsumptionService'),
+  // SPEC-PRD-0020-P1 T-07
+  KnownWatchTargetRepository: Symbol.for('KnownWatchTargetRepository'),
+  DaemonStatusService: Symbol.for('DaemonStatusService')
 } as const;

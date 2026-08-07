@@ -124,10 +124,13 @@ bun run dev -- status --queue
 # `uninstall` derives the label/plist from the workspace root alone so a
 # missing/malformed contract cannot leave an orphaned agent.
 bun run dev -- daemon --workspace ../..
+bun run dev -- daemon status --workspace ../..
+bun run dev -- daemon status --workspace ../.. --json
 bun run dev -- daemon install --workspace ../..
 bun run dev -- daemon uninstall --workspace ../..
 # Options
 #   --workspace   required workspace root (all paths/ids derived from it)
+#   --json        machine-readable status report (watches / wakes / unwatched)
 #   --plist-dir   LaunchAgents directory (default: ~/Library/LaunchAgents)
 #   --no-load     write the plist without calling launchctl (tests / dry-run)
 ```
@@ -217,6 +220,16 @@ moves the wake back to pending: notification is observability, not a gate.
 The action context is `{ workspaceRoot, wake, consumedBy }` with no
 chat/conversation/session object, so Phase 3 headless agent dispatch can
 register beside `notify` without reshaping the loop.
+
+`daemon status` (SPEC-PRD-0020-P1 T-07) is the operator coverage surface over
+that store. It lists every active watch (`kind`, `target`, `age`,
+`lastPollTime`, plus an explicit `degraded` flag when the poll-failure cap
+has been exceeded), every pending and consumed wake (`state: pending |
+consumed`), and an `unwatched` section produced by diffing engine-known PRs
+and runs (task `prUrl`s and run directories under the workspace `runsDir`, plus
+queued launches) against the active watch set — so a known target with no
+registration is visible rather than absent. `--json` emits the same report
+as a single object validated by a fixed schema.
 
 `decompose` grounds the synthesized envelope in the target repo tree (#35):
 every `allowedPaths` glob must match at least one existing path in the
