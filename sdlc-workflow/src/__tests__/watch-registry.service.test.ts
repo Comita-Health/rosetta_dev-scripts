@@ -228,7 +228,7 @@ describe('WatchRegistryService', () => {
     expect(() =>
       registry.register(workspace, {
         ...registration,
-        target: { repo: '' }
+        target: { repo: '', number: 42 }
       })
     ).toThrow(/target.repo/);
     expect(() =>
@@ -239,18 +239,24 @@ describe('WatchRegistryService', () => {
     ).toThrow(/target.number/);
     expect(() =>
       registry.register(workspace, {
-        kind: 'workflow-run',
+        kind: 'run-supervisor',
         pollSeconds: 30,
         createdBy: 'agent',
-        target: { repo: 'owner/repo' }
+        target: {}
       })
     ).toThrow(/requires runId/);
+    expect(() =>
+      registry.register(workspace, {
+        ...registration,
+        target: { repo: 'owner/repo', number: 42, runId: 'run-1' }
+      })
+    ).toThrow(/does not accept runId/);
     expect(() =>
       registry.register(workspace, {
         kind: 'workflow-run',
         pollSeconds: 30,
         createdBy: 'agent',
-        target: { runId: '' }
+        target: { repo: 'owner/repo', runId: '' }
       })
     ).toThrow(/target.runId/);
     expect(() =>

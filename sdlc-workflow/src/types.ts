@@ -535,9 +535,20 @@ export type WatchKind =
   | 'run-supervisor'
   | 'queue-item';
 
+/**
+ * Structured watch target.
+ *
+ * @remarks
+ * Every field is optional at the type level because the identifying set
+ * differs per {@link WatchKind}; the registry requires exactly its kind's set
+ * and rejects the rest. Do not read this as "any one field will do".
+ */
 export interface WatchTarget {
+  /** GitHub `owner/name`; matched case-insensitively. */
   repo?: string;
+  /** Pull request or issue number, unique only within `repo`. */
   number?: number;
+  /** Run or record id. */
   runId?: string;
 }
 
