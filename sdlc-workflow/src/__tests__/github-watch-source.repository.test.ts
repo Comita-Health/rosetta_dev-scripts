@@ -146,4 +146,139 @@ describe('GitHubWatchSourceRepository', () => {
       ]
     });
   });
+
+  it('rejects a target repo that is not owner/name', () => {
+    const workspace = workspaceWithConfig();
+
+    expect(() => repo.getPullRequest(workspace, 'widgets', 9)).toThrow(
+      /owner\/name/
+    );
+    expect(() => repo.listReviews(workspace, '/widgets', 9)).toThrow(
+      /owner\/name/
+    );
+    expect(ghMock).not.toHaveBeenCalled();
+  });
+
+  it('reports unparseable gh output as a GH_FAILED workflow error', () => {
+    const workspace = workspaceWithConfig();
+    ghMock.mockReturnValue('not json');
+
+    expect(() => repo.listCheckRuns(workspace, 'Acme/widgets', 'sha')).toThrow(
+      expect.objectContaining({ code: 'GH_FAILED' })
+    );
+  });
+
+  // A PR view without a head SHA leaves the checks adapter nothing to key on,
+  // so it fails loudly rather than polling a phantom commit.
+  it('rejects a PR view with no head SHA', () => {
+    const workspace = workspaceWithConfig();
+    ghMock
+      .mockReturnValueOnce(JSON.stringify({ state: 'OPEN', headRefOid: ' ' }))
+      .mockReturnValueOnce(JSON.stringify({ state: 'OPEN' }));
+
+    expect(() => repo.getPullRequest(workspace, 'Acme/widgets', 9)).toThrow(
+      expect.objectContaining({ code: 'GH_FAILED' })
+    );
+    expect(() => repo.getPullRequest(workspace, 'Acme/widgets', 9)).toThrow(
+      expect.objectContaining({ code: 'GH_FAILED' })
+    );
+  });
+
+  it('defaults a missing or empty PR state to OPEN', () => {
+    const workspace = workspaceWithConfig();
+    ghMock
+      .mockReturnValueOnce(JSON.stringify({ headRefOid: 'abc123' }))
+      .mockReturnValueOnce(JSON.stringify({ state: '', headRefOid: 'abc123' }));
+
+    expect(repo.getPullRequest(workspace, 'Acme/widgets', 9)).toEqual({
+      state: 'OPEN',
+      headSha: 'abc123'
+    });
+    expect(repo.getPullRequest(workspace, 'Acme/widgets', 9)).toEqual({
+      state: 'OPEN',
+      headSha: 'abc123'
+    });
+  });
+
+  it('normalizes reviews and comments with missing author or body fields', () => {
+    const workspace = workspaceWithConfig();
+    ghMock
+      .mockReturnValueOnce(
+        JSON.stringify([
+          {
+            id: 1,
+            state: 'APPROVED',
+            body: null,
+            submitted_at: '',
+            user: null
+          },
+          { id: 2, state: 'APPROVED', user: {} }
+        ])
+      )
+      .mockReturnValueOnce(
+        JSON.stringify([
+          { id: 3, created_at: '2026-08-07T10:01:00Z' },
+          {
+            id: 4,
+            body: null,
+            path: null,
+            created_at: '2026-08-07T10:02:00Z',
+            user: { login: 42, type: 7 }
+          }
+        ])
+      );
+
+    expect(repo.listReviews(workspace, 'Acme/widgets', 9)).toEqual([
+      {
+        id: 1,
+        state: 'APPROVED',
+        body: '',
+        submittedAt: null,
+        userLogin: '',
+        userType: 'User'
+      },
+      {
+        id: 2,
+        state: 'APPROVED',
+        body: '',
+        submittedAt: null,
+        userLogin: '',
+        userType: 'User'
+      }
+    ]);
+    expect(repo.listReviewComments(workspace, 'Acme/widgets', 9)).toEqual([
+      {
+        id: 3,
+        body: '',
+        path: '',
+        createdAt: '2026-08-07T10:01:00Z',
+        userLogin: '',
+        userType: 'User'
+      },
+      {
+        id: 4,
+        body: '',
+        path: '',
+        createdAt: '2026-08-07T10:02:00Z',
+        userLogin: '',
+        userType: 'User'
+      }
+    ]);
+  });
+
+  it('defaults an absent or empty combined status to pending with no contexts', () => {
+    const workspace = workspaceWithConfig();
+    ghMock
+      .mockReturnValueOnce(JSON.stringify({}))
+      .mockReturnValueOnce(JSON.stringify({ state: '', statuses: [] }));
+
+    expect(repo.getCombinedStatus(workspace, 'Acme/widgets', 'sha')).toEqual({
+      state: 'pending',
+      statuses: []
+    });
+    expect(repo.getCombinedStatus(workspace, 'Acme/widgets', 'sha')).toEqual({
+      state: 'pending',
+      statuses: []
+    });
+  });
 });

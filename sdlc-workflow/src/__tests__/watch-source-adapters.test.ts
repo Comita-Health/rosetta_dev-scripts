@@ -180,6 +180,111 @@ describe('watch source adapters (SPEC-PRD-0020-P1 T-05)', () => {
       }
     });
 
+    it('ignores review states that are neither Approve nor Request-changes', async () => {
+      const github = githubStub({
+        listReviews: jest.fn().mockReturnValue([
+          {
+            id: 21,
+            state: 'COMMENTED',
+            userLogin: 'alice',
+            userType: 'User',
+            submittedAt: '2026-08-07T10:01:00.000Z',
+            body: 'thoughts'
+          },
+          {
+            id: 22,
+            state: 'DISMISSED',
+            userLogin: 'bob',
+            userType: 'User',
+            submittedAt: '2026-08-07T10:02:00.000Z',
+            body: ''
+          }
+        ]),
+        listReviewComments: jest.fn().mockReturnValue([
+          {
+            id: 23,
+            userLogin: 'copilot[bot]',
+            userType: 'Bot',
+            createdAt: '2026-08-07T10:03:00.000Z',
+            body: 'bot nit',
+            path: 'src/a.ts'
+          }
+        ])
+      });
+      const adapter = new PrReviewWatchSourceAdapter(github);
+
+      await expect(
+        adapter.poll('/workspace', prWatch('pr-review'))
+      ).resolves.toEqual({ signals: [] });
+    });
+
+    // A review row can arrive without a usable submitted_at (pending reviews,
+    // or a malformed timestamp); the wake still needs an observedAt.
+    it('falls back to poll time when the review timestamp is missing or unparseable', async () => {
+      const github = githubStub({
+        listReviews: jest.fn().mockReturnValue([
+          {
+            id: 31,
+            state: 'APPROVED',
+            userLogin: 'alice',
+            userType: 'User',
+            submittedAt: null,
+            body: ''
+          },
+          {
+            id: 32,
+            state: 'CHANGES_REQUESTED',
+            userLogin: 'bob',
+            userType: 'User',
+            submittedAt: 'not-a-timestamp',
+            body: 'fix'
+          }
+        ]),
+        listReviewComments: jest.fn().mockReturnValue([
+          {
+            id: 33,
+            userLogin: 'carol',
+            userType: 'User',
+            createdAt: 'also-not-a-timestamp',
+            body: 'nit',
+            path: 'src/a.ts'
+          }
+        ])
+      });
+      const adapter = new PrReviewWatchSourceAdapter(github);
+
+      const result = await adapter.poll('/workspace', prWatch('pr-review'));
+
+      expect(result.signals).toHaveLength(3);
+      for (const signal of result.signals) {
+        expect(Number.isNaN(Date.parse(signal.observedAt))).toBe(false);
+      }
+    });
+
+    it('rejects a watch whose target is not a pull request', async () => {
+      const adapter = new PrReviewWatchSourceAdapter(githubStub());
+      const base = prWatch('pr-review');
+
+      await expect(
+        adapter.poll('/workspace', { ...base, target: { number: 42 } })
+      ).rejects.toThrow(/target\.repo/);
+      await expect(
+        adapter.poll('/workspace', {
+          ...base,
+          target: { repo: '   ', number: 42 }
+        })
+      ).rejects.toThrow(/target\.repo/);
+      await expect(
+        adapter.poll('/workspace', { ...base, target: { repo: 'owner/repo' } })
+      ).rejects.toThrow(/target\.number/);
+      await expect(
+        adapter.poll('/workspace', {
+          ...base,
+          target: { repo: 'owner/repo', number: 1.5 }
+        })
+      ).rejects.toThrow(/target\.number/);
+    });
+
     it('expires a merged PR via terminalState without emitting review wakes', async () => {
       const github = githubStub({
         getPullRequest: jest.fn().mockReturnValue({
@@ -316,6 +421,132 @@ describe('watch source adapters (SPEC-PRD-0020-P1 T-05)', () => {
       await expect(
         adapter.poll('/workspace', prWatch('pr-checks'))
       ).resolves.toEqual({ signals: [] });
+    });
+
+    // Green with no CI configured is indistinguishable from CI that has not
+    // reported yet, so the adapter keeps polling instead of waking on nothing.
+    it('emits nothing when the head SHA has no CI surface at all', async () => {
+      const github = githubStub({
+        getCombinedStatus: jest
+          .fn()
+          .mockReturnValue({ state: 'success', statuses: [] })
+      });
+      const adapter = new PrChecksWatchSourceAdapter(github);
+
+      await expect(
+        adapter.poll('/workspace', prWatch('pr-checks'))
+      ).resolves.toEqual({ signals: [] });
+    });
+
+    it('treats a completed run with no conclusion as failing and falls back to poll time', async () => {
+      const github = githubStub({
+        listCheckRuns: jest.fn().mockReturnValue([
+          {
+            id: 1,
+            name: 'ci',
+            status: 'completed',
+            conclusion: null,
+            completedAt: null
+          },
+          {
+            id: 2,
+            name: 'skipped-job',
+            status: 'completed',
+            conclusion: 'skipped',
+            completedAt: null
+          }
+        ]),
+        getCombinedStatus: jest.fn().mockReturnValue({
+          state: 'success',
+          statuses: [
+            { context: 'ci', state: 'success', updatedAt: 'not-a-timestamp' }
+          ]
+        })
+      });
+      const adapter = new PrChecksWatchSourceAdapter(github);
+
+      const result = await adapter.poll('/workspace', prWatch('pr-checks'));
+
+      expect(result.signals).toHaveLength(1);
+      expect(result.signals[0]).toMatchObject({
+        id: 'checks_failed:abc123def456',
+        data: { failedChecks: ['ci'] }
+      });
+      expect(Number.isNaN(Date.parse(result.signals[0].observedAt))).toBe(
+        false
+      );
+    });
+
+    // The Checks API can be entirely green while a legacy status context is
+    // red; the commit status is the authority for those.
+    it('reports a failure from the commit status when every check run passed', async () => {
+      const github = githubStub({
+        listCheckRuns: jest.fn().mockReturnValue([
+          {
+            id: 1,
+            name: 'ci',
+            status: 'completed',
+            conclusion: 'neutral',
+            completedAt: '2026-08-07T10:07:00.000Z'
+          }
+        ]),
+        getCombinedStatus: jest.fn().mockReturnValue({
+          state: 'error',
+          statuses: [
+            {
+              context: 'legacy/deploy',
+              state: 'error',
+              updatedAt: '2026-08-07T10:08:00.000Z'
+            }
+          ]
+        })
+      });
+      const adapter = new PrChecksWatchSourceAdapter(github);
+
+      const result = await adapter.poll('/workspace', prWatch('pr-checks'));
+
+      expect(result.signals).toHaveLength(1);
+      expect(result.signals[0]).toMatchObject({
+        id: 'checks_failed:abc123def456',
+        observedAt: '2026-08-07T10:08:00.000Z',
+        data: { failedChecks: [], statusState: 'error' }
+      });
+    });
+
+    it('expires a closed PR via terminalState without reading CI', async () => {
+      const github = githubStub({
+        getPullRequest: jest
+          .fn()
+          .mockReturnValue({ state: 'CLOSED', headSha: 'abc123def456' })
+      });
+      const adapter = new PrChecksWatchSourceAdapter(github);
+
+      await expect(
+        adapter.poll('/workspace', prWatch('pr-checks'))
+      ).resolves.toEqual({ signals: [], terminalState: 'closed' });
+      expect(github.listCheckRuns).not.toHaveBeenCalled();
+      expect(github.getCombinedStatus).not.toHaveBeenCalled();
+    });
+
+    it('rejects a watch whose target is not a pull request', async () => {
+      const adapter = new PrChecksWatchSourceAdapter(githubStub());
+      const base = prWatch('pr-checks');
+
+      await expect(
+        adapter.poll('/workspace', { ...base, target: {} })
+      ).rejects.toThrow(/target\.repo/);
+      await expect(
+        adapter.poll('/workspace', { ...base, target: { repo: '  ' } })
+      ).rejects.toThrow(/target\.repo/);
+      await expect(
+        adapter.poll('/workspace', { ...base, target: { repo: 'owner/repo' } })
+      ).rejects.toThrow(/target\.number/);
+      await expect(
+        adapter.poll('/workspace', {
+          ...base,
+          target: { repo: 'owner/repo', number: Number.NaN }
+        })
+      ).rejects.toThrow(/target\.number/);
     });
   });
 

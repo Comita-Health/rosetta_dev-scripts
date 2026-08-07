@@ -93,6 +93,50 @@ describe('runGh', () => {
     }
   });
 
+  it('reports a non-Error throw as the failure detail', () => {
+    execMock.mockImplementation(() => {
+      throw 'gh exploded';
+    });
+
+    expect(() => runGh('/repo', 'gh api user')).toThrow(
+      expect.objectContaining({
+        code: 'GH_FAILED',
+        details: ['gh exploded']
+      })
+    );
+    expect(resetMock).not.toHaveBeenCalled();
+  });
+
+  // Auth selection already failed with a diagnosed WorkflowError; wrapping it
+  // in a generic "gh failed" would bury the reason.
+  it('propagates a WorkflowError from auth selection without retrying', () => {
+    addiMock.mockImplementation(() => {
+      throw new WorkflowError('no app', 'GH_NOT_ADDI', []);
+    });
+
+    expect(() =>
+      runGh('/repo', 'gh issue create', { requireAddi: true })
+    ).toThrow(expect.objectContaining({ code: 'GH_NOT_ADDI' }));
+    expect(execMock).not.toHaveBeenCalled();
+    expect(resetMock).not.toHaveBeenCalled();
+  });
+
+  it('propagates a WorkflowError raised by the post-re-mint attempt', () => {
+    execMock.mockImplementationOnce(() => {
+      throw expiredTokenError();
+    });
+    addiMock
+      .mockReturnValueOnce({ GH_TOKEN: 'addi-token' })
+      .mockImplementation(() => {
+        throw new WorkflowError('no app after re-mint', 'GH_NOT_ADDI', []);
+      });
+
+    expect(() => runGh('/repo', 'gh api user', { requireAddi: true })).toThrow(
+      expect.objectContaining({ code: 'GH_NOT_ADDI' })
+    );
+    expect(resetMock).toHaveBeenCalledTimes(1);
+  });
+
   it('runs the command with the Addi environment', () => {
     execMock.mockReturnValue('');
 
