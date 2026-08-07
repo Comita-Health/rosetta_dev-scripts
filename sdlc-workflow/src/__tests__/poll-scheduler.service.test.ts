@@ -375,6 +375,32 @@ describe('PollSchedulerService', () => {
     });
   });
 
+  it('publishes a signal without optional prompt or data', async () => {
+    const adapter: IWatchSourceAdapter = {
+      poll: jest.fn().mockResolvedValue({
+        signals: [
+          {
+            id: 'review-124:DISMISSED',
+            observedAt: '2026-08-07T10:00:05.000Z'
+          }
+        ]
+      })
+    };
+    const { workspace, store, scheduler } = setup(adapter);
+
+    await scheduler.tick(workspace);
+
+    const wakes = store.listPendingWakes(workspace);
+    expect(wakes).toHaveLength(1);
+    expect(wakes[0]).toMatchObject({
+      kind: 'pr-review',
+      signal: 'review-124:DISMISSED',
+      createdAt: '2026-08-07T10:00:05.000Z'
+    });
+    expect(wakes[0]).not.toHaveProperty('prompt');
+    expect(wakes[0]).not.toHaveProperty('data');
+  });
+
   it('rechecks cadence after acquiring the lease', async () => {
     const store = new DaemonStoreRepository();
     const adapter: IWatchSourceAdapter = {
@@ -417,6 +443,28 @@ describe('PollSchedulerService', () => {
 
     expect(consoleError).toHaveBeenCalledWith(
       '[poll-scheduler] tick failed: registry unreadable'
+    );
+    consoleError.mockRestore();
+  });
+
+  it('logs non-Error timer failures', async () => {
+    const adapter: IWatchSourceAdapter = {
+      poll: jest.fn().mockResolvedValue({ signals: [] })
+    };
+    const configured = setup(adapter);
+    jest.spyOn(configured.watches, 'list').mockImplementation(() => {
+      throw 'registry unavailable';
+    });
+    const consoleError = jest
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined);
+
+    configured.scheduler.start(configured.workspace, 30);
+    await jest.advanceTimersByTimeAsync(0);
+    configured.scheduler.stop();
+
+    expect(consoleError).toHaveBeenCalledWith(
+      '[poll-scheduler] tick failed: registry unavailable'
     );
     consoleError.mockRestore();
   });
