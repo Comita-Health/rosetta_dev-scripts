@@ -122,6 +122,18 @@ describe('ghEnv', () => {
     );
   });
 
+  it('prefers an explicit owner override for cross-repo watch polls', () => {
+    ghEnv('/workspace', true, {
+      owner: 'OtherOrg',
+      env: { SDLC_GH_ACTIVATE: '/tmp/activate.sh' }
+    });
+
+    expect(addiMock).toHaveBeenCalledWith(
+      expect.objectContaining({ SDLC_GH_ACTIVATE: '/tmp/activate.sh' }),
+      expect.objectContaining({ owner: 'OtherOrg', cwd: '/workspace' })
+    );
+  });
+
   it('falls back to ambient auth for a read when no App resolves', () => {
     addiMock.mockImplementation(() => {
       throw new WorkflowError('no app', 'GH_NOT_ADDI', []);

@@ -18,11 +18,22 @@ export interface WatchSourcePollResult {
 
 /** Source-specific polling contract implemented by T-05 adapters. */
 export interface IWatchSourceAdapter {
-  poll(watch: DurableWatchRecord): Promise<WatchSourcePollResult>;
+  /**
+   * Poll one watch once and return normalized signals.
+   *
+   * @param workspaceRoot - Workspace whose daemon contract supplies the Addi
+   * activate script for GitHub calls. Adapters must not write wakes; the poll
+   * scheduler commits returned signals through the shared inbox writer.
+   */
+  poll(
+    workspaceRoot: string,
+    watch: DurableWatchRecord
+  ): Promise<WatchSourcePollResult>;
 }
 
 /** Late-bound adapter lookup keeps the scheduler source-agnostic. */
 export interface IWatchSourceAdapterRegistry {
+  register(kind: WatchKind, adapter: IWatchSourceAdapter): void;
   get(kind: WatchKind): IWatchSourceAdapter | null;
   /**
    * Kinds this registry can poll. The scheduler consults it before arming its
@@ -33,10 +44,10 @@ export interface IWatchSourceAdapterRegistry {
 }
 
 /**
- * Mutable composition registry populated by source-adapter wiring.
+ * Mutable composition registry populated at process start for Phase 1 kinds.
  *
- * The daemon owns one singleton instance. T-05 can register adapters without
- * changing scheduler semantics or introducing source-specific dependencies.
+ * The daemon owns one singleton instance. Phase 3 kinds stay unregistered
+ * until their adapters land — a missing kind is skipped, never stubbed.
  */
 @injectable()
 export class WatchSourceAdapterRegistry implements IWatchSourceAdapterRegistry {
