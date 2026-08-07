@@ -52,5 +52,18 @@ export const WORKFLOW_TOKENS = {
   DeployRecordRepository: Symbol.for('DeployRecordRepository'),
   // SPEC-PRD-0023-P1 T-01 / T-02
   CloseoutAggregateService: Symbol.for('CloseoutAggregateService'),
-  CloseoutService: Symbol.for('CloseoutService')
+  CloseoutService: Symbol.for('CloseoutService'),
+  // SPEC-PRD-0020-P1 T-01
+  DaemonConfigRepository: Symbol.for('DaemonConfigRepository'),
+  DaemonProcessRepository: Symbol.for('DaemonProcessRepository'),
+  LaunchdRepository: Symbol.for('LaunchdRepository'),
+  DaemonLifecycleService: Symbol.for('DaemonLifecycleService'),
+  DaemonHandler: Symbol.for('DaemonHandler'),
+  // SPEC-PRD-0020-P1 T-02
+  DaemonStoreRepository: Symbol.for('DaemonStoreRepository'),
+  // SPEC-PRD-0020-P1 T-03
+  WatchRegistryService: Symbol.for('WatchRegistryService'),
+  // SPEC-PRD-0020-P1 T-04
+  WatchSourceAdapterRegistry: Symbol.for('WatchSourceAdapterRegistry'),
+  PollSchedulerService: Symbol.for('PollSchedulerService')
 } as const;

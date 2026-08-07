@@ -2,6 +2,57 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** add the daemon poll scheduler: every active watch is
+  evaluated on its own declared cadence (the daemon's `defaultPollSeconds` is
+  the idle ceiling, not the tick), each poll runs under an exclusive expiring
+  per-watch lease, and adapter signals are committed through the durable wake
+  ledger so an overlapping or retried poll cannot publish a second wake for one
+  source event. A lease is acquired by exclusively creating the generation after
+  the highest one on disk, so recovering a lease abandoned by a crash never
+  unlinks a lease it does not own. Adapter failures are bounded: at three
+  consecutive failures the watch is marked degraded and stops being retried
+  inline while staying visible to status. A kind with no registered source
+  adapter is skipped rather than failed, and the loop polls nothing at all until
+  adapters are registered, so no watch is degraded by the daemon's own wiring
+  (SPEC-PRD-0020-P1 T-04).
+- **sdlc-workflow:** add the workspace-scoped durable watch registry lifecycle
+  API with deterministic kind/target deduplication, active-watch age and
+  last-poll projections, explicit expiry, and automatic expiry when a poll
+  reports a terminal target state (SPEC-PRD-0020-P1 T-03).
+- **sdlc-workflow:** add the per-workspace durable daemon store with one JSON
+  file per watch and wake, idempotent wake IDs, fsynced publication, and
+  atomic-rename wake claims. A write-once `wake/records/` ledger gates
+  publication, so a re-detected signal cannot restore a pending file for an
+  already-claimed wake and buy a second claim (SPEC-PRD-0020-P1 T-02).
+- **sdlc-workflow:** a `daemon install` that cannot execute `launchctl` at all
+  now names the cause. `spawnSync` reports that case as `status: null` with
+  empty stdout/stderr, so the thrown `DAEMON_CONFIG_INVALID` carried a blank
+  detail and told the operator only that "bootstrap failed"; the spawn error
+  (e.g. `ENOENT` off macOS) is now surfaced, and a failure with genuinely no
+  output no longer pads `details` with an empty string (SPEC-PRD-0020-P1 T-01).
+- **sdlc-workflow:** `daemon install --no-load` works again — the flag is
+  yargs' negation of `--load` (default true); declaring a literal `no-load`
+  option made strict mode reject `--no-load` as `Unknown argument: load`
+  (SPEC-PRD-0020-P1 T-01).
+- **sdlc-workflow:** `daemon install` is transactional on macOS launchd —
+  after a successful `launchctl bootstrap`, a failed `launchctl enable` boots
+  the agent out and removes the plist so install never reports failure while
+  leaving a loaded KeepAlive agent on disk (SPEC-PRD-0020-P1 T-01).
+- **sdlc-workflow:** `daemon install` now creates `.sdlc/daemon/` and touches
+  `daemon.log` before launchd bootstrap so StandardOutPath/StandardErrorPath
+  exist at load time; `daemon uninstall` derives the label/plist path from the
+  workspace root alone (no `.sdlc/daemon.json` required); and `launchctl
+enable` failures after a successful bootstrap fail the install instead of
+  reporting `loaded: true` while the agent stays disabled (SPEC-PRD-0020-P1
+  T-01 remediation).
+- **sdlc-workflow:** per-workspace event daemon skeleton (SPEC-PRD-0020-P1
+  T-01). `sdlc-workflow daemon --workspace <root>` is a long-running process
+  whose only required input is the workspace root; `DaemonConfig` (activate
+  script, runs dir, poll cadence, headless runner) is loaded from
+  `.sdlc/daemon.json` under that root, and pid/log/launchd label are derived
+  per workspace so two roots never share a process. `daemon install` /
+  `daemon uninstall` write (or remove) a KeepAlive=true launchd plist with a
+  workspace-unique label. Bootstrap and lifecycle only — no watch/poll yet.
 - **sdlc-workflow:** the engine now mints and refreshes its own GitHub token
   instead of living on the one the operator exported at launch. A GitHub App
   installation token is valid for 60 minutes; a detached supervised run lasts
@@ -548,7 +599,7 @@ prd-lint --prd <id> --docs-dir <dir>` — validates a PRD parses cleanly with
   `docs/addi-pr-automation-standard.md` + hardened
   `addi-merge-on-approve.yml` (repository_dispatch / workflow_run / schedule)
   - `addi-merge-webhook` bridge; `pr-approve-watch` demoted to triage when GHA
-  is enabled. Each organization uses its own Addi App Client ID + PEM
+    is enabled. Each organization uses its own Addi App Client ID + PEM
     under the same Action variable names.
 - **team-setup:** add `addi-authorship` rule — agent PRs/issues must be created
   as the workspace GitHub App (Addi); verify `viewer.login` before create; never

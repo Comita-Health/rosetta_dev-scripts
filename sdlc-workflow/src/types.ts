@@ -505,6 +505,111 @@ export interface DiffStat {
   totalLines: number;
 }
 
+/**
+ * PRD-0020 §4 — consumer-owned daemon configuration. Values come from files
+ * under the workspace root; the engine never compiles in org/repo/path
+ * opinions. Runtime paths (pid, log, launchd label) are derived from
+ * `workspaceRoot` by the config loader.
+ */
+export interface DaemonConfig {
+  workspaceRoot: string;
+  activateScript: string;
+  runsDir: string;
+  defaultPollSeconds: number;
+  headlessRunner: string;
+}
+
+/** Process-local paths and launchd identity derived for one workspace root. */
+export interface DaemonRuntimePaths {
+  stateDir: string;
+  pidFile: string;
+  logPath: string;
+  launchdLabel: string;
+}
+
+export type WatchKind =
+  | 'pr-review'
+  | 'pr-checks'
+  | 'issue-state'
+  | 'workflow-run'
+  | 'run-supervisor'
+  | 'queue-item';
+
+/**
+ * Structured watch target.
+ *
+ * @remarks
+ * Every field is optional at the type level because the identifying set
+ * differs per {@link WatchKind}; the registry requires exactly its kind's set
+ * and rejects the rest. Do not read this as "any one field will do".
+ */
+export interface WatchTarget {
+  /** GitHub `owner/name`; matched case-insensitively. */
+  repo?: string;
+  /** Pull request or issue number, unique only within `repo`. */
+  number?: number;
+  /** Run or record id. */
+  runId?: string;
+}
+
+export interface HeadlessAction {
+  kind: 'agent-dispatch' | 'engine-command';
+  prompt?: string;
+  argv?: string[];
+  transcriptDir: string;
+}
+
+/** PRD-0020 §4 durable watch registration contract. */
+export interface WatchRegistration {
+  /** Stable identity derived from `kind + target`. */
+  id: string;
+  kind: WatchKind;
+  target: WatchTarget;
+  pollSeconds: number;
+  action?: HeadlessAction;
+  createdBy: string;
+  expiresAt?: string;
+}
+
+/** Input accepted by the registry; identity and lifecycle fields are derived. */
+export type WatchRegistrationInput = Omit<WatchRegistration, 'id'>;
+
+/** File-backed registration plus registry-owned lifecycle metadata. */
+export interface DurableWatchRecord extends WatchRegistration {
+  createdAt: string;
+  lastPollTime?: string;
+  consecutiveFailures?: number;
+  lastError?: string;
+  degradedAt?: string;
+  expiredAt?: string;
+  terminalState?: string;
+}
+
+/** Active-watch projection consumed by status surfaces. */
+export interface ActiveWatch extends WatchRegistration {
+  /** Whole seconds since registration. */
+  age: number;
+  lastPollTime: string | null;
+  consecutiveFailures: number;
+  lastError: string | null;
+  degradedAt: string | null;
+}
+
+/** Input whose identity is the `(kind, target, signal)` tuple. */
+export interface WakeEventInput {
+  kind: string;
+  target: string;
+  signal: string;
+  createdAt: string;
+  prompt?: string;
+  data?: Record<string, unknown>;
+}
+
+/** Durable wake payload with its deterministic idempotency key. */
+export interface WakeEvent extends WakeEventInput {
+  id: string;
+}
+
 export type WorkflowErrorCode =
   | 'PRD_NOT_FOUND'
   | 'PRD_MALFORMED'
@@ -526,6 +631,8 @@ export type WorkflowErrorCode =
   | 'RUN_LOCK_NOT_HELD'
   | 'GIT_FAILED'
   | 'GH_FAILED'
+  /** SPEC-PRD-0020-P1 T-01: workspace root missing or daemon config unusable. */
+  | 'DAEMON_CONFIG_INVALID'
   /**
    * Mutating `gh` (issue/PR create) refused to run as the ambient human login
    * and could not activate an Addi GitHub App identity.

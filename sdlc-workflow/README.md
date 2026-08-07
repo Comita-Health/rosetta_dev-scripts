@@ -111,7 +111,84 @@ bun run dev -- queue-run --spec ../specs/PRD-0011/phase-4-spec.md --repo ..
 
 # List queued launch records (FIFO, oldest first)
 bun run dev -- status --queue
+
+# Per-workspace SDLC event daemon (SPEC-PRD-0020-P1 T-01/T-04) — process
+# bootstrap, durable storage, watch registry, and bounded poll scheduler. The
+# scheduler polls nothing until source adapters (T-05) are registered.
+# Config is `.sdlc/daemon.json` under the workspace root (DaemonConfig contract).
+# `install` creates `.sdlc/daemon/` + touches the log before launchd load;
+# load is transactional (enable failure → bootout + plist remove);
+# `uninstall` derives the label/plist from the workspace root alone so a
+# missing/malformed contract cannot leave an orphaned agent.
+bun run dev -- daemon --workspace ../..
+bun run dev -- daemon install --workspace ../..
+bun run dev -- daemon uninstall --workspace ../..
+# Options
+#   --workspace   required workspace root (all paths/ids derived from it)
+#   --plist-dir   LaunchAgents directory (default: ~/Library/LaunchAgents)
+#   --no-load     write the plist without calling launchctl (tests / dry-run)
 ```
+
+The daemon store derives its root from the workspace exactly as lifecycle
+does: `.sdlc/daemon/`. Watch registrations are independent JSON files under
+`watches/`. Wake events keep the existing inbox shape — `wake/pending/`, moved
+to `wake/consumed/` when claimed — on top of a `wake/records/` ledger:
+
+```text
+wake/records/<wakeId>.json    written once per wake ID, never removed
+wake/pending/<wakeId>.json    hard link to the ledger entry: unclaimed
+wake/consumed/<wakeId>.json   that same link, renamed by the winning claim
+```
+
+A wake ID is the SHA-256 digest of its `(kind, target, signal)` tuple, so
+detecting one signal again resolves to the original record. The ledger entry
+is created with `link(2)`, which fails rather than clobbers, making it a
+permanent atomic "has this ever been published" gate; only the writer that
+wins it links the wake into `wake/pending/`. A pending link therefore exists at
+most once per ID, so the `rename(2)` that claims it can succeed at most once —
+a re-detected signal cannot resurrect a claimed wake, and a claim can never
+replace an existing consumed record. Content and directory entries are fsynced
+before a write is reported, so records survive a kill or a reboot with no
+database, broker, or live session.
+
+`WatchRegistryService` is the internal registration and poll-loop API over
+that store. A watch ID is derived from its kind and normalized structured
+target, so registering the same target and kind is idempotent. Every call is
+scoped by workspace root; registrations contain only durable values from the
+PRD-0020 `WatchRegistration` contract and no chat/session references. `list`
+returns active watches with `kind`, `target`, age in whole seconds,
+`lastPollTime`, consecutive failures, and degraded state. A declared expiry or
+a terminal result passed to `recordPoll`
+durably expires the record and removes it from subsequent active queries while
+retaining it on disk for audit.
+
+`PollSchedulerService` starts with the daemon and evaluates each active watch
+on its own declared cadence: the interval between ticks is the shortest
+`pollSeconds` among active watches, so `defaultPollSeconds` from
+`.sdlc/daemon.json` is the _idle ceiling_ rather than the tick, and a watch that
+asks to be polled faster than the default gets it.
+
+An exclusive, expiring lease keeps overlapping ticks off the same watch. Leases
+live at `poll-leases/<sha256(watchId)>.<generation>.json`, and taking one means
+exclusively creating the generation after the highest one on disk. Recovering a
+lease abandoned by a crashed poll therefore _adds_ a generation instead of
+removing the expired file, so no code path unlinks a lease it does not own and
+two concurrent recoveries cannot both end up holding the watch. A release only
+removes its own generation _and_ token, so a late completion can never drop a
+successor's lease.
+
+Adapter signals are committed through the durable wake ledger before poll
+success is recorded, so a retry after interruption resolves to the original wake
+ID. Adapter failures are recorded per watch; after three consecutive failures
+the watch remains visible as degraded but is skipped by subsequent ticks.
+
+A watch whose kind has no registered source adapter is _skipped, not failed_ — a
+missing adapter is a wiring gap, not a signal-source fault, so it neither
+consumes the watch's failure budget nor degrades it. While the adapter registry
+is empty the loop does no polling work at all: it logs that once and keeps its
+timer. Phase 1's GitHub adapters (SPEC-PRD-0020-P1 T-05, which depends on this
+task) register into `WatchSourceAdapterRegistry`, and polling starts from the
+next tick with no scheduler change and no watch degraded in the meantime.
 
 `decompose` grounds the synthesized envelope in the target repo tree (#35):
 every `allowedPaths` glob must match at least one existing path in the
