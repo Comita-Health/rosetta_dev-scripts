@@ -54,9 +54,39 @@ install_toolchain() {
   export PATH="$BUN_INSTALL/bin:$PATH"
 }
 
+# Normalize a PEM (or PEM-like) secret from Cursor/dashboard env injection:
+# strip wrapping quotes, turn literal \n into real newlines, ensure trailing NL.
+normalize_pem_secret() {
+  python3 - <<'PY'
+import os, sys
+raw = os.environ.get("GITHUB_APP_PRIVATE_KEY", "")
+text = raw.strip()
+if (len(text) >= 2) and ((text[0] == text[-1] == '"') or (text[0] == text[-1] == "'")):
+    text = text[1:-1]
+text = text.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\r\n", "\n")
+text = text.strip() + "\n"
+sys.stdout.write(text)
+PY
+}
+
+pem_looks_complete() {
+  local pem_path="$1"
+  python3 - "$pem_path" <<'PY'
+import sys
+from pathlib import Path
+pem = Path(sys.argv[1]).read_text()
+has_begin = ("BEGIN" in pem) and ("PRIVATE KEY" in pem)
+end_idx = pem.find("END")
+has_end = (end_idx >= 0) and ("PRIVATE KEY" in pem[end_idx:])
+ok = has_begin and has_end and (len(pem) >= 200)
+sys.exit(0 if ok else 1)
+PY
+}
+
 materialize_addi() {
   if [[ -z "${GITHUB_APP_ID:-}" || -z "${GITHUB_APP_INSTALLATION_ID:-}" ]]; then
     log 'Addi secrets not present yet — skipping ~/.config/comita materialize'
+    log 'Note: environment Builds often lack secrets; runtime agent injects them and re-runs install / materialize.'
     return 0
   fi
   if [[ -z "${GITHUB_APP_PRIVATE_KEY:-}" ]]; then
@@ -69,8 +99,15 @@ materialize_addi() {
   chmod 700 "$cfg"
 
   umask 077
-  printf '%s\n' "$GITHUB_APP_PRIVATE_KEY" >"$cfg/github-app.pem"
+  normalize_pem_secret >"$cfg/github-app.pem"
   chmod 600 "$cfg/github-app.pem"
+  if ! pem_looks_complete "$cfg/github-app.pem"; then
+    local pem_bytes
+    pem_bytes="$(wc -c <"$cfg/github-app.pem" | tr -d ' ')"
+    log "ERROR: GITHUB_APP_PRIVATE_KEY is not a complete PEM (bytes=${pem_bytes}; need BEGIN+END PRIVATE KEY, typically >200 bytes)."
+    log 'Fix: set the Comita env secret to the full addi-m App private key (real newlines or literal \\n escapes; wrapping quotes OK).'
+    return 1
+  fi
 
   cat >"$cfg/github-app.env" <<EOF
 GITHUB_APP_ID='${GITHUB_APP_ID}'
@@ -107,7 +144,10 @@ from cryptography.hazmat.primitives.asymmetric import padding
 app_id = os.environ["GITHUB_APP_ID"].strip("'\"")
 install_id = os.environ["GITHUB_APP_INSTALLATION_ID"].strip("'\"")
 pem_path = os.environ["GITHUB_APP_PRIVATE_KEY_PATH"].strip("'\"")
-pem = Path(pem_path).read_text()
+pem = Path(pem_path).read_text().strip()
+if (len(pem) >= 2) and ((pem[0] == pem[-1] == '"') or (pem[0] == pem[-1] == "'")):
+    pem = pem[1:-1]
+pem = pem.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\r\n", "\n").strip() + "\n"
 
 def b64url(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
