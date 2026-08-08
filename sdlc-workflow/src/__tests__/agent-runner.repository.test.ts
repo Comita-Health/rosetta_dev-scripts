@@ -5,6 +5,7 @@ jest.mock('child_process', () => ({ spawn: jest.fn() }));
 
 import { spawn } from 'child_process';
 import { AgentRunnerRepository } from '../repositories/agent-runner.repository';
+import { defaultAgentDataDir } from '../utils/agent-env';
 
 const spawnMock = spawn as jest.Mock;
 
@@ -121,6 +122,33 @@ describe('AgentRunnerRepository', () => {
       delete process.env.CURSOR_AGENT;
       delete process.env.CURSOR_ASKPASS_SOCKET;
       delete process.env.CURSOR_AGENT_BIN;
+    }
+  });
+
+  // SPEC-BUG-agent-history-isolation-P1 T-01. Workspace-mutating dispatches
+  // must not write transcripts into the operator's ~/.cursor history root.
+  it('spawns with CURSOR_DATA_DIR set to the engine agent-data root', async () => {
+    const previousDataDir = process.env.CURSOR_DATA_DIR;
+    const previousOverride = process.env.SDLC_AGENT_DATA_DIR;
+    process.env.CURSOR_DATA_DIR = '/Users/op/.cursor';
+    delete process.env.SDLC_AGENT_DATA_DIR;
+    try {
+      spawnResult(0, 'ok');
+      await repo.run('/wt', 'p');
+
+      const [, , options] = spawnMock.mock.calls[0];
+      expect(options.env.CURSOR_DATA_DIR).toBe(defaultAgentDataDir());
+    } finally {
+      if (previousDataDir === undefined) {
+        delete process.env.CURSOR_DATA_DIR;
+      } else {
+        process.env.CURSOR_DATA_DIR = previousDataDir;
+      }
+      if (previousOverride === undefined) {
+        delete process.env.SDLC_AGENT_DATA_DIR;
+      } else {
+        process.env.SDLC_AGENT_DATA_DIR = previousOverride;
+      }
     }
   });
 

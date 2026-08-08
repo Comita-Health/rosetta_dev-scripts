@@ -5,6 +5,7 @@ jest.mock('child_process', () => ({ spawnSync: jest.fn() }));
 import { spawnSync } from 'child_process';
 import os from 'os';
 import { CursorCliRepository } from '../repositories/cursor-cli.repository';
+import { defaultAgentDataDir } from '../utils/agent-env';
 
 const spawnMock = spawnSync as jest.Mock;
 
@@ -108,6 +109,33 @@ describe('CursorCliRepository', () => {
     } finally {
       delete process.env.CURSOR_AGENT;
       delete process.env.CLAUDECODE;
+    }
+  });
+
+  // SPEC-BUG-agent-history-isolation-P1 T-01. Completion-transport dispatches
+  // (reviewer / verifier / decompose) share sanitizedAgentEnv().
+  it('spawns with CURSOR_DATA_DIR set to the engine agent-data root', async () => {
+    const previousDataDir = process.env.CURSOR_DATA_DIR;
+    const previousOverride = process.env.SDLC_AGENT_DATA_DIR;
+    process.env.CURSOR_DATA_DIR = '/Users/op/.cursor';
+    delete process.env.SDLC_AGENT_DATA_DIR;
+    spawnMock.mockReturnValue({ status: 0, stdout: 'ok', stderr: '' });
+    try {
+      await repo.complete('hi');
+
+      const [, , options] = spawnMock.mock.calls[0];
+      expect(options.env.CURSOR_DATA_DIR).toBe(defaultAgentDataDir());
+    } finally {
+      if (previousDataDir === undefined) {
+        delete process.env.CURSOR_DATA_DIR;
+      } else {
+        process.env.CURSOR_DATA_DIR = previousDataDir;
+      }
+      if (previousOverride === undefined) {
+        delete process.env.SDLC_AGENT_DATA_DIR;
+      } else {
+        process.env.SDLC_AGENT_DATA_DIR = previousOverride;
+      }
     }
   });
 });

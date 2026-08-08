@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** engine-spawned agents write transcripts under
+  `~/.rosetta/agent-data` (override with `SDLC_AGENT_DATA_DIR`) instead of
+  the operator's `~/.cursor` history root. `sanitizedAgentEnv()` sets
+  `CURSOR_DATA_DIR` unconditionally on both dispatch paths; credentials
+  still resolve from `CURSOR_CONFIG_DIR`. Resume with
+  `CURSOR_DATA_DIR=~/.rosetta/agent-data cursor-agent ls`
+  (SPEC-BUG-agent-history-isolation-P1 T-01).
+
 - **sdlc-workflow:** enforce runs no longer sandbox-deploy (or CI) a tip
   that envelope or reviewer already rejected. Remediable findings invoke
   `remediationRound` immediately; on success the pass abandons so
