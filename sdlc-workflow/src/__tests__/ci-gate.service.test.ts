@@ -31,8 +31,15 @@ const makeState = (): RunState => ({
   updatedAt: 'x'
 });
 
-const green = { total: 2, failed: [], pending: [] };
-const red = { total: 2, failed: ['ci'], pending: [] };
+const green = { total: 2, failed: [], pending: [], failedLinks: [] };
+const red = {
+  total: 2,
+  failed: ['ci'],
+  pending: [],
+  failedLinks: [
+    { name: 'ci', url: 'https://github.com/org/repo/actions/runs/1' }
+  ]
+};
 
 describe('CiGateService (P3 T-03 live monitor + bounded fix cycle)', () => {
   let gate: ICiGateService;
@@ -170,7 +177,12 @@ describe('CiGateService (P3 T-03 live monitor + bounded fix cycle)', () => {
   });
 
   it('blocks when the commit reports zero check runs for the whole appear window', async () => {
-    checkRuns.mockReturnValue({ total: 0, failed: [], pending: [] });
+    checkRuns.mockReturnValue({
+      total: 0,
+      failed: [],
+      pending: [],
+      failedLinks: []
+    });
 
     const verdict = await gate.monitor(input());
 
@@ -186,8 +198,18 @@ describe('CiGateService (P3 T-03 live monitor + bounded fix cycle)', () => {
   it('waits for check runs to register rather than blocking on their absence', async () => {
     checkRuns
       .mockReturnValueOnce(null) // push not visible to gh yet
-      .mockReturnValueOnce({ total: 0, failed: [], pending: [] }) // sha known, no runs
-      .mockReturnValueOnce({ total: 2, failed: [], pending: ['ci'] }) // registered
+      .mockReturnValueOnce({
+        total: 0,
+        failed: [],
+        pending: [],
+        failedLinks: []
+      }) // sha known, no runs
+      .mockReturnValueOnce({
+        total: 2,
+        failed: [],
+        pending: ['ci'],
+        failedLinks: []
+      }) // registered
       .mockReturnValue(green);
 
     const verdict = await gate.monitor(
@@ -229,8 +251,18 @@ describe('CiGateService (P3 T-03 live monitor + bounded fix cycle)', () => {
 
   it('polls pending checks to terminal and passes on green with evidence', async () => {
     checkRuns
-      .mockReturnValueOnce({ total: 2, failed: [], pending: ['ci'] })
-      .mockReturnValueOnce({ total: 2, failed: [], pending: ['ci'] })
+      .mockReturnValueOnce({
+        total: 2,
+        failed: [],
+        pending: ['ci'],
+        failedLinks: []
+      })
+      .mockReturnValueOnce({
+        total: 2,
+        failed: [],
+        pending: ['ci'],
+        failedLinks: []
+      })
       .mockReturnValue(green);
 
     const verdict = await gate.monitor(input());
@@ -246,7 +278,12 @@ describe('CiGateService (P3 T-03 live monitor + bounded fix cycle)', () => {
   });
 
   it('blocks (would escalate) when checks are still pending at the deadline', async () => {
-    checkRuns.mockReturnValue({ total: 2, failed: [], pending: ['e2e'] });
+    checkRuns.mockReturnValue({
+      total: 2,
+      failed: [],
+      pending: ['e2e'],
+      failedLinks: []
+    });
 
     const verdict = await gate.monitor({ ...input(), timeoutMs: 5 });
 

@@ -119,6 +119,11 @@ bun run dev -- status --queue
 # consumption dispatches the Phase 1 notify mirror (chat/desktop), with headless
 # dispatch left for Phase 3 on the same action interface.
 # Config is `.sdlc/daemon.json` under the workspace root (DaemonConfig contract).
+# Optional `operator` (GitHub login) is written into the launchd plist as
+# `SDLC_OPERATOR` so KeepAlive restarts and future headless/continuity children
+# inherit your assignee. Interactive `run` still honors `--operator` / shell
+# `SDLC_OPERATOR` — put `export SDLC_OPERATOR=YourLogin` in ~/.zshrc for CLIs
+# started outside launchd.
 # `install` creates `.sdlc/daemon/` + touches the log before launchd load;
 # load is transactional (enable failure → bootout + plist remove);
 # `uninstall` derives the label/plist from the workspace root alone so a
@@ -869,11 +874,19 @@ Handler / Service / Repository with InversifyJS (workspace rule):
   exception entries into interrupting `action-required` queue items,
   assigned needs-human GitHub issues (`--operator` / `SDLC_OPERATOR`), and
   durable wake-inbox events (idempotent by title **and** `occurrenceKey`, so
-  the same finding on a new head SHA re-notifies). Swallowed GitHub failures
-  append a loud `monitor.log` warning without blocking the run. Issue creates
-  always run as the workspace GitHub App (Addi) via `envForAddiWrite` —
-  ambient human `gh` auth is refused with `GH_NOT_ADDI` rather than filing
-  under the operator's login.
+  the same finding on a new head SHA re-notifies). Issue body / wake / queue
+  tags carry rich operator refs when known: **Blocker PR**, branch, head SHA,
+  spec path, verification human-required criteria, failed CI check URLs, and
+  sandbox sha/status/evidence (`utils/escalation-refs.ts`). When the task
+  checkout's `origin` slug is known, Branch / Head / Spec / sandbox SHA render
+  as GitHub `tree` / `commit` / `blob` markdown links; repo-relative paths
+  inside human-required criteria (e.g. `sdlc-workflow/README.md`) are
+  linkified the same way. `runs://…` evidence stays monospace — that scheme is
+  local engine evidence, not a browser URL. Swallowed GitHub
+  failures append a loud `monitor.log` warning without blocking the run.
+  Issue creates always run as the workspace GitHub App (Addi) via
+  `envForAddiWrite` — ambient human `gh` auth is refused with `GH_NOT_ADDI`
+  rather than filing under the operator's login.
 - `repositories/issue.repository.ts` — `gh issue` create / find-by-title
   (creates require Addi).
 - `utils/gh-auth.ts` / `utils/gh-cli.ts` — shared `gh` runner; calls mint or

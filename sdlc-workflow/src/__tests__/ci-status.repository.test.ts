@@ -36,13 +36,24 @@ describe('CiStatusRepository', () => {
     expect(callArgs(0)[0]).toContain(
       'repos/org/repo/commits/abc123/check-runs'
     );
-    expect(summary).toEqual({ total: 3, failed: [], pending: [] });
+    expect(summary).toEqual({
+      total: 3,
+      failed: [],
+      pending: [],
+      failedLinks: []
+    });
   });
 
-  it('reports failed and pending runs by name', () => {
+  it('reports failed and pending runs by name, with deep links when present', () => {
     ghMock.mockReturnValue(
       JSON.stringify([
-        { name: 'ci', status: 'completed', conclusion: 'failure' },
+        {
+          name: 'ci',
+          status: 'completed',
+          conclusion: 'failure',
+          html_url: 'https://github.com/org/repo/actions/runs/1',
+          details_url: 'https://example.com/ci'
+        },
         { name: 'e2e', status: 'in_progress', conclusion: null }
       ])
     );
@@ -50,7 +61,41 @@ describe('CiStatusRepository', () => {
     expect(repo.checkRuns('/repo', 'abc')).toEqual({
       total: 2,
       failed: ['ci'],
-      pending: ['e2e']
+      pending: ['e2e'],
+      failedLinks: [
+        {
+          name: 'ci',
+          url: 'https://github.com/org/repo/actions/runs/1'
+        }
+      ]
+    });
+  });
+
+  it('falls back to details_url when html_url is absent on a failed check', () => {
+    ghMock.mockReturnValue(
+      JSON.stringify([
+        {
+          name: 'lint',
+          status: 'completed',
+          conclusion: 'failure',
+          html_url: '',
+          details_url: 'https://example.com/lint'
+        },
+        {
+          name: 'orphan',
+          status: 'completed',
+          conclusion: 'failure',
+          html_url: null,
+          details_url: null
+        }
+      ])
+    );
+
+    expect(repo.checkRuns('/repo', 'abc')).toEqual({
+      total: 2,
+      failed: ['lint', 'orphan'],
+      pending: [],
+      failedLinks: [{ name: 'lint', url: 'https://example.com/lint' }]
     });
   });
 

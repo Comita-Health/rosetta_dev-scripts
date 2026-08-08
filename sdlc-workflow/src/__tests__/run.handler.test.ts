@@ -5,6 +5,7 @@ import path from 'path';
 import { Container } from 'inversify';
 import { IRunHandler, RunHandler } from '../handlers/run.handler';
 import type { IEvidenceRepository } from '../repositories/evidence.repository';
+import type { ICiStatusRepository } from '../repositories/ci-status.repository';
 import type { IGitRepository } from '../repositories/git.repository';
 import type { IQueueRepository } from '../repositories/queue.repository';
 import {
@@ -402,6 +403,18 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
     container
       .bind<IEvidenceRepository>(WORKFLOW_TOKENS.EvidenceRepository)
       .toConstantValue({ save: evidenceSave, load: jest.fn() });
+    container
+      .bind<ICiStatusRepository>(WORKFLOW_TOKENS.CiStatusRepository)
+      .toConstantValue({
+        checkRuns: jest.fn().mockReturnValue({
+          total: 0,
+          failed: [],
+          pending: [],
+          failedLinks: []
+        }),
+        failedLogs: jest.fn().mockReturnValue(''),
+        createStatus: jest.fn()
+      });
     container
       .bind<IGitRepository>(WORKFLOW_TOKENS.GitRepository)
       .toConstantValue({

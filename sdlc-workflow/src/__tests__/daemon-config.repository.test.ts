@@ -45,6 +45,7 @@ describe('DaemonConfigRepository', () => {
     expect(config.runsDir).toBe(path.resolve(root, 'var/runs'));
     expect(config.defaultPollSeconds).toBe(30);
     expect(config.headlessRunner).toBe('test-runner');
+    expect(config.operator).toBeUndefined();
     expect(paths.pidFile).toBe(
       path.join(root, '.sdlc', 'daemon', 'daemon.pid')
     );
@@ -119,6 +120,15 @@ describe('DaemonConfigRepository', () => {
     );
     writeFileSync(fileRoot, 'x', 'utf-8');
     expect(() => repo.load(fileRoot)).toThrow(/not a directory/);
+  });
+
+  it('loads optional operator when present and rejects an empty one', () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'daemon-cfg-op-'));
+    writeDaemonConfig(root, { operator: 'Roustalski' });
+    expect(repo.load(root).config.operator).toBe('Roustalski');
+
+    writeDaemonConfig(root, { operator: '   ' });
+    expect(() => repo.load(root)).toThrow(WorkflowError);
   });
 
   it('derivePaths works without a daemon.json contract', () => {
