@@ -2,8 +2,13 @@ import type { RunState } from '../types';
 import {
   collectEscalationRefs,
   formatEscalationRefLines,
+  githubBlobUrl,
+  githubCommitUrl,
+  githubTreeUrl,
   humanRequiredCriteria,
-  latestTaskVerdict
+  latestTaskVerdict,
+  linkifyRepoPathsInText,
+  repoRelativePath
 } from '../utils/escalation-refs';
 
 const baseState = (): RunState =>
@@ -28,7 +33,7 @@ const baseState = (): RunState =>
         outcome: 'human-required',
         wouldEscalate: false,
         reasons: [
-          'human required: docs: README states where transcripts live',
+          'human required: docs: sdlc-workflow/README.md states where transcripts live',
           'failed: agent: confinement'
         ],
         evidenceIds: ['T-01-agent-criterion-8'],
@@ -67,17 +72,23 @@ describe('escalation-refs', () => {
       state: baseState(),
       taskId: 'T-01',
       headSha: 'abc123',
+      repoSlug: 'org/repo',
+      repoPath: '/workspace',
       ciCheckUrls: [
         { name: 'test', url: 'https://github.com/org/repo/actions/runs/1' }
       ]
     });
 
     expect(refs).toEqual({
+      repoSlug: 'org/repo',
+      repoPath: '/workspace',
       prUrl: 'https://github.com/org/repo/pull/65',
       headSha: 'abc123',
       branch: 'sdlc/bug-run/T-01',
       specPath: '/workspace/specs/BUG-x/phase-1-spec.md',
-      humanRequired: ['docs: README states where transcripts live'],
+      humanRequired: [
+        'docs: sdlc-workflow/README.md states where transcripts live'
+      ],
       ciCheckUrls: [
         { name: 'test', url: 'https://github.com/org/repo/actions/runs/1' }
       ],
@@ -89,13 +100,17 @@ describe('escalation-refs', () => {
     });
   });
 
-  it('formats markdown lines for the issue body', () => {
+  it('formats markdown lines with GitHub deep links when repoSlug is set', () => {
     const lines = formatEscalationRefLines('bug-run', {
+      repoSlug: 'org/repo',
+      repoPath: '/workspace',
       prUrl: 'https://github.com/org/repo/pull/65',
       branch: 'sdlc/bug-run/T-01',
       headSha: 'abc123',
-      specPath: '/specs/x.md',
-      humanRequired: ['criterion A'],
+      specPath: '/workspace/specs/x.md',
+      humanRequired: [
+        'docs: sdlc-workflow/README.md states where transcripts live'
+      ],
       ciCheckUrls: [
         { name: 'test', url: 'https://github.com/org/repo/actions/runs/1' }
       ],
@@ -104,16 +119,72 @@ describe('escalation-refs', () => {
         status: 'failed',
         evidenceId: 'T-01-sandbox-health'
       }
-    });
+    }).join('\n');
 
-    expect(lines.join('\n')).toContain('**Blocker PR:**');
-    expect(lines.join('\n')).toContain('### Human-required criteria');
-    expect(lines.join('\n')).toContain(
+    expect(lines).toContain('**Blocker PR:**');
+    expect(lines).toContain(
+      '[`sdlc/bug-run/T-01`](https://github.com/org/repo/tree/sdlc/bug-run/T-01)'
+    );
+    expect(lines).toContain(
+      '[`abc123`](https://github.com/org/repo/commit/abc123)'
+    );
+    expect(lines).toContain(
+      '[`specs/x.md`](https://github.com/org/repo/blob/abc123/specs/x.md)'
+    );
+    expect(lines).toContain(
+      '[`sdlc-workflow/README.md`](https://github.com/org/repo/blob/abc123/sdlc-workflow/README.md)'
+    );
+    expect(lines).toContain(
       '[test](https://github.com/org/repo/actions/runs/1)'
     );
-    expect(lines.join('\n')).toContain(
-      'runs://bug-run/evidence/T-01-sandbox-health'
+    expect(lines).toContain('runs://bug-run/evidence/T-01-sandbox-health');
+    expect(lines).toContain('local run evidence');
+  });
+
+  it('falls back to monospace when repoSlug is absent', () => {
+    const lines = formatEscalationRefLines('bug-run', {
+      branch: 'sdlc/bug-run/T-01',
+      headSha: 'abc123',
+      specPath: 'specs/x.md'
+    }).join('\n');
+    expect(lines).toContain('**Branch:** `sdlc/bug-run/T-01`');
+    expect(lines).not.toContain('https://github.com/');
+  });
+
+  it('repoRelativePath and GitHub URL helpers', () => {
+    expect(repoRelativePath('/workspace/specs/a.md', '/workspace')).toBe(
+      'specs/a.md'
     );
+    expect(repoRelativePath('specs/a.md')).toBe('specs/a.md');
+    expect(repoRelativePath('/elsewhere/file.md', '/workspace')).toBe(
+      undefined
+    );
+    expect(repoRelativePath('/tmp/sdlc-workflow/README.md')).toBe(
+      'sdlc-workflow/README.md'
+    );
+    expect(githubTreeUrl('org/repo', 'sdlc/x/T-01')).toBe(
+      'https://github.com/org/repo/tree/sdlc/x/T-01'
+    );
+    expect(githubCommitUrl('org/repo', 'deadbeef')).toBe(
+      'https://github.com/org/repo/commit/deadbeef'
+    );
+    expect(githubBlobUrl('org/repo', 'main', 'docs/a.md')).toBe(
+      'https://github.com/org/repo/blob/main/docs/a.md'
+    );
+    expect(
+      linkifyRepoPathsInText(
+        'see sdlc-workflow/README.md please',
+        'org/repo',
+        'abc'
+      )
+    ).toContain('blob/abc/sdlc-workflow/README.md');
+    expect(
+      linkifyRepoPathsInText(
+        'see sdlc-workflow/README.md please',
+        undefined,
+        'abc'
+      )
+    ).toBe('see sdlc-workflow/README.md please');
   });
 
   it('latestTaskVerdict prefers the newest recordedAt', () => {

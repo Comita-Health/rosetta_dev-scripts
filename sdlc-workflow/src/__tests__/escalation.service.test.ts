@@ -156,12 +156,14 @@ describe('EscalationService (P3 T-06 + fail-loud T-04)', () => {
   it('links rich refs (PR, branch/head, spec, human-required, CI, sandbox) in the issue body, queue tags, and wake', () => {
     const prUrl = 'https://github.com/org/repo/pull/65';
     const refs = {
+      repoSlug: 'org/repo',
+      repoPath: '/workspace',
       prUrl,
       branch: 'sdlc/bug-run/T-01',
       headSha: 'abc123def456',
       specPath: '/workspace/specs/BUG-x/phase-1-spec.md',
       humanRequired: [
-        'docs: README states where engine agent transcripts live'
+        'docs: sdlc-workflow/README.md states where engine agent transcripts live'
       ],
       ciCheckUrls: [
         {
@@ -190,14 +192,18 @@ describe('EscalationService (P3 T-06 + fail-loud T-04)', () => {
     expect(createIssue).toHaveBeenCalledTimes(1);
     const [, issueInput] = createIssue.mock.calls[0];
     expect(issueInput.body).toContain(`- **Blocker PR:** ${prUrl}`);
-    expect(issueInput.body).toContain('- **Branch:** `sdlc/bug-run/T-01`');
-    expect(issueInput.body).toContain('- **Head:** `abc123def456`');
     expect(issueInput.body).toContain(
-      '- **Spec:** `/workspace/specs/BUG-x/phase-1-spec.md`'
+      '[`sdlc/bug-run/T-01`](https://github.com/org/repo/tree/sdlc/bug-run/T-01)'
+    );
+    expect(issueInput.body).toContain(
+      '[`abc123def456`](https://github.com/org/repo/commit/abc123def456)'
+    );
+    expect(issueInput.body).toContain(
+      '[`specs/BUG-x/phase-1-spec.md`](https://github.com/org/repo/blob/abc123def456/specs/BUG-x/phase-1-spec.md)'
     );
     expect(issueInput.body).toContain('### Human-required criteria');
     expect(issueInput.body).toContain(
-      '- docs: README states where engine agent transcripts live'
+      '[`sdlc-workflow/README.md`](https://github.com/org/repo/blob/abc123def456/sdlc-workflow/README.md)'
     );
     expect(issueInput.body).toContain(
       '- [test](https://github.com/org/repo/actions/runs/9)'

@@ -869,7 +869,12 @@ Handler / Service / Repository with InversifyJS (workspace rule):
   the same finding on a new head SHA re-notifies). Issue body / wake / queue
   tags carry rich operator refs when known: **Blocker PR**, branch, head SHA,
   spec path, verification human-required criteria, failed CI check URLs, and
-  sandbox sha/status/evidence (`utils/escalation-refs.ts`). Swallowed GitHub
+  sandbox sha/status/evidence (`utils/escalation-refs.ts`). When the task
+  checkout's `origin` slug is known, Branch / Head / Spec / sandbox SHA render
+  as GitHub `tree` / `commit` / `blob` markdown links; repo-relative paths
+  inside human-required criteria (e.g. `sdlc-workflow/README.md`) are
+  linkified the same way. `runs://…` evidence stays monospace — that scheme is
+  local engine evidence, not a browser URL. Swallowed GitHub
   failures append a loud `monitor.log` warning without blocking the run.
   Issue creates always run as the workspace GitHub App (Addi) via
   `envForAddiWrite` — ambient human `gh` auth is refused with `GH_NOT_ADDI`

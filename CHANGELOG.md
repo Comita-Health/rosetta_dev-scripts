@@ -6,7 +6,11 @@
   references alongside the **Blocker PR**: branch, head SHA, spec path,
   verification human-required criteria, failed CI check URLs (from the
   Checks API `html_url` / `details_url`), and sandbox sha/status/evidence.
-  Wake payloads and queue tags include the same refs.
+  When the task checkout's origin slug is known, Branch / Head / Spec /
+  sandbox SHA render as GitHub `tree` / `commit` / `blob` markdown links;
+  repo-relative paths in human-required criteria are linkified the same way.
+  `runs://…` evidence stays monospace (local engine URI). Wake payloads and
+  queue tags include the same refs.
 
 - **sdlc-workflow:** needs-human escalation issues (and their wake / queue
   tags) link the task **Blocker PR** when one is open, so the operator can

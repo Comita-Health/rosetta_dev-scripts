@@ -43,6 +43,7 @@ import type {
 } from '../services/verification.service';
 import { WORKFLOW_TOKENS } from '../tokens';
 import { collectEscalationRefs } from '../utils/escalation-refs';
+import { originSlug } from '../utils/gh-repo';
 import {
   CriterionVerdict,
   DeployTrigger,
@@ -1261,11 +1262,19 @@ export class RunHandler implements IRunHandler {
         // gh unavailable / commit unknown — issue still posts without CI URLs.
       }
     }
+    let repoSlug: string | undefined;
+    try {
+      repoSlug = originSlug(input.repoPath);
+    } catch {
+      // Missing/non-GitHub origin — issue still posts with monospace refs.
+    }
     const refs = collectEscalationRefs({
       state,
       taskId,
       headSha,
-      ciCheckUrls
+      ciCheckUrls,
+      repoSlug,
+      repoPath: input.repoPath
     });
     const outcome = this._escalation.post({
       chronicleRepo: input.chronicleRepo,
