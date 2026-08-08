@@ -704,6 +704,11 @@ export type WorkflowErrorCode =
   /** SPEC-PRD-0020-P1 T-08: malformed daemon watch kind/target/cadence. */
   | 'DAEMON_WATCH_INVALID'
   /**
+   * `daemon install` was invoked from a TypeScript entry (`bun run dev` /
+   * tsx) but `dist/index.js` is missing — launchd cannot run raw `.ts`.
+   */
+  | 'DAEMON_CLI_ENTRY_MISSING'
+  /**
    * Mutating `gh` (issue/PR create) refused to run as the ambient human login
    * and could not activate an Addi GitHub App identity.
    */

@@ -44,6 +44,9 @@ const buildHandler = (): DaemonHandler => {
     install: jest.fn(),
     uninstall: jest.fn()
   });
+  container.bind(WORKFLOW_TOKENS.LegacyWakeMigrateService).toConstantValue({
+    migrate: jest.fn()
+  });
   // T-08: DaemonHandler also injects WatchRegistryService + DaemonConfigRepository
   // (already bound above) for `daemon watch`.
   container.bind(WORKFLOW_TOKENS.DaemonHandler).to(DaemonHandler);
@@ -165,6 +168,63 @@ describe('daemon status (SPEC-PRD-0020-P1 T-07)', () => {
     expect(text).toMatch(/Unwatched/);
     expect(text).toMatch(/pr-review acme\/app#99/);
     expect(text).toMatch(/run-supervisor run-abc/);
+  });
+
+  it('ignores placeholder pull/0 PR URLs so status still renders', () => {
+    const workspace = mkdtempSync(
+      path.join(os.tmpdir(), 'daemon-status-pull0-')
+    );
+    const runsDir = path.join(workspace, 'var', 'runs');
+    writeDaemonConfig(workspace, runsDir);
+    mkdirSync(path.join(runsDir, 'fixture-run'), { recursive: true });
+    writeFileSync(
+      path.join(runsDir, 'fixture-run', 'state.json'),
+      JSON.stringify({
+        runId: 'fixture-run',
+        specId: 'SPEC-X',
+        specPath: '/tmp/spec.md',
+        baseSha: 'abc',
+        taskResults: {
+          'T-01': {
+            taskId: 'T-01',
+            status: 'merged',
+            prUrl:
+              'https://github.com/Rosetta-Foundation/rosetta_dev-scripts/pull/0'
+          }
+        },
+        verdicts: [],
+        exceptions: [],
+        criterionVerdicts: [],
+        steps: {},
+        tokenSpendK: 0,
+        ciFixAttempts: {},
+        gateFixAttempts: {},
+        remediations: {},
+        mergeBlockedRetries: 0,
+        updatedAt: '2026-08-07T12:00:00.000Z'
+      }),
+      'utf-8'
+    );
+
+    const report = buildHandler().status({
+      workspaceRoot: workspace,
+      json: true
+    });
+
+    expect(
+      report.unwatched.some(
+        entry =>
+          (entry.kind === 'pr-review' || entry.kind === 'pr-checks') &&
+          entry.target.number === 0
+      )
+    ).toBe(false);
+    expect(
+      report.unwatched.some(
+        entry =>
+          entry.kind === 'run-supervisor' &&
+          entry.target.runId === 'fixture-run'
+      )
+    ).toBe(true);
   });
 
   it('distinguishes a degraded watch in both table and JSON output', async () => {

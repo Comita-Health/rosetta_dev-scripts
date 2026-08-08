@@ -65,6 +65,9 @@ const buildHandler = (): DaemonHandler => {
     recordPollFailure: jest.fn(),
     expire: jest.fn()
   });
+  container.bind(WORKFLOW_TOKENS.LegacyWakeMigrateService).toConstantValue({
+    migrate: jest.fn()
+  });
   container.bind(WORKFLOW_TOKENS.DaemonHandler).to(DaemonHandler);
   return container.get(WORKFLOW_TOKENS.DaemonHandler);
 };
@@ -158,11 +161,13 @@ describe('DaemonHandler install / uninstall (launchd plist)', () => {
       derivePaths: jest.fn(),
       load: jest.fn()
     };
+    const mockMigrate = { migrate: jest.fn() };
     const handler = new DaemonHandler(
       mockLifecycle,
       mockStatus,
       mockRegistry,
-      mockConfig
+      mockConfig,
+      mockMigrate
     );
 
     await handler.run({ workspaceRoot: root });

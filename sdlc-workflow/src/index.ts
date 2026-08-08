@@ -7,6 +7,7 @@ import chalk from 'chalk';
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
 import os from 'os';
+import { resolveDaemonCliEntry } from './utils/daemon-cli-entry';
 import { RunHandler, IRunHandler } from './handlers/run.handler';
 import { WorkflowHandler, IWorkflowHandler } from './handlers/workflow.handler';
 import {
@@ -177,6 +178,14 @@ import {
   ISuperviseService
 } from './services/supervise.service';
 import { DaemonHandler, IDaemonHandler } from './handlers/daemon.handler';
+import {
+  LegacyWakeInboxRepository,
+  ILegacyWakeInboxRepository
+} from './repositories/legacy-wake-inbox.repository';
+import {
+  LegacyWakeMigrateService,
+  ILegacyWakeMigrateService
+} from './services/legacy-wake-migrate.service';
 import {
   DaemonConfigRepository,
   IDaemonConfigRepository
@@ -436,6 +445,12 @@ container
 container
   .bind<IDaemonStatusService>(WORKFLOW_TOKENS.DaemonStatusService)
   .to(DaemonStatusService);
+container
+  .bind<ILegacyWakeInboxRepository>(WORKFLOW_TOKENS.LegacyWakeInboxRepository)
+  .to(LegacyWakeInboxRepository);
+container
+  .bind<ILegacyWakeMigrateService>(WORKFLOW_TOKENS.LegacyWakeMigrateService)
+  .to(LegacyWakeMigrateService);
 
 {
   // Phase 1 wires only pr-review and pr-checks. Remaining kinds are Phase 3
@@ -1071,11 +1086,12 @@ yargs(hideBin(process.argv))
               WORKFLOW_TOKENS.DaemonHandler
             );
             try {
+              // Dev runners leave __filename on src/*.ts; launchd needs dist/.
               handler.install({
                 workspaceRoot: argv.workspace,
                 plistDir: argv['plist-dir'],
                 load: argv.load !== false,
-                cliEntry: __filename,
+                cliEntry: resolveDaemonCliEntry(__filename),
                 program: process.execPath
               });
             } catch (err) {
@@ -1189,6 +1205,66 @@ yargs(hideBin(process.argv))
               }
               process.exit(1);
             }
+          }
+        )
+        .command(
+          'migrate-wake',
+          'Import ~/.rosetta/wake/pending into .sdlc/daemon/wake for daemon drain',
+          y2 =>
+            y2
+              .option('workspace', {
+                type: 'string',
+                describe: 'Absolute or relative path to the workspace root'
+              })
+              .option('from', {
+                type: 'string',
+                describe:
+                  'Legacy wake root (default: $ROSETTA_WAKE_DIR or ~/.rosetta/wake)'
+              })
+              .option('disposition', {
+                type: 'string',
+                default: 'auto',
+                choices: ['auto', 'pending', 'consumed'],
+                describe:
+                  'auto: pr_approve→consumed, escalations→pending; pending|consumed force all'
+              })
+              .option('dry-run', {
+                type: 'boolean',
+                default: false,
+                describe: 'Map and report without writing or archiving'
+              })
+              .option('json', {
+                type: 'boolean',
+                default: false,
+                describe: 'Emit the migrate report as JSON'
+              }),
+          argv => {
+            const handler = container.get<IDaemonHandler>(
+              WORKFLOW_TOKENS.DaemonHandler
+            );
+            void handler
+              .migrateWake({
+                workspaceRoot: argv.workspace,
+                from: argv.from,
+                disposition: argv.disposition as
+                  | 'auto'
+                  | 'pending'
+                  | 'consumed'
+                  | undefined,
+                dryRun: argv['dry-run'] === true,
+                json: argv.json === true
+              })
+              .catch(err => {
+                if (err instanceof WorkflowError) {
+                  console.error(chalk.red(`\n✗ ${err.code}: ${err.message}`));
+                  for (const detail of err.details) {
+                    console.error(chalk.red(`  - ${detail}`));
+                  }
+                } else {
+                  console.error(chalk.red(`\n✗ ${err}`));
+                }
+                process.exit(1);
+              });
           }
         )
         .demandCommand(0)
