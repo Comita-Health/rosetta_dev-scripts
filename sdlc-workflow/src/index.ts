@@ -1087,11 +1087,16 @@ yargs(hideBin(process.argv))
             );
             try {
               // Dev runners leave __filename on src/*.ts; launchd needs dist/.
+              // --no-load may run before `bun run build`; loaded installs must
+              // see dist/index.js so KeepAlive cannot point at a missing file.
+              const load = argv.load !== false;
               handler.install({
                 workspaceRoot: argv.workspace,
                 plistDir: argv['plist-dir'],
-                load: argv.load !== false,
-                cliEntry: resolveDaemonCliEntry(__filename),
+                load,
+                cliEntry: resolveDaemonCliEntry(__filename, {
+                  requireDist: load
+                }),
                 program: process.execPath
               });
             } catch (err) {

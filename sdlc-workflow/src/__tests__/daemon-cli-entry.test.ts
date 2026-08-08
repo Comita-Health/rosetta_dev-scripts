@@ -37,4 +37,21 @@ describe('resolveDaemonCliEntry', () => {
       expect((err as WorkflowError).code).toBe('DAEMON_CLI_ENTRY_MISSING');
     }
   });
+
+  it('allows a predicted dist path when requireDist is false (--no-load)', () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'daemon-cli-noload-'));
+    const srcEntry = path.join(root, 'src', 'index.ts');
+    mkdirSync(path.dirname(srcEntry), { recursive: true });
+    writeFileSync(srcEntry, 'export {};\n', 'utf-8');
+    expect(resolveDaemonCliEntry(srcEntry, { requireDist: false })).toBe(
+      path.join(root, 'dist', 'index.js')
+    );
+  });
+
+  it('returns non-TypeScript entries unchanged', () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'daemon-cli-bin-'));
+    const entry = path.join(root, 'sdlc-workflow');
+    writeFileSync(entry, '#!/usr/bin/env node\n', 'utf-8');
+    expect(resolveDaemonCliEntry(entry)).toBe(path.resolve(entry));
+  });
 });
