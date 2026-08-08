@@ -1253,7 +1253,9 @@ export class RunHandler implements IRunHandler {
       // must wake the human again — a resume against unchanged content must
       // not. The head SHA is exactly that discriminator.
       occurrenceKey,
-      wakeDir: input.wakeDir
+      wakeDir: input.wakeDir,
+      // Primary actionable surface for the human (task PR when one exists).
+      prUrl: state.taskResults[taskId]?.prUrl
     });
     for (const title of outcome.posted) {
       console.log(chalk.yellow(`  [escalate] ${title}`));
@@ -1771,7 +1773,9 @@ export class RunHandler implements IRunHandler {
             : result.status === 'failed'
               ? 'failed'
               : 'completed-unmerged') as
-            'merged' | 'failed' | 'completed-unmerged',
+            | 'merged'
+            | 'failed'
+            | 'completed-unmerged',
           detail: result.mergedSha ?? result.detail
         }));
       }

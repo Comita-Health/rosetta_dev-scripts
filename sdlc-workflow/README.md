@@ -866,11 +866,13 @@ Handler / Service / Repository with InversifyJS (workspace rule):
   exception entries into interrupting `action-required` queue items,
   assigned needs-human GitHub issues (`--operator` / `SDLC_OPERATOR`), and
   durable wake-inbox events (idempotent by title **and** `occurrenceKey`, so
-  the same finding on a new head SHA re-notifies). Swallowed GitHub failures
-  append a loud `monitor.log` warning without blocking the run. Issue creates
-  always run as the workspace GitHub App (Addi) via `envForAddiWrite` —
-  ambient human `gh` auth is refused with `GH_NOT_ADDI` rather than filing
-  under the operator's login.
+  the same finding on a new head SHA re-notifies). When the task already has
+  an open PR, the issue body / wake / queue tags include a **Blocker PR**
+  link so the operator can open the actionable surface immediately.
+  Swallowed GitHub failures append a loud `monitor.log` warning without
+  blocking the run. Issue creates always run as the workspace GitHub App
+  (Addi) via `envForAddiWrite` — ambient human `gh` auth is refused with
+  `GH_NOT_ADDI` rather than filing under the operator's login.
 - `repositories/issue.repository.ts` — `gh issue` create / find-by-title
   (creates require Addi).
 - `utils/gh-auth.ts` / `utils/gh-cli.ts` — shared `gh` runner; calls mint or

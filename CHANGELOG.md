@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** needs-human escalation issues (and their wake / queue
+  tags) link the task **Blocker PR** when one is open, so the operator can
+  jump straight to the actionable surface instead of reconstructing
+  `sdlc/<runId>/<taskId>` from the title alone.
+
 - **sdlc-workflow:** enforce runs no longer sandbox-deploy (or CI) a tip
   that envelope or reviewer already rejected. Remediable findings invoke
   `remediationRound` immediately; on success the pass abandons so

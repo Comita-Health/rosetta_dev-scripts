@@ -153,6 +153,39 @@ describe('EscalationService (P3 T-06 + fail-loud T-04)', () => {
     );
   });
 
+  it('links the task PR as Blocker PR in the issue body, queue tags, and wake', () => {
+    const prUrl = 'https://github.com/org/repo/pull/65';
+    const outcome = service.post({
+      chronicleRepo: '/chronicle',
+      runId: 'bug-run',
+      repoPath: '/repo',
+      operator: 'russwatson',
+      entries: [entry('merge-blocked')],
+      evidenceIds: ['T-01-ci-monitor'],
+      prUrl,
+      monitorPath,
+      wakeDir
+    });
+
+    expect(createIssue).toHaveBeenCalledTimes(1);
+    const [, issueInput] = createIssue.mock.calls[0];
+    expect(issueInput.body).toContain(`- **Blocker PR:** ${prUrl}`);
+    expect(issueInput.body).toContain('merge-blocked detail');
+
+    const [, , tags] = appendItem.mock.calls[0];
+    expect(tags).toEqual(expect.arrayContaining([`pr:${prUrl}`]));
+
+    const title = escalationTitle('bug-run', entry('merge-blocked'));
+    expect(outcome.wakes).toEqual([title]);
+    const wakes = readdirSync(path.join(wakeDir, 'pending'));
+    expect(wakes.length).toBe(1);
+    const wake = JSON.parse(
+      readFileSync(path.join(wakeDir, 'pending', wakes[0]), 'utf8')
+    ) as { prompt: string; data: { prUrl?: string } };
+    expect(wake.data.prUrl).toBe(prUrl);
+    expect(wake.prompt).toContain(prUrl);
+  });
+
   it('without an operator, issues still post and monitor.log warns about no assignee', () => {
     const outcome = service.post({
       chronicleRepo: '/chronicle',
