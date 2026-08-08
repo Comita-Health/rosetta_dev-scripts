@@ -129,8 +129,16 @@ bun run dev -- daemon status --workspace ../.. --json
 bun run dev -- daemon watch --workspace ../.. Owner/repo#123
 bun run dev -- daemon watch --workspace ../.. --kind pr-review \
   --poll-seconds 30 --created-by pr-approve-watch Owner/repo#123
-bun run dev -- daemon install --workspace ../..
+# Prefer the compiled entry for install (launchd runs plain node).
+# `bun run dev -- daemon install` remaps src/*.ts → dist/index.js when present.
+bun run build && node dist/index.js daemon install --workspace ../..
 bun run dev -- daemon uninstall --workspace ../..
+# Cut over stranded session wakes (~/.rosetta/wake/pending) into the daemon
+# ledger. Default --disposition auto claims historical pr_approve wakes as
+# consumed (no notify storm) and leaves escalations/supervisor exits pending
+# for the KeepAlive consumer to drain.
+node dist/index.js daemon migrate-wake --workspace ../..
+node dist/index.js daemon migrate-wake --workspace ../.. --dry-run
 # Options
 #   --workspace   required workspace root (all paths/ids derived from it)
 #   --json        machine-readable status / watch-registration output
@@ -140,6 +148,9 @@ bun run dev -- daemon uninstall --workspace ../..
 #   --created-by  registration attribution (default: cli)
 #   --plist-dir   LaunchAgents directory (default: ~/Library/LaunchAgents)
 #   --no-load     write the plist without calling launchctl (tests / dry-run)
+#   --from        legacy wake root (default: $ROSETTA_WAKE_DIR / ~/.rosetta/wake)
+#   --disposition auto | pending | consumed (migrate-wake; default auto)
+#   --dry-run     migrate-wake: map only, do not write or archive
 ```
 
 The daemon store derives its root from the workspace exactly as lifecycle

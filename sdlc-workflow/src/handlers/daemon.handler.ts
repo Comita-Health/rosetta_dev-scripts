@@ -10,6 +10,11 @@ import {
   formatWatchTarget,
   type IDaemonStatusService
 } from '../services/daemon-status.service';
+import type {
+  ILegacyWakeMigrateService,
+  LegacyWakeMigrateDisposition,
+  LegacyWakeMigrateReport
+} from '../services/legacy-wake-migrate.service';
 import type { IWatchRegistryService } from '../services/watch-registry.service';
 import { WORKFLOW_TOKENS } from '../tokens';
 import type {
@@ -46,6 +51,18 @@ export interface DaemonWatchCommandInput {
   /** Who registered the watch (skill id or operator). */
   createdBy?: string;
   /** When true, print registered records as JSON. */
+  json?: boolean;
+}
+
+export interface DaemonMigrateWakeCommandInput {
+  workspaceRoot: string | undefined;
+  /** Legacy wake root (`…/wake`). Defaults to `$ROSETTA_WAKE_DIR`. */
+  from?: string;
+  /** How to leave migrated wakes; default `auto`. */
+  disposition?: LegacyWakeMigrateDisposition;
+  /** Map and report without writing or archiving. */
+  dryRun?: boolean;
+  /** When true, print the migrate report as JSON. */
   json?: boolean;
 }
 
@@ -158,6 +175,18 @@ export interface IDaemonHandler {
    *   are malformed.
    */
   watch(input: DaemonWatchCommandInput): DurableWatchRecord[];
+  /**
+   * Import stranded `~/.rosetta/wake/pending` files into `.sdlc/daemon/wake`
+   * so the KeepAlive consumer can drain them.
+   *
+   * @throws {WorkflowError} `DAEMON_CONFIG_INVALID` when `--workspace` is
+   *   missing/empty or the daemon contract is unusable.
+   * @throws {WorkflowError} `DAEMON_WATCH_INVALID` when `--disposition` is
+   *   not one of `auto` / `pending` / `consumed`.
+   */
+  migrateWake(
+    input: DaemonMigrateWakeCommandInput
+  ): Promise<LegacyWakeMigrateReport>;
 }
 
 @injectable()
@@ -170,7 +199,9 @@ export class DaemonHandler implements IDaemonHandler {
     @inject(WORKFLOW_TOKENS.WatchRegistryService)
     private readonly _registry: IWatchRegistryService,
     @inject(WORKFLOW_TOKENS.DaemonConfigRepository)
-    private readonly _config: IDaemonConfigRepository
+    private readonly _config: IDaemonConfigRepository,
+    @inject(WORKFLOW_TOKENS.LegacyWakeMigrateService)
+    private readonly _migrate: ILegacyWakeMigrateService
   ) {}
 
   /**
@@ -329,6 +360,77 @@ export class DaemonHandler implements IDaemonHandler {
     }
     console.log('');
     return records;
+  }
+
+  /**
+   * Move legacy session wake files into the daemon ledger and archive the
+   * sources under the legacy `consumed/` tree.
+   */
+  async migrateWake(
+    input: DaemonMigrateWakeCommandInput
+  ): Promise<LegacyWakeMigrateReport> {
+    const workspaceRoot = this.requireWorkspace(input.workspaceRoot);
+    // Touch the contract so a missing `.sdlc/daemon.json` fails before any
+    // legacy file is rewritten.
+    this._config.load(workspaceRoot);
+    const disposition = this.requireDisposition(input.disposition);
+    const report = await this._migrate.migrate(workspaceRoot, {
+      fromWakeDir: input.from,
+      disposition,
+      dryRun: input.dryRun === true
+    });
+
+    if (input.json === true) {
+      console.log(JSON.stringify(report, null, 2));
+      return report;
+    }
+
+    const pending = report.items.filter(
+      item => item.disposition === 'pending'
+    ).length;
+    const consumed = report.items.filter(
+      item => item.disposition === 'consumed'
+    ).length;
+    const dry = report.items.filter(
+      item => item.disposition === 'dry-run'
+    ).length;
+    console.log(chalk.bold('\nMigrated legacy wake inbox\n'));
+    console.log(chalk.gray(`  from:      ${report.fromWakeDir}`));
+    console.log(chalk.gray(`  workspace: ${report.workspaceRoot}`));
+    console.log(chalk.gray(`  mode:      ${report.disposition}`));
+    console.log(
+      chalk.gray(
+        `  items:     ${report.items.length}` +
+          (report.dryRun === true
+            ? ` (dry-run ${dry})`
+            : ` (pending ${pending}, consumed ${consumed})`)
+      )
+    );
+    for (const item of report.items) {
+      const id = item.wakeId === null ? '' : chalk.gray(` id=${item.wakeId}`);
+      console.log(
+        `  [${item.disposition}] ${item.kind} ${item.target} signal=${item.signal}` +
+          id
+      );
+    }
+    console.log('');
+    return report;
+  }
+
+  private requireDisposition(
+    raw: string | undefined
+  ): LegacyWakeMigrateDisposition {
+    if (raw === undefined || raw.trim().length === 0) {
+      return 'auto';
+    }
+    const value = raw.trim();
+    if (value === 'auto' || value === 'pending' || value === 'consumed') {
+      return value;
+    }
+    throw new WorkflowError(
+      'daemon migrate-wake --disposition must be auto, pending, or consumed',
+      'DAEMON_WATCH_INVALID'
+    );
   }
 
   private renderTable(report: DaemonStatusReport): void {

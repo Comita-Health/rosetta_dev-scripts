@@ -26,7 +26,7 @@ const writeDaemonConfig = (root: string, runsDir = 'var/runs'): void => {
   );
 };
 
-const buildHandler = (): DaemonHandler => {
+const buildHandler = (migrateImpl?: { migrate: jest.Mock }): DaemonHandler => {
   const container = new Container();
   container
     .bind(WORKFLOW_TOKENS.DaemonConfigRepository)
@@ -43,6 +43,17 @@ const buildHandler = (): DaemonHandler => {
     run: jest.fn(),
     install: jest.fn(),
     uninstall: jest.fn()
+  });
+  container.bind(WORKFLOW_TOKENS.LegacyWakeMigrateService).toConstantValue({
+    migrate:
+      migrateImpl?.migrate ??
+      jest.fn().mockResolvedValue({
+        fromWakeDir: '/tmp/wake',
+        workspaceRoot: '/tmp/ws',
+        dryRun: false,
+        disposition: 'auto',
+        items: []
+      })
   });
   // T-08: DaemonHandler also injects WatchRegistryService + DaemonConfigRepository
   // (already bound above) for `daemon watch`.
@@ -167,6 +178,63 @@ describe('daemon status (SPEC-PRD-0020-P1 T-07)', () => {
     expect(text).toMatch(/run-supervisor run-abc/);
   });
 
+  it('ignores placeholder pull/0 PR URLs so status still renders', () => {
+    const workspace = mkdtempSync(
+      path.join(os.tmpdir(), 'daemon-status-pull0-')
+    );
+    const runsDir = path.join(workspace, 'var', 'runs');
+    writeDaemonConfig(workspace, runsDir);
+    mkdirSync(path.join(runsDir, 'fixture-run'), { recursive: true });
+    writeFileSync(
+      path.join(runsDir, 'fixture-run', 'state.json'),
+      JSON.stringify({
+        runId: 'fixture-run',
+        specId: 'SPEC-X',
+        specPath: '/tmp/spec.md',
+        baseSha: 'abc',
+        taskResults: {
+          'T-01': {
+            taskId: 'T-01',
+            status: 'merged',
+            prUrl:
+              'https://github.com/Rosetta-Foundation/rosetta_dev-scripts/pull/0'
+          }
+        },
+        verdicts: [],
+        exceptions: [],
+        criterionVerdicts: [],
+        steps: {},
+        tokenSpendK: 0,
+        ciFixAttempts: {},
+        gateFixAttempts: {},
+        remediations: {},
+        mergeBlockedRetries: 0,
+        updatedAt: '2026-08-07T12:00:00.000Z'
+      }),
+      'utf-8'
+    );
+
+    const report = buildHandler().status({
+      workspaceRoot: workspace,
+      json: true
+    });
+
+    expect(
+      report.unwatched.some(
+        entry =>
+          (entry.kind === 'pr-review' || entry.kind === 'pr-checks') &&
+          entry.target.number === 0
+      )
+    ).toBe(false);
+    expect(
+      report.unwatched.some(
+        entry =>
+          entry.kind === 'run-supervisor' &&
+          entry.target.runId === 'fixture-run'
+      )
+    ).toBe(true);
+  });
+
   it('distinguishes a degraded watch in both table and JSON output', async () => {
     const workspace = mkdtempSync(
       path.join(os.tmpdir(), 'daemon-status-degraded-')
@@ -248,5 +316,102 @@ describe('daemon status (SPEC-PRD-0020-P1 T-07)', () => {
     expect(text).toMatch(/pr-review owner\/repo#42/);
     expect(text).toMatch(/consumed/);
     expect(text).toMatch(/approved/);
+  });
+
+  it('migrateWake renders a human summary and rejects bad disposition', async () => {
+    const workspace = mkdtempSync(
+      path.join(os.tmpdir(), 'daemon-migrate-wake-')
+    );
+    writeDaemonConfig(workspace);
+    const migrate = jest.fn().mockResolvedValue({
+      fromWakeDir: '/tmp/wake',
+      workspaceRoot: workspace,
+      dryRun: false,
+      disposition: 'auto',
+      items: [
+        {
+          sourceFile: '/tmp/wake/pending/a.json',
+          kind: 'sdlc_escalation',
+          target: 'bug-run',
+          signal: 'merge-blocked',
+          wakeId: 'abc',
+          disposition: 'pending',
+          created: true
+        }
+      ]
+    });
+    const handler = buildHandler({ migrate });
+    const lines: string[] = [];
+    console.log = (message?: unknown) => {
+      if (typeof message === 'string') {
+        lines.push(message);
+      }
+    };
+    await handler.migrateWake({
+      workspaceRoot: workspace,
+      disposition: 'auto'
+    });
+    expect(migrate).toHaveBeenCalled();
+    expect(lines.join('\n')).toMatch(/Migrated legacy wake inbox/);
+    expect(lines.join('\n')).toMatch(/sdlc_escalation bug-run/);
+
+    await expect(
+      handler.migrateWake({
+        workspaceRoot: workspace,
+        disposition: 'nope' as 'auto'
+      })
+    ).rejects.toThrow(/disposition/);
+  });
+
+  it('migrateWake --json and dry-run summary paths', async () => {
+    const workspace = mkdtempSync(
+      path.join(os.tmpdir(), 'daemon-migrate-json-')
+    );
+    writeDaemonConfig(workspace);
+    const report = {
+      fromWakeDir: '/tmp/wake',
+      workspaceRoot: workspace,
+      dryRun: true,
+      disposition: 'auto' as const,
+      items: [
+        {
+          sourceFile: '/tmp/a.json',
+          kind: 'pr_approve',
+          target: 'Owner/repo#1',
+          signal: 'approved',
+          wakeId: null,
+          disposition: 'dry-run' as const,
+          created: false,
+          detail: 'would leave as consumed'
+        }
+      ]
+    };
+    const migrate = jest.fn().mockResolvedValue(report);
+    const handler = buildHandler({ migrate });
+
+    const jsonLines: string[] = [];
+    console.log = (message?: unknown) => {
+      if (typeof message === 'string') {
+        jsonLines.push(message);
+      }
+    };
+    await handler.migrateWake({
+      workspaceRoot: workspace,
+      json: true,
+      dryRun: true
+    });
+    expect(JSON.parse(jsonLines.join('\n'))).toMatchObject({ dryRun: true });
+
+    const human: string[] = [];
+    console.log = (message?: unknown) => {
+      if (typeof message === 'string') {
+        human.push(message);
+      }
+    };
+    await handler.migrateWake({
+      workspaceRoot: workspace,
+      dryRun: true
+    });
+    expect(human.join('\n')).toMatch(/dry-run/);
   });
 });

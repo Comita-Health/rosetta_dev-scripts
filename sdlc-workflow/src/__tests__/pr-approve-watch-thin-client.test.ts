@@ -65,6 +65,9 @@ const buildHandler = (): DaemonHandler => {
     install: jest.fn(),
     uninstall: jest.fn()
   });
+  container.bind(WORKFLOW_TOKENS.LegacyWakeMigrateService).toConstantValue({
+    migrate: jest.fn()
+  });
   container.bind(WORKFLOW_TOKENS.DaemonHandler).to(DaemonHandler);
   return container.get(WORKFLOW_TOKENS.DaemonHandler);
 };

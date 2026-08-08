@@ -25,9 +25,15 @@ const parsePrUrl = (prUrl: string): { repo: string; number: number } | null => {
   if (match === null) {
     return null;
   }
+  const number = Number(match[3]);
+  // Placeholder /bad fixture URLs (e.g. …/pull/0) must not surface as
+  // unwatched targets — watchRegistrationId rejects non-positive numbers.
+  if (Number.isSafeInteger(number) === false || number <= 0) {
+    return null;
+  }
   return {
     repo: `${match[1]}/${match[2]}`.toLowerCase(),
-    number: Number(match[3])
+    number
   };
 };
 
