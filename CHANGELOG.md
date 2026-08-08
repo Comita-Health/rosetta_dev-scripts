@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** engine-spawned agents write transcripts under
+  `~/.rosetta/agent-data` (override with `SDLC_AGENT_DATA_DIR`) instead of
+  the operator's `~/.cursor` history root. `sanitizedAgentEnv()` sets
+  `CURSOR_DATA_DIR` unconditionally on both dispatch paths; credentials
+  still resolve from `CURSOR_CONFIG_DIR`. Resume with
+  `CURSOR_DATA_DIR=~/.rosetta/agent-data cursor-agent ls`
+  (SPEC-BUG-agent-history-isolation-P1 T-01).
+
 - **team-setup:** document Comita Cloud GitHub **issue-comment** automation
   (`docs/comita-cloud-issue-automation.md`) — trigger, Addi identity rules,
   safe auto-remediation scope, and smoke test.

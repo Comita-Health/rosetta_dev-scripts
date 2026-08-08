@@ -1,4 +1,8 @@
-import { NESTED_AGENT_ENV_KEYS, sanitizedAgentEnv } from '../utils/agent-env';
+import {
+  NESTED_AGENT_ENV_KEYS,
+  defaultAgentDataDir,
+  sanitizedAgentEnv
+} from '../utils/agent-env';
 
 describe('sanitizedAgentEnv (SPEC-PRD-0021-P1 T-05)', () => {
   it('strips every nested-agent marker the orchestrator may be running under', () => {
@@ -63,10 +67,57 @@ describe('sanitizedAgentEnv (SPEC-PRD-0021-P1 T-05)', () => {
     }
   });
 
-  it('is a no-op when no marker is present', () => {
+  it('still returns a usable env when no nested-agent marker is present', () => {
     expect(sanitizedAgentEnv({ PATH: '/bin', HOME: '/home/a' })).toEqual({
       PATH: '/bin',
-      HOME: '/home/a'
+      HOME: '/home/a',
+      CURSOR_DATA_DIR: defaultAgentDataDir()
     });
+  });
+});
+
+describe('sanitizedAgentEnv agent-data isolation (SPEC-BUG-agent-history-isolation-P1 T-01)', () => {
+  it('returns CURSOR_DATA_DIR pointing at the engine agent-data root when absent', () => {
+    const env = sanitizedAgentEnv({ PATH: '/usr/bin' });
+
+    expect(env.CURSOR_DATA_DIR).toBe(defaultAgentDataDir());
+  });
+
+  it('overrides an inherited CURSOR_DATA_DIR so operator history is not reused', () => {
+    const env = sanitizedAgentEnv({
+      CURSOR_DATA_DIR: '/Users/op/.cursor'
+    });
+
+    expect(env.CURSOR_DATA_DIR).toBe(defaultAgentDataDir());
+    expect(env.CURSOR_DATA_DIR).not.toBe('/Users/op/.cursor');
+  });
+
+  it('lets SDLC_AGENT_DATA_DIR take precedence over the built-in default', () => {
+    const env = sanitizedAgentEnv({
+      SDLC_AGENT_DATA_DIR: '/var/rosetta/agent-data',
+      CURSOR_DATA_DIR: '/Users/op/.cursor'
+    });
+
+    expect(env.CURSOR_DATA_DIR).toBe('/var/rosetta/agent-data');
+  });
+
+  it('leaves CURSOR_CONFIG_DIR and passthrough vars unchanged while stripping nested markers', () => {
+    const base: NodeJS.ProcessEnv = {
+      CURSOR_CONFIG_DIR: '/Users/op/.cursor',
+      CURSOR_AGENT_BIN: '/opt/cursor-agent',
+      CURSOR_MODEL: 'gpt-5.6-sol-medium',
+      CURSOR_DATA_DIR: '/Users/op/.cursor'
+    };
+    for (const key of NESTED_AGENT_ENV_KEYS) base[key] = 'set-by-parent';
+
+    const env = sanitizedAgentEnv(base);
+
+    expect(env.CURSOR_CONFIG_DIR).toBe('/Users/op/.cursor');
+    expect(env.CURSOR_AGENT_BIN).toBe('/opt/cursor-agent');
+    expect(env.CURSOR_MODEL).toBe('gpt-5.6-sol-medium');
+    expect(env.CURSOR_DATA_DIR).toBe(defaultAgentDataDir());
+    for (const key of NESTED_AGENT_ENV_KEYS) {
+      expect(Object.hasOwn(env, key)).toBe(false);
+    }
   });
 });

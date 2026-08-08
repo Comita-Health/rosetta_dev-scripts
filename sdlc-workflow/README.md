@@ -392,7 +392,14 @@ owned (SPEC-PRD-0021-P1):
   doing the work — a silent no-op indistinguishable from "nothing to change",
   after which every gate judges an unmodified branch. The list is a denylist,
   not a `CURSOR_*` wildcard, because the engine dispatches _with_
-  `CURSOR_AGENT_BIN` and `CURSOR_MODEL`.
+  `CURSOR_AGENT_BIN` and `CURSOR_MODEL`. Every dispatch also gets
+  `CURSOR_DATA_DIR` pointed at the engine agent-data root
+  (`~/.rosetta/agent-data`, or `SDLC_AGENT_DATA_DIR` when set) so engine
+  transcripts never enter the operator's `~/.cursor` history; an inherited
+  `CURSOR_DATA_DIR` is overridden on purpose. Credentials still resolve from
+  `CURSOR_CONFIG_DIR` / the operator's logged-in CLI session. To inspect or
+  resume an engine session:
+  `CURSOR_DATA_DIR=~/.rosetta/agent-data cursor-agent ls`.
 - **Detached launches are verified, not assumed.** The parent used to sample
   child liveness once at 1.5s; on a loaded machine it sampled mid-boot, so it
   printed "detached" and exited 0 for a run that died a second later. It now
@@ -804,6 +811,7 @@ operator-auth pattern as `gh`).
 | `SDLC_INFERENCE_BACKEND` | no       | Force a backend: `anthropic`, `openai`, or `cursor-cli`        |
 | `CURSOR_AGENT_BIN`       | no       | Cursor Agent CLI binary (default: `cursor-agent`)              |
 | `CURSOR_MODEL`           | no       | Model passed to the Cursor Agent CLI                           |
+| `SDLC_AGENT_DATA_DIR`    | no       | Override engine agent transcript root (default: `~/.rosetta/agent-data`) |
 
 \* With neither key set, a logged-in `cursor-agent` session is required.
 
