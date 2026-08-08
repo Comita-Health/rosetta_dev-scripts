@@ -228,6 +228,39 @@ describe('EscalationService (P3 T-06 + fail-loud T-04)', () => {
     expect(wake.prompt).toContain(prUrl);
   });
 
+  it('wake prompt falls back to branch when there is no blocker PR', () => {
+    const outcome = service.post({
+      runId: 'bug-run',
+      entries: [entry('sandbox-failed')],
+      refs: { branch: 'sdlc/bug-run/T-01', headSha: 'deadbeef' },
+      wakeDir
+    });
+
+    const title = escalationTitle('bug-run', entry('sandbox-failed'));
+    expect(outcome.wakes).toEqual([title]);
+    const wakes = readdirSync(path.join(wakeDir, 'pending'));
+    const wake = JSON.parse(
+      readFileSync(path.join(wakeDir, 'pending', wakes[0]), 'utf8')
+    ) as { prompt: string };
+    expect(wake.prompt).toContain('Inspect branch sdlc/bug-run/T-01');
+    expect(wake.prompt).not.toContain('Open the blocker PR');
+  });
+
+  it('issue body omits ref sections when refs are absent', () => {
+    service.post({
+      chronicleRepo: '/chronicle',
+      runId: 'bug-run',
+      repoPath: '/repo',
+      entries: [entry('budget-exhaustion')],
+      wakeDir
+    });
+
+    const [, issueInput] = createIssue.mock.calls[0];
+    expect(issueInput.body).not.toContain('**Blocker PR:**');
+    expect(issueInput.body).not.toContain('### Human-required criteria');
+    expect(issueInput.body).toContain('### Context');
+  });
+
   it('without an operator, issues still post and monitor.log warns about no assignee', () => {
     const outcome = service.post({
       chronicleRepo: '/chronicle',

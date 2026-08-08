@@ -71,6 +71,34 @@ describe('CiStatusRepository', () => {
     });
   });
 
+  it('falls back to details_url when html_url is absent on a failed check', () => {
+    ghMock.mockReturnValue(
+      JSON.stringify([
+        {
+          name: 'lint',
+          status: 'completed',
+          conclusion: 'failure',
+          html_url: '',
+          details_url: 'https://example.com/lint'
+        },
+        {
+          name: 'orphan',
+          status: 'completed',
+          conclusion: 'failure',
+          html_url: null,
+          details_url: null
+        }
+      ])
+    );
+
+    expect(repo.checkRuns('/repo', 'abc')).toEqual({
+      total: 2,
+      failed: ['lint', 'orphan'],
+      pending: [],
+      failedLinks: [{ name: 'lint', url: 'https://example.com/lint' }]
+    });
+  });
+
   it('returns null when gh fails (commit not on remote)', () => {
     ghMock.mockImplementation(() => {
       throw new Error('HTTP 422: No commit found');

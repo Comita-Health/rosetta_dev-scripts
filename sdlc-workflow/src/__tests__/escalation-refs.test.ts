@@ -133,4 +133,54 @@ describe('escalation-refs', () => {
       humanRequiredCriteria(latestTaskVerdict(state, 'T-01', 'verification'))
     ).toEqual([]);
   });
+
+  it('omits empty optional fields and returns no refs for an unknown task', () => {
+    const state = baseState();
+    state.taskResults = {};
+    state.verdicts = [];
+    state.sandbox = undefined;
+    state.specPath = '';
+
+    expect(
+      collectEscalationRefs({
+        state,
+        taskId: 'T-99',
+        headSha: '',
+        ciCheckUrls: []
+      })
+    ).toEqual({});
+    expect(latestTaskVerdict(state, 'T-99', 'verification')).toBeUndefined();
+    expect(humanRequiredCriteria(undefined)).toEqual([]);
+  });
+
+  it('collects sandbox evidence without a sandbox record, and record without evidence', () => {
+    const withEvidenceOnly = baseState();
+    withEvidenceOnly.sandbox = undefined;
+    expect(
+      collectEscalationRefs({ state: withEvidenceOnly, taskId: 'T-01' }).sandbox
+    ).toEqual({ evidenceId: 'T-01-sandbox-health' });
+
+    const withRecordOnly = baseState();
+    withRecordOnly.verdicts = withRecordOnly.verdicts.filter(
+      verdict => verdict.gate !== 'sandbox'
+    );
+    expect(
+      collectEscalationRefs({ state: withRecordOnly, taskId: 'T-01' }).sandbox
+    ).toEqual({ sha: 'abc123', status: 'healthy' });
+  });
+
+  it('formats sparse sandbox and skips empty human-required / CI sections', () => {
+    const sparse = formatEscalationRefLines('bug-run', {
+      sandbox: { evidenceId: 'T-01-sandbox-health' }
+    }).join('\n');
+    expect(sparse).toContain('### Sandbox');
+    expect(sparse).toContain('runs://bug-run/evidence/T-01-sandbox-health');
+    expect(sparse).not.toContain('### Human-required');
+    expect(sparse).not.toContain('### CI');
+
+    const statusOnly = formatEscalationRefLines('bug-run', {
+      sandbox: { status: 'failed' }
+    }).join('\n');
+    expect(statusOnly).toContain('status=`failed`');
+  });
 });
