@@ -429,9 +429,11 @@ export class RunHandler implements IRunHandler {
   }
 
   /**
-   * The per-task shadow-gate pipeline of SPEC-PRD-0011-P2, unchanged in
-   * substance: envelope → reviewer → sandbox → verification → CI → phase
-   * aggregate → chronicle/digest, every step through the T-09 cache.
+   * The per-task shadow-gate pipeline of SPEC-PRD-0011-P2: envelope →
+   * reviewer → (enforce early-remediate/halt on red) → sandbox →
+   * verification → CI → phase aggregate → chronicle/digest, every step
+   * through the T-09 cache. Enforce skips sandbox/CI when envelope or
+   * reviewer is already non-pass (SPEC-BUG-early-reviewer-remediation-P1).
    */
   private async taskPipeline(
     input: RunTaskInput,
@@ -544,6 +546,25 @@ export class RunHandler implements IRunHandler {
         return verdict;
       }
     );
+
+    // SPEC-BUG-early-reviewer-remediation-P1 T-01: never sandbox-deploy (or
+    // CI) a tip envelope/reviewer already rejected. Enforce only — shadow
+    // keeps today's full gate order and never remediates.
+    const earlyGateRed =
+      envelopeVerdict.outcome !== 'pass' || reviewerVerdict.outcome !== 'pass';
+    if (input.shadow !== true && earlyGateRed) {
+      await this.earlyRemediateOrHalt(
+        input,
+        state,
+        task,
+        spec,
+        worktreePath,
+        chain,
+        envelopeVerdict,
+        reviewerVerdict
+      );
+      return;
+    }
 
     // T-03: SHA-idempotent sandbox deploy; the step cache additionally
     // guarantees kill-resume produces no duplicate deployments. The
@@ -692,10 +713,9 @@ export class RunHandler implements IRunHandler {
         );
       }
 
-      // Wave 0: before treating a red phase as terminal, give the agent a
-      // bounded round at the findings it can actually act on. A remediated
-      // task returns here with a new head, so the gates re-judge the fix
-      // instead of the run stopping on the first objection.
+      // Wave 0: sandbox/CI/verification-only red still remediates here (no
+      // remediable envelope/reviewer finding → skip). Envelope/reviewer red
+      // never reaches this path in enforce — see earlyRemediateOrHalt.
       if (
         input.shadow !== true &&
         phaseVerdict.outcome !== 'pass' &&
@@ -722,6 +742,99 @@ export class RunHandler implements IRunHandler {
     // gate blocks and escalates. There is no code path that merges on red.
     await this.enforcementStep(input, state, task, chain, phaseVerdict);
 
+    await this.chronicleSteps(input, state, task, spec, chain, phaseVerdict);
+  }
+
+  /**
+   * SPEC-BUG-early-reviewer-remediation-P1 T-01: on enforce envelope/reviewer
+   * non-pass, remediate immediately (when remediable) and never sandbox the
+   * red head. Success abandons the pass so re-selection re-gates the new tip;
+   * skip/fail escalates and halts without deploying.
+   */
+  private async earlyRemediateOrHalt(
+    input: RunTaskInput,
+    state: RunState,
+    task: SpecTask,
+    spec: SpecDocument,
+    worktreePath: string,
+    chain: { implDigest?: string; headSha: string },
+    envelopeVerdict: GateVerdict,
+    reviewerVerdict: GateVerdict
+  ): Promise<void> {
+    const phaseDigest = inputsDigest({ ...chain, step: 'phase' });
+    const phaseKey = stepKey('phase', task.id, phaseDigest);
+
+    // Resume after an earlier early-halt: phase is cached for this head —
+    // do not spend another remediation round or fall through to sandbox.
+    if (state.steps[phaseKey]?.verdict !== undefined) {
+      const phaseVerdict = state.steps[phaseKey].verdict;
+      console.log(chalk.gray('  [cached] phase gate reused (step cache)'));
+      await this.enforcementStep(input, state, task, chain, phaseVerdict);
+      await this.chronicleSteps(input, state, task, spec, chain, phaseVerdict);
+      return;
+    }
+
+    if (
+      await this.remediationRound(input, state, task, spec, worktreePath, [
+        reviewerVerdict,
+        envelopeVerdict
+      ])
+    ) {
+      return;
+    }
+
+    // Skipped/failed remediation — aggregate the remediable reds only.
+    // Downstream gates were not run; stub them pass so phase reasons name
+    // envelope/reviewer (not invented CI/verification failures).
+    const skippedPass = (gate: string): GateVerdict => ({
+      gate,
+      outcome: 'pass',
+      wouldEscalate: false,
+      reasons: ['skipped: envelope/reviewer non-pass — sandbox not deployed'],
+      recordedAt: new Date().toISOString()
+    });
+    const aggregate = this._aggregator.aggregate({
+      gates: {
+        ci: skippedPass('ci'),
+        verification: skippedPass('verification'),
+        reviewer: reviewerVerdict,
+        envelope: envelopeVerdict
+      },
+      state,
+      taskId: task.id,
+      budgetK: spec.envelope.budgetK
+    });
+    const phaseVerdict = aggregate.verdict;
+    phaseVerdict.taskId = task.id;
+    phaseVerdict.inputsDigest = phaseDigest;
+    this._runStateRepo.appendVerdict(input.runsDir, state, phaseVerdict);
+    this._runStateRepo.recordExceptions(
+      input.runsDir,
+      state,
+      aggregate.exceptions
+    );
+    this._runStateRepo.recordStep(input.runsDir, state, phaseKey, {
+      name: 'phase',
+      taskId: task.id,
+      inputsDigest: phaseDigest,
+      verdict: phaseVerdict,
+      completedAt: new Date().toISOString()
+    });
+    this.printVerdict(phaseVerdict);
+    for (const entry of aggregate.exceptions) {
+      console.log(
+        chalk.yellow(`  [ledger] ${entry.trigger}: ${entry.context.join('; ')}`)
+      );
+    }
+
+    this.postEscalations(
+      input,
+      state,
+      task.id,
+      aggregate.exceptions,
+      chain.headSha
+    );
+    await this.enforcementStep(input, state, task, chain, phaseVerdict);
     await this.chronicleSteps(input, state, task, spec, chain, phaseVerdict);
   }
 
