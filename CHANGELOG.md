@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** `extractJson` prefers an explicitly `json`-tagged fence
+  anywhere in the response, then the earliest fenced object that parses, then
+  a raw scan — so a leading checklist fence can no longer turn a passing
+  verifier verdict into `no JSON object found in response`
+  (SPEC-BUG-verifier-json-fence-P1 T-01).
+
 - **Cursor Cloud / Comita environment:** `install-comita-cloud.sh` now
   rewraps space-collapsed single-line `GITHUB_APP_PRIVATE_KEY` pastes
   (Cursor secrets UI often replaces PEM newlines with spaces) in addition

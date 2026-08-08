@@ -42,8 +42,73 @@ describe('extractJson', () => {
     expect(extractJson('Here you go: {"a":1} — enjoy')).toEqual({ a: 1 });
   });
 
+  it('extracts a later json fence when a leading markdown fence is present', () => {
+    const raw = [
+      '```markdown',
+      '- [x] Step 1: done',
+      '```',
+      '',
+      '```json',
+      '{ "pass": true, "notes": ["ok"] }',
+      '```'
+    ].join('\n');
+    expect(extractJson(raw)).toEqual({ pass: true, notes: ['ok'] });
+  });
+
+  it('still extracts a single json fence and an untagged object fence', () => {
+    expect(extractJson('```json\n{"a":1}\n```')).toEqual({ a: 1 });
+    expect(extractJson('```\n{"b":2}\n```')).toEqual({ b: 2 });
+  });
+
+  it('falls back to prose-wrapped JSON when no fence is present', () => {
+    expect(extractJson('Verdict follows: {"pass":true} end')).toEqual({
+      pass: true
+    });
+  });
+
+  it('prefers a json-tagged fence over earlier untagged objects', () => {
+    const raw = [
+      '```',
+      '{ "pass": false }',
+      '```',
+      '',
+      '```json',
+      '{ "pass": true }',
+      '```'
+    ].join('\n');
+    expect(extractJson(raw)).toEqual({ pass: true });
+  });
+
+  it('prefers the earliest parseable fence when none are json-tagged', () => {
+    const raw = [
+      '```',
+      '{ "order": 1 }',
+      '```',
+      '',
+      '```',
+      '{ "order": 2 }',
+      '```'
+    ].join('\n');
+    expect(extractJson(raw)).toEqual({ order: 1 });
+  });
+
   it('throws when no JSON object is present', () => {
-    expect(() => extractJson('nothing here')).toThrow('no JSON object');
+    expect(() => extractJson('nothing here')).toThrow(
+      'no JSON object found in response'
+    );
+  });
+
+  it('skips a fence that looks like JSON but does not parse', () => {
+    const raw = [
+      '```json',
+      '{ "pass": true,',
+      '```',
+      '',
+      '```json',
+      '{ "pass": true }',
+      '```'
+    ].join('\n');
+    expect(extractJson(raw)).toEqual({ pass: true });
   });
 });
 
