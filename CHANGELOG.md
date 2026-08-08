@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Cursor Cloud / Comita environment:** add `.cursor/environment.json` +
+  `install-comita-cloud.sh` so the multi-repo **Comita** cloud environment
+  materializes Addi (`~/.config/comita`) from environment-scoped secrets,
+  installs bun/`gh` deps, and documents Cloud + Slack + Addi identity in
+  `AGENTS.md`.
+
 - **sdlc-workflow:** needs-human escalations now carry rich operator
   references alongside the **Blocker PR**: branch, head SHA, spec path,
   verification human-required criteria, failed CI check URLs (from the
