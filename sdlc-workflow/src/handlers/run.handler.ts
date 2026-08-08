@@ -1,6 +1,7 @@
 import { inject, injectable } from 'inversify';
 import chalk from 'chalk';
 import path from 'path';
+import type { ICiStatusRepository } from '../repositories/ci-status.repository';
 import type { IEvidenceRepository } from '../repositories/evidence.repository';
 import type { IGitRepository } from '../repositories/git.repository';
 import type { IQueueRepository } from '../repositories/queue.repository';
@@ -41,6 +42,8 @@ import type {
   VerificationOutcome
 } from '../services/verification.service';
 import { WORKFLOW_TOKENS } from '../tokens';
+import { collectEscalationRefs } from '../utils/escalation-refs';
+import { originSlug } from '../utils/gh-repo';
 import {
   CriterionVerdict,
   DeployTrigger,
@@ -271,6 +274,8 @@ export class RunHandler implements IRunHandler {
     private readonly _chronicle: IChronicleCommitService,
     @inject(WORKFLOW_TOKENS.GitRepository)
     private readonly _gitRepo: IGitRepository,
+    @inject(WORKFLOW_TOKENS.CiStatusRepository)
+    private readonly _ciStatusRepo: ICiStatusRepository,
     @inject(WORKFLOW_TOKENS.EvidenceRepository)
     private readonly _evidenceRepo: IEvidenceRepository,
     @inject(WORKFLOW_TOKENS.QueueRepository)
@@ -1241,6 +1246,36 @@ export class RunHandler implements IRunHandler {
       .flatMap(verdict => verdict.evidenceIds ?? []);
     const monitorPath =
       input.monitorPath ?? path.join(input.runsDir, input.runId, 'monitor.log');
+    const headSha =
+      occurrenceKey !== undefined && occurrenceKey.length > 0
+        ? occurrenceKey
+        : undefined;
+    // Best-effort CI deep links for the failing head — never block escalate.
+    let ciCheckUrls: Array<{ name: string; url: string }> | undefined;
+    if (headSha !== undefined) {
+      try {
+        const summary = this._ciStatusRepo.checkRuns(input.repoPath, headSha);
+        if (summary !== null && summary.failedLinks.length > 0) {
+          ciCheckUrls = summary.failedLinks;
+        }
+      } catch {
+        // gh unavailable / commit unknown — issue still posts without CI URLs.
+      }
+    }
+    let repoSlug: string | undefined;
+    try {
+      repoSlug = originSlug(input.repoPath);
+    } catch {
+      // Missing/non-GitHub origin — issue still posts with monospace refs.
+    }
+    const refs = collectEscalationRefs({
+      state,
+      taskId,
+      headSha,
+      ciCheckUrls,
+      repoSlug,
+      repoPath: input.repoPath
+    });
     const outcome = this._escalation.post({
       chronicleRepo: input.chronicleRepo,
       runId: input.runId,
@@ -1254,8 +1289,7 @@ export class RunHandler implements IRunHandler {
       // not. The head SHA is exactly that discriminator.
       occurrenceKey,
       wakeDir: input.wakeDir,
-      // Primary actionable surface for the human (task PR when one exists).
-      prUrl: state.taskResults[taskId]?.prUrl
+      refs
     });
     for (const title of outcome.posted) {
       console.log(chalk.yellow(`  [escalate] ${title}`));

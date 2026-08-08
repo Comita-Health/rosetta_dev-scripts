@@ -7,6 +7,10 @@ import type { IWakeInboxRepository } from '../repositories/wake-inbox.repository
 import { WORKFLOW_TOKENS } from '../tokens';
 import { ExceptionEntry, WorkflowError } from '../types';
 import { evidenceLink } from './digest.service';
+import {
+  formatEscalationRefLines,
+  type EscalationRefs
+} from '../utils/escalation-refs';
 
 export interface EscalateInput {
   /** Absent → queue items are skipped (no Chronicle, nothing to append to). */
@@ -36,11 +40,11 @@ export interface EscalateInput {
   /** Override wake-inbox root for tests. */
   wakeDir?: string;
   /**
-   * Task PR URL when the escalation is about an open task PR — linked as the
-   * primary blocker so the operator can open the actionable surface without
-   * reconstructing `sdlc/<runId>/<taskId>` from the title.
+   * Operator-facing references (blocker PR, branch/head, spec, human-required
+   * criteria, CI check URLs, sandbox). When `prUrl` is set it remains the
+   * primary jump target in the wake prompt.
    */
-  prUrl?: string;
+  refs?: EscalationRefs;
 }
 
 export interface EscalateOutcome {
@@ -58,8 +62,9 @@ export interface EscalateOutcome {
  * issues, and durable wake-inbox events. Idempotent by title: resume never
  * duplicates a queue item, issue, or wake.
  *
- * When a task PR URL is known it is the first actionable link in the issue
- * body and wake payload — operators should not have to hunt for the blocker.
+ * Rich {@link EscalationRefs} (PR, branch/head, spec, human-required criteria,
+ * CI links, sandbox) are rendered into the issue body and wake payload so
+ * operators can open the actionable surface without reconstructing run state.
  */
 export interface IEscalationService {
   post(input: EscalateInput): EscalateOutcome;
@@ -68,26 +73,28 @@ export interface IEscalationService {
 export const escalationTitle = (runId: string, entry: ExceptionEntry): string =>
   `ACTION REQUIRED: SDLC ${runId} ${entry.taskId} — ${entry.trigger}`;
 
-const escalationBody = (
+const nonEmpty = (value: string | undefined): value is string =>
+  value !== undefined && value.length > 0;
+
+export const escalationBody = (
   runId: string,
   entry: ExceptionEntry,
   evidenceIds: string[] | undefined,
-  prUrl: string | undefined
+  refs: EscalationRefs | undefined
 ): string => {
   const evidence =
     evidenceIds === undefined || evidenceIds.length === 0
       ? '_none_'
       : evidenceIds.map(id => `- \`${evidenceLink(runId, id)}\``).join('\n');
-  const blocker =
-    prUrl !== undefined && prUrl.length > 0
-      ? [`- **Blocker PR:** ${prUrl}`, '']
-      : [];
+  const refLines =
+    refs === undefined ? [] : formatEscalationRefLines(runId, refs);
+  const afterMeta = refLines.length > 0 ? [...refLines, ''] : ([] as string[]);
   return [
     `SDLC run \`${runId}\` needs human attention.`,
     '',
     `- **Task:** ${entry.taskId ?? '(run-level)'}`,
     `- **Trigger:** ${entry.trigger}`,
-    ...blocker,
+    ...afterMeta,
     '### Context',
     ...(entry.context.length > 0
       ? entry.context.map(line => `- ${line}`)
@@ -98,6 +105,48 @@ const escalationBody = (
     '',
     '_Filed by sdlc-workflow escalation (fail-loud T-04)._'
   ].join('\n');
+};
+
+const queueRefTags = (refs: EscalationRefs | undefined): string[] => {
+  if (refs === undefined) {
+    return [];
+  }
+  const tags: string[] = [];
+  if (nonEmpty(refs.prUrl)) {
+    tags.push(`pr:${refs.prUrl}`);
+  }
+  if (nonEmpty(refs.branch)) {
+    tags.push(`branch:${refs.branch}`);
+  }
+  if (nonEmpty(refs.headSha)) {
+    tags.push(`head:${refs.headSha}`);
+  }
+  if (nonEmpty(refs.specPath)) {
+    tags.push(`spec:${refs.specPath.slice(0, 120)}`);
+  }
+  for (const criterion of refs.humanRequired ?? []) {
+    tags.push(`human-required:${criterion.slice(0, 80)}`);
+  }
+  for (const check of refs.ciCheckUrls ?? []) {
+    tags.push(`ci:${check.url}`);
+  }
+  if (refs.sandbox?.evidenceId !== undefined) {
+    tags.push(`sandbox-evidence:${refs.sandbox.evidenceId}`);
+  }
+  return tags;
+};
+
+const wakePromptFor = (
+  title: string,
+  refs: EscalationRefs | undefined
+): string => {
+  if (refs !== undefined && nonEmpty(refs.prUrl)) {
+    return `SDLC escalation: ${title}. Open the blocker PR ${refs.prUrl}, triage the needs-human issue / queue item, then resume the run.`;
+  }
+  if (refs !== undefined && nonEmpty(refs.branch)) {
+    return `SDLC escalation: ${title}. Inspect branch ${refs.branch}, triage the needs-human issue / queue item, then resume the run.`;
+  }
+  return `SDLC escalation: ${title}. Triage the needs-human issue / queue item, then resume the run.`;
 };
 
 const appendMonitor = (monitorPath: string | undefined, line: string): void => {
@@ -128,6 +177,7 @@ export class EscalationService implements IEscalationService {
     const wakes: string[] = [];
     const issues: Record<string, string> = {};
     let warnedMissingOperator = false;
+    const refs = input.refs;
 
     for (const entry of input.entries) {
       const title = escalationTitle(input.runId, entry);
@@ -142,9 +192,7 @@ export class EscalationService implements IEscalationService {
           ...(input.evidenceIds ?? []).map(
             id => `evidence:${evidenceLink(input.runId, id)}`
           ),
-          ...(input.prUrl !== undefined && input.prUrl.length > 0
-            ? [`pr:${input.prUrl}`]
-            : [])
+          ...queueRefTags(refs)
         ];
         if (this._queueRepo.appendItem(input.chronicleRepo, title, tags)) {
           newlyDelivered = true;
@@ -152,7 +200,7 @@ export class EscalationService implements IEscalationService {
       }
 
       if (input.repoPath !== undefined) {
-        const issueResult = this.postIssue(input, entry, title);
+        const issueResult = this.postIssue(input, entry, title, refs);
         if (issueResult.url !== undefined) {
           issues[title] = issueResult.url;
         }
@@ -172,25 +220,17 @@ export class EscalationService implements IEscalationService {
         }
       }
 
-      const prUrl =
-        input.prUrl !== undefined && input.prUrl.length > 0
-          ? input.prUrl
-          : undefined;
-      const wakePrompt =
-        prUrl !== undefined
-          ? `SDLC escalation: ${title}. Open the blocker PR ${prUrl}, triage the needs-human issue / queue item, then resume the run.`
-          : `SDLC escalation: ${title}. Triage the needs-human issue / queue item, then resume the run.`;
       const wakeFile = this._wakeRepo.emitOnce({
         kind: 'sdlc_escalation',
         dedupeKey: title,
         occurrenceKey: input.occurrenceKey,
-        prompt: wakePrompt,
+        prompt: wakePromptFor(title, refs),
         data: {
           runId: input.runId,
           taskId: entry.taskId,
           trigger: entry.trigger,
           issueUrl: issues[title],
-          ...(prUrl !== undefined ? { prUrl } : {})
+          ...(refs !== undefined ? { refs } : {})
         },
         wakeDir: input.wakeDir
       });
@@ -214,7 +254,8 @@ export class EscalationService implements IEscalationService {
   private postIssue(
     input: EscalateInput,
     entry: ExceptionEntry,
-    title: string
+    title: string,
+    refs: EscalationRefs | undefined
   ): { created: boolean; url?: string } {
     const repoPath = input.repoPath;
     if (repoPath === undefined) {
@@ -233,12 +274,7 @@ export class EscalationService implements IEscalationService {
           : undefined;
       const ref = this._issueRepo.create(repoPath, {
         title,
-        body: escalationBody(
-          input.runId,
-          entry,
-          input.evidenceIds,
-          input.prUrl
-        ),
+        body: escalationBody(input.runId, entry, input.evidenceIds, refs),
         assignee
       });
       return { created: true, url: ref.url };

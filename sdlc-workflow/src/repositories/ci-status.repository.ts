@@ -3,10 +3,18 @@ import { WorkflowError } from '../types';
 import { runGh } from '../utils/gh-cli';
 import { originSlug } from '../utils/gh-repo';
 
+export interface CheckRunFailedLink {
+  name: string;
+  /** Prefer Actions `html_url`; fall back to integrator `details_url`. */
+  url: string;
+}
+
 export interface CheckRunSummary {
   total: number;
   failed: string[]; // names of failed check runs
   pending: string[]; // names of queued/in-progress check runs
+  /** Deep links for failed checks when GitHub returned a URL. */
+  failedLinks: CheckRunFailedLink[];
 }
 
 export type CommitStatusState = 'error' | 'failure' | 'pending' | 'success';
@@ -47,7 +55,7 @@ export class CiStatusRepository implements ICiStatusRepository {
     try {
       raw = runGh(
         repoPath,
-        `gh api "repos/${originSlug(repoPath)}/commits/${sha}/check-runs" --jq "[.check_runs[] | {name, status, conclusion}]"`
+        `gh api "repos/${originSlug(repoPath)}/commits/${sha}/check-runs" --jq "[.check_runs[] | {name, status, conclusion, html_url, details_url}]"`
       );
     } catch {
       return null;
@@ -57,6 +65,8 @@ export class CiStatusRepository implements ICiStatusRepository {
       name: string;
       status: string;
       conclusion: string | null;
+      html_url?: string | null;
+      details_url?: string | null;
     }>;
     try {
       runs = JSON.parse(raw);
@@ -64,20 +74,34 @@ export class CiStatusRepository implements ICiStatusRepository {
       return null;
     }
 
+    const failedRuns = runs.filter(
+      run =>
+        run.status === 'completed' &&
+        run.conclusion !== 'success' &&
+        run.conclusion !== 'neutral' &&
+        run.conclusion !== 'skipped'
+    );
+
+    const failedLinks: CheckRunFailedLink[] = [];
+    for (const run of failedRuns) {
+      const url =
+        typeof run.html_url === 'string' && run.html_url.length > 0
+          ? run.html_url
+          : typeof run.details_url === 'string' && run.details_url.length > 0
+            ? run.details_url
+            : undefined;
+      if (url !== undefined) {
+        failedLinks.push({ name: run.name, url });
+      }
+    }
+
     return {
       total: runs.length,
-      failed: runs
-        .filter(
-          run =>
-            run.status === 'completed' &&
-            run.conclusion !== 'success' &&
-            run.conclusion !== 'neutral' &&
-            run.conclusion !== 'skipped'
-        )
-        .map(run => run.name),
+      failed: failedRuns.map(run => run.name),
       pending: runs
         .filter(run => run.status !== 'completed')
-        .map(run => run.name)
+        .map(run => run.name),
+      failedLinks
     };
   }
 
