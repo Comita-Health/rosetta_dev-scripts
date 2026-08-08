@@ -153,8 +153,28 @@ describe('EscalationService (P3 T-06 + fail-loud T-04)', () => {
     );
   });
 
-  it('links the task PR as Blocker PR in the issue body, queue tags, and wake', () => {
+  it('links rich refs (PR, branch/head, spec, human-required, CI, sandbox) in the issue body, queue tags, and wake', () => {
     const prUrl = 'https://github.com/org/repo/pull/65';
+    const refs = {
+      prUrl,
+      branch: 'sdlc/bug-run/T-01',
+      headSha: 'abc123def456',
+      specPath: '/workspace/specs/BUG-x/phase-1-spec.md',
+      humanRequired: [
+        'docs: README states where engine agent transcripts live'
+      ],
+      ciCheckUrls: [
+        {
+          name: 'test',
+          url: 'https://github.com/org/repo/actions/runs/9'
+        }
+      ],
+      sandbox: {
+        sha: 'abc123def456',
+        status: 'healthy' as const,
+        evidenceId: 'T-01-sandbox-health'
+      }
+    };
     const outcome = service.post({
       chronicleRepo: '/chronicle',
       runId: 'bug-run',
@@ -162,7 +182,7 @@ describe('EscalationService (P3 T-06 + fail-loud T-04)', () => {
       operator: 'russwatson',
       entries: [entry('merge-blocked')],
       evidenceIds: ['T-01-ci-monitor'],
-      prUrl,
+      refs,
       monitorPath,
       wakeDir
     });
@@ -170,10 +190,32 @@ describe('EscalationService (P3 T-06 + fail-loud T-04)', () => {
     expect(createIssue).toHaveBeenCalledTimes(1);
     const [, issueInput] = createIssue.mock.calls[0];
     expect(issueInput.body).toContain(`- **Blocker PR:** ${prUrl}`);
+    expect(issueInput.body).toContain('- **Branch:** `sdlc/bug-run/T-01`');
+    expect(issueInput.body).toContain('- **Head:** `abc123def456`');
+    expect(issueInput.body).toContain(
+      '- **Spec:** `/workspace/specs/BUG-x/phase-1-spec.md`'
+    );
+    expect(issueInput.body).toContain('### Human-required criteria');
+    expect(issueInput.body).toContain(
+      '- docs: README states where engine agent transcripts live'
+    );
+    expect(issueInput.body).toContain(
+      '- [test](https://github.com/org/repo/actions/runs/9)'
+    );
+    expect(issueInput.body).toContain('### Sandbox');
+    expect(issueInput.body).toContain(
+      'runs://bug-run/evidence/T-01-sandbox-health'
+    );
     expect(issueInput.body).toContain('merge-blocked detail');
 
     const [, , tags] = appendItem.mock.calls[0];
-    expect(tags).toEqual(expect.arrayContaining([`pr:${prUrl}`]));
+    expect(tags).toEqual(
+      expect.arrayContaining([
+        `pr:${prUrl}`,
+        'branch:sdlc/bug-run/T-01',
+        'head:abc123def456'
+      ])
+    );
 
     const title = escalationTitle('bug-run', entry('merge-blocked'));
     expect(outcome.wakes).toEqual([title]);
@@ -181,8 +223,8 @@ describe('EscalationService (P3 T-06 + fail-loud T-04)', () => {
     expect(wakes.length).toBe(1);
     const wake = JSON.parse(
       readFileSync(path.join(wakeDir, 'pending', wakes[0]), 'utf8')
-    ) as { prompt: string; data: { prUrl?: string } };
-    expect(wake.data.prUrl).toBe(prUrl);
+    ) as { prompt: string; data: { refs?: { prUrl?: string } } };
+    expect(wake.data.refs?.prUrl).toBe(prUrl);
     expect(wake.prompt).toContain(prUrl);
   });
 

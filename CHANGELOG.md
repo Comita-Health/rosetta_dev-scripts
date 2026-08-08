@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** needs-human escalations now carry rich operator
+  references alongside the **Blocker PR**: branch, head SHA, spec path,
+  verification human-required criteria, failed CI check URLs (from the
+  Checks API `html_url` / `details_url`), and sandbox sha/status/evidence.
+  Wake payloads and queue tags include the same refs.
+
 - **sdlc-workflow:** needs-human escalation issues (and their wake / queue
   tags) link the task **Blocker PR** when one is open, so the operator can
   jump straight to the actionable surface instead of reconstructing
