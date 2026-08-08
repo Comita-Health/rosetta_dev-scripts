@@ -95,6 +95,9 @@ const INPUT = {
   maxParallel: 3
 };
 
+/** Full gate order on a red envelope/reviewer — enforce skips sandbox there. */
+const SHADOW_INPUT = { ...INPUT, shadow: true as const };
+
 /** SPEC-PRD-0023-P1: the aggregation the closeout step is handed. */
 const CLOSEOUT_AGGREGATE: CloseoutAggregate = {
   runId: 'run-1',
@@ -153,6 +156,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
   let gitPush: jest.Mock;
   let gitFetch: jest.Mock;
   let treeSha: jest.Mock;
+  let gitHeadSha: jest.Mock;
   let removeWorktreeAsync: jest.Mock;
   let specRead: jest.Mock;
   let escalationPost: jest.Mock;
@@ -310,6 +314,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
     gitPush = jest.fn();
     gitFetch = jest.fn();
     treeSha = jest.fn().mockReturnValue('tree-sha');
+    gitHeadSha = jest.fn().mockReturnValue('head-sha');
     removeWorktreeAsync = jest.fn();
     prCreate = jest.fn().mockReturnValue({
       url: 'https://github.com/org/repo/pull/99',
@@ -400,7 +405,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
     container
       .bind<IGitRepository>(WORKFLOW_TOKENS.GitRepository)
       .toConstantValue({
-        headSha: jest.fn().mockReturnValue('head-sha'),
+        headSha: gitHeadSha,
         status: jest.fn(),
         addWorktree: jest.fn(),
         diffStat: jest.fn(),
@@ -485,7 +490,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
   });
 
   it('persists all gate verdicts and exceptions, proceeding unblocked on breaches', async () => {
-    const result = await handler.runTask(INPUT);
+    const result = await handler.runTask(SHADOW_INPUT);
 
     // Shadow semantics: breaches are recorded, the run is not failed by them.
     expect(result).toEqual({
@@ -531,7 +536,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
   });
 
   it('deploys the task branch head to the sandbox and hands the health report to verification', async () => {
-    await handler.runTask(INPUT);
+    await handler.runTask(SHADOW_INPUT);
 
     expect(deploy).toHaveBeenCalledWith({
       worktreePath: '/runs/run-1/worktrees/T-01',
@@ -572,7 +577,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
       throw new Error('fatal: not a tree object');
     });
 
-    await handler.runTask(INPUT);
+    await handler.runTask(SHADOW_INPUT);
 
     expect(deploy).toHaveBeenCalledWith(
       expect.objectContaining({ ledger: undefined })
@@ -584,7 +589,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
       new WorkflowError('bad criterion prefix', 'SPEC_MALFORMED')
     );
 
-    const result = await handler.runTask(INPUT);
+    const result = await handler.runTask(SHADOW_INPUT);
 
     expect(result.outcome).toBe('executed');
     const call = aggregate.mock.calls[0][0];
@@ -596,11 +601,11 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
   it('rethrows unexpected verification errors', async () => {
     verify.mockRejectedValue(new Error('disk on fire'));
 
-    await expect(handler.runTask(INPUT)).rejects.toThrow('disk on fire');
+    await expect(handler.runTask(SHADOW_INPUT)).rejects.toThrow('disk on fire');
   });
 
   it('feeds real envelope/reviewer/verification/ci verdicts to the aggregator', async () => {
-    await handler.runTask(INPUT);
+    await handler.runTask(SHADOW_INPUT);
 
     expect(ciEvaluate).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -739,7 +744,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
       ])
     );
 
-    const result = await handler.runTask(INPUT);
+    const result = await handler.runTask(SHADOW_INPUT);
 
     expect(result.tasks.map(task => task.taskId)).toEqual(['T-01', 'T-02']);
     // Each completed task goes through the full gate pipeline.
@@ -1092,6 +1097,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
 
         await handler.runTask(INPUT);
 
+        expect(deploy).not.toHaveBeenCalled();
         expect(remediate).toHaveBeenCalledTimes(1);
         const call = remediate.mock.calls[0][0];
         expect(call.branch).toBe('sdlc/run-1/T-01');
@@ -1186,22 +1192,202 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
         expect(remediate).not.toHaveBeenCalled();
       });
 
-      it('does not remediate from a cached phase verdict on resume', async () => {
+      it('does not remediate again from a cached early-halt phase verdict on resume', async () => {
         redReviewer();
+        // Default remediate = skipped → early halt records phase without sandbox.
+
+        await handler.runTask(remediationInput());
+        expect(remediate).toHaveBeenCalledTimes(1);
+        expect(deploy).not.toHaveBeenCalled();
+
+        // Resume replays the step graph; the cached phase verdict must not
+        // spend another remediation round on the same red head.
+        await handler.runTask(remediationInput());
+        expect(remediate).toHaveBeenCalledTimes(1);
+        expect(deploy).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('early skip-sandbox on envelope/reviewer red (SPEC-BUG-early-reviewer-remediation-P1 T-01)', () => {
+      it('never calls sandbox deploy when reviewer returns non-pass in enforce', async () => {
+        greenGates();
+        review.mockResolvedValue(
+          verdictOf('reviewer', 'breach', ['unsafe migration'])
+        );
+        aggregate.mockReturnValue({
+          verdict: verdictOf('phase', 'breach', ['failing gates: reviewer']),
+          exceptions: [
+            {
+              trigger: 'reviewer-disagreement' as const,
+              taskId: 'T-01',
+              context: ['unsafe migration'],
+              recordedAt: 'x'
+            }
+          ]
+        });
+
+        await handler.runTask(INPUT);
+
+        expect(deploy).not.toHaveBeenCalled();
+        expect(ciEvaluate).not.toHaveBeenCalled();
+        expect(verify).not.toHaveBeenCalled();
+      });
+
+      it('invokes remediation before any sandbox call and abandons on success', async () => {
+        greenGates();
+        review.mockResolvedValue(
+          verdictOf('reviewer', 'breach', ['unsafe migration'])
+        );
+        const callOrder: string[] = [];
+        remediate.mockImplementation(async () => {
+          callOrder.push('remediate');
+          return {
+            kind: 'remediated',
+            attempt: 1,
+            sha: 'fix-sha',
+            detail: 'attempt 1/2 addressed [reviewer]'
+          };
+        });
+        deploy.mockImplementation(async () => {
+          callOrder.push('deploy');
+          return {
+            verdict: verdictOf('sandbox', 'pass'),
+            healthReport: 'ok'
+          };
+        });
+
+        await handler.runTask(INPUT);
+
+        expect(callOrder).toEqual(['remediate']);
+        expect(deploy).not.toHaveBeenCalled();
+        expect(escalationPost).not.toHaveBeenCalled();
+        expect(prMerge).not.toHaveBeenCalled();
+      });
+
+      it('re-gates the remediated tip from envelope onward, sandboxing only once green', async () => {
+        greenGates();
+        review.mockResolvedValue(
+          verdictOf('reviewer', 'breach', ['unsafe migration'])
+        );
         remediate.mockResolvedValue({
           kind: 'remediated',
           attempt: 1,
           sha: 'fix-sha',
-          detail: 'd'
+          detail: 'attempt 1/2 addressed [reviewer]'
         });
 
-        await handler.runTask(remediationInput());
-        expect(remediate).toHaveBeenCalledTimes(1);
+        await handler.runTask(INPUT);
 
-        // Resume replays the step graph; the cached phase verdict must not
-        // spend another remediation round on content already fixed.
-        await handler.runTask(remediationInput());
-        expect(remediate).toHaveBeenCalledTimes(1);
+        expect(evaluate).toHaveBeenCalledTimes(1);
+        expect(review).toHaveBeenCalledTimes(1);
+        expect(deploy).not.toHaveBeenCalled();
+
+        // Re-selection brings the task back on the new head the remediation
+        // committed. Every step key chains off that SHA, so nothing is served
+        // from the cache of the rejected tip: envelope and reviewer judge the
+        // fix first, and only their green unlocks the sandbox.
+        gitHeadSha.mockReturnValue('fix-sha');
+        review.mockResolvedValue(verdictOf('reviewer', 'pass'));
+
+        await handler.runTask(INPUT);
+
+        expect(evaluate).toHaveBeenCalledTimes(2);
+        expect(review).toHaveBeenCalledTimes(2);
+        expect(deploy).toHaveBeenCalledWith(
+          expect.objectContaining({
+            worktreePath: '/runs/run-1/worktrees/T-01'
+          })
+        );
+      });
+
+      it('skips sandbox and escalates loudly when remediation is skipped or fails', async () => {
+        greenGates();
+        review.mockResolvedValue(
+          verdictOf('reviewer', 'breach', ['unsafe migration'])
+        );
+        remediate.mockResolvedValue({
+          kind: 'failed',
+          attempt: 1,
+          detail: 'remediation agent produced no commit'
+        });
+        aggregate.mockReturnValue({
+          verdict: verdictOf('phase', 'breach', ['failing gates: reviewer']),
+          exceptions: [
+            {
+              trigger: 'reviewer-disagreement' as const,
+              taskId: 'T-01',
+              context: ['unsafe migration'],
+              recordedAt: 'x'
+            }
+          ]
+        });
+
+        await handler.runTask(INPUT);
+
+        expect(deploy).not.toHaveBeenCalled();
+        expect(escalationPost).toHaveBeenCalled();
+        expect(state.exceptions).toContainEqual(
+          expect.objectContaining({ trigger: 'merge-blocked' })
+        );
+      });
+
+      it('envelope non-pass follows the same skip-sandbox + early-remediation path', async () => {
+        greenGates();
+        evaluate.mockResolvedValue(
+          verdictOf('envelope', 'breach', ['outside allowedPaths: x'])
+        );
+        const callOrder: string[] = [];
+        remediate.mockImplementation(async () => {
+          callOrder.push('remediate');
+          return {
+            kind: 'remediated',
+            attempt: 1,
+            sha: 'fix-sha',
+            detail: 'attempt 1/2 addressed [envelope]'
+          };
+        });
+        deploy.mockImplementation(async () => {
+          callOrder.push('deploy');
+          return { verdict: verdictOf('sandbox', 'pass') };
+        });
+
+        await handler.runTask(INPUT);
+
+        expect(callOrder).toEqual(['remediate']);
+        expect(deploy).not.toHaveBeenCalled();
+      });
+
+      it('shadow mode never early-remediates and keeps full gate order', async () => {
+        greenGates();
+        review.mockResolvedValue(
+          verdictOf('reviewer', 'breach', ['unsafe migration'])
+        );
+
+        await handler.runTask({ ...INPUT, shadow: true });
+
+        expect(remediate).not.toHaveBeenCalled();
+        expect(deploy).toHaveBeenCalled();
+        expect(verify).toHaveBeenCalled();
+        expect(ciEvaluate).toHaveBeenCalled();
+      });
+
+      it('still deploys sandbox when envelope and reviewer both pass', async () => {
+        greenGates();
+
+        await handler.runTask(INPUT);
+
+        // Task-head deploy still runs on the green path (phase-boundary may
+        // also deploy after merge — both are expected).
+        expect(
+          deploy.mock.calls.some(
+            ([arg]: [
+              { worktreePath?: string; ledger?: { trigger?: string } }
+            ]) =>
+              arg.worktreePath === '/runs/run-1/worktrees/T-01' &&
+              arg.ledger?.trigger === 'task'
+          )
+        ).toBe(true);
+        expect(remediate).not.toHaveBeenCalled();
       });
     });
 
@@ -1789,7 +1975,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
   });
 
   it('posts exactly one digest and commits artifacts when a chronicle repo is given (T-07/T-08)', async () => {
-    await handler.runTask({ ...INPUT, chronicleRepo: '/chronicle' });
+    await handler.runTask({ ...SHADOW_INPUT, chronicleRepo: '/chronicle' });
 
     expect(chronicleRecord).toHaveBeenCalledTimes(1);
     expect(chronicleRecord).toHaveBeenCalledWith({
@@ -1802,15 +1988,14 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
     expect(posted.taskId).toBe('T-01');
     expect(posted.phaseVerdict).toBe(phaseVerdict);
     expect(posted.verdicts).toHaveLength(6); // all gate verdicts for the task
-    // Enforcing mode adds the merge-blocked escalation for the red phase.
+    // Shadow records the ledger exception but does not merge-block.
     expect(posted.exceptions).toEqual([
-      expect.objectContaining({ trigger: 'envelope-breach' }),
-      expect.objectContaining({ trigger: 'merge-blocked' })
+      expect.objectContaining({ trigger: 'envelope-breach' })
     ]);
   });
 
   it('kill-resume at any boundary produces no duplicate side effects (T-09)', async () => {
-    const chronicleInput = { ...INPUT, chronicleRepo: '/chronicle' };
+    const chronicleInput = { ...SHADOW_INPUT, chronicleRepo: '/chronicle' };
     await handler.runTask(chronicleInput);
 
     // Simulate a kill directly after the first full pass: the same
@@ -1834,14 +2019,14 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
     // stop — unlike a non-gate step failure, which the T-04 retry executor
     // now absorbs rather than letting it end the run.
     verify.mockRejectedValueOnce(new Error('killed'));
-    await expect(handler.runTask(INPUT)).rejects.toThrow('killed');
+    await expect(handler.runTask(SHADOW_INPUT)).rejects.toThrow('killed');
     expect(evaluate).toHaveBeenCalledTimes(1);
     expect(review).toHaveBeenCalledTimes(1);
     expect(deploy).toHaveBeenCalledTimes(1);
 
     // Resume: envelope, reviewer and sandbox come from the step cache; only
     // the killed step and everything after it executes.
-    const result = await handler.runTask(INPUT);
+    const result = await handler.runTask(SHADOW_INPUT);
 
     expect(result.outcome).toBe('executed');
     expect(evaluate).toHaveBeenCalledTimes(1);
@@ -1856,7 +2041,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
   it('retries a throwing sandbox deploy and blocks the gate once exhausted', async () => {
     deploy.mockRejectedValue(new Error('deploy host unreachable'));
 
-    await handler.runTask({ ...INPUT, retryBackoffMs: 0 });
+    await handler.runTask({ ...SHADOW_INPUT, retryBackoffMs: 0 });
 
     expect(deploy).toHaveBeenCalledTimes(3);
     expect(state.verdicts).toContainEqual(
@@ -1874,7 +2059,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
       record: { sha: 'head-sha', status: 'unhealthy', recordedAt: 'x' }
     });
 
-    await handler.runTask({ ...INPUT, retryBackoffMs: 0 });
+    await handler.runTask({ ...SHADOW_INPUT, retryBackoffMs: 0 });
 
     expect(deploy).toHaveBeenCalledTimes(1);
   });
@@ -1927,7 +2112,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
     chronicleRecord.mockRejectedValueOnce(new Error('remote hung up'));
 
     const first = await handler.runTask({
-      ...INPUT,
+      ...SHADOW_INPUT,
       chronicleRepo: '/chronicle',
       retryBackoffMs: 0
     });
