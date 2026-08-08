@@ -55,17 +55,38 @@ install_toolchain() {
 }
 
 # Normalize a PEM (or PEM-like) secret from Cursor/dashboard env injection:
-# strip wrapping quotes, turn literal \n into real newlines, ensure trailing NL.
+# strip wrapping quotes, turn literal \n into real newlines, and re-chunk
+# space-collapsed single-line PEMs (Cursor secrets UI often replaces
+# newlines with spaces, which breaks OpenSSL / cryptography load).
 normalize_pem_secret() {
   python3 - <<'PY'
 import os, sys
+
+def rewrap_pem(text: str) -> str:
+    markers = (
+        ("-----BEGIN RSA PRIVATE KEY-----", "-----END RSA PRIVATE KEY-----"),
+        ("-----BEGIN PRIVATE KEY-----", "-----END PRIVATE KEY-----"),
+    )
+    for begin, end in markers:
+        if begin not in text or end not in text:
+            continue
+        body = text.split(begin, 1)[1].split(end, 1)[0]
+        body = "".join(body.split())
+        if len(body) < 64:
+            continue
+        lines = [body[i : i + 64] for i in range(0, len(body), 64)]
+        return begin + "\n" + "\n".join(lines) + "\n" + end + "\n"
+    return text if text.endswith("\n") else text + "\n"
+
 raw = os.environ.get("GITHUB_APP_PRIVATE_KEY", "")
 text = raw.strip()
 if (len(text) >= 2) and ((text[0] == text[-1] == '"') or (text[0] == text[-1] == "'")):
     text = text[1:-1]
 text = text.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\r\n", "\n")
-text = text.strip() + "\n"
-sys.stdout.write(text)
+text = text.strip()
+# Cursor dashboard paste often yields one line with spaces instead of
+# newlines (same char length as a real PEM). Always rewrap when we can.
+sys.stdout.write(rewrap_pem(text))
 PY
 }
 
@@ -74,12 +95,22 @@ pem_looks_complete() {
   python3 - "$pem_path" <<'PY'
 import sys
 from pathlib import Path
+
 pem = Path(sys.argv[1]).read_text()
 has_begin = ("BEGIN" in pem) and ("PRIVATE KEY" in pem)
 end_idx = pem.find("END")
 has_end = (end_idx >= 0) and ("PRIVATE KEY" in pem[end_idx:])
-ok = has_begin and has_end and (len(pem) >= 200)
-sys.exit(0 if ok else 1)
+if not (has_begin and has_end and len(pem) >= 200):
+    sys.exit(1)
+try:
+    from cryptography.hazmat.primitives.serialization import load_pem_private_key
+except ImportError:
+    sys.exit(0)
+try:
+    load_pem_private_key(pem.encode(), password=None)
+except Exception:
+    sys.exit(1)
+sys.exit(0)
 PY
 }
 
@@ -105,7 +136,7 @@ materialize_addi() {
     local pem_bytes
     pem_bytes="$(wc -c <"$cfg/github-app.pem" | tr -d ' ')"
     log "ERROR: GITHUB_APP_PRIVATE_KEY is not a complete PEM (bytes=${pem_bytes}; need BEGIN+END PRIVATE KEY, typically >200 bytes)."
-    log 'Fix: set the Comita env secret to the full addi-m App private key (real newlines or literal \\n escapes; wrapping quotes OK).'
+    log 'Fix: set the Comita env secret to the full addi-m App private key (BEGIN…END). Real newlines, literal \\n, or space-collapsed single-line pastes are OK after normalize/rewrap.'
     return 1
   fi
 

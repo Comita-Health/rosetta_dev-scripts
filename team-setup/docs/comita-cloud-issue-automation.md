@@ -84,7 +84,7 @@ If nothing actionable: reply on the issue explaining why and what you need from 
 | Symptom                                                    | Likely cause                                                             | Fix                                                                                                                                                          |
 | ---------------------------------------------------------- | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `~/.config/comita/github-app-activate.sh: No such file`    | Install skipped (stale build) or secrets missing at materialize time     | `bash .cursor/install-comita-cloud.sh` with env secrets injected                                                                                             |
-| Token mint / cryptography “Could not deserialize key data” | `GITHUB_APP_PRIVATE_KEY` truncated or not a PEM                          | Paste the **full** addi-m App private key into the Comita env secret (BEGIN…END). Literal `\n` escapes and wrapping quotes are OK — install normalizes them. |
+| Token mint / cryptography “Could not deserialize key data” | Truncated PEM, or dashboard paste collapsed newlines into **spaces**     | Paste the **full** addi-m App private key (BEGIN…END). Install normalizes quotes, literal `\n`, and space-collapsed single-line PEMs (re-chunks to 64-col). |
 | `gh` viewer is `cursor[bot]` / issue comment 403           | Addi activate never succeeded; ambient Cursor token lacks `issues:write` | Fix the PEM secret, rematerialize, then `eval "$(bash ~/.config/comita/github-app-activate.sh)"` and confirm `addi-m[bot]`                                   |
 | Install ERROR: “not a complete PEM (bytes=…)”              | Secret is a header/placeholder (~tens of bytes)                          | Replace secret with full PEM; expect typically >200 bytes after normalize                                                                                    |
 
@@ -94,6 +94,12 @@ Quick shape check (does not print the key):
 python3 - <<'PY'
 import os
 v = os.environ.get("GITHUB_APP_PRIVATE_KEY", "")
-print("len", len(v), "has_BEGIN", "BEGIN" in v, "has_END", "END" in v)
+print(
+    "len", len(v),
+    "has_BEGIN", "BEGIN" in v,
+    "has_END", "END" in v,
+    "newlines", v.count("\n"),
+    "spaces", v.count(" "),
+)
 PY
 ```

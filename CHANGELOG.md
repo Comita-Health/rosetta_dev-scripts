@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Cursor Cloud / Comita environment:** `install-comita-cloud.sh` now
+  rewraps space-collapsed single-line `GITHUB_APP_PRIVATE_KEY` pastes
+  (Cursor secrets UI often replaces PEM newlines with spaces) in addition
+  to quote / literal `\n` normalization, and validates the materialized
+  PEM can deserialize when `cryptography` is available.
+
 - **sdlc-workflow:** engine-spawned agents write transcripts under
   `~/.rosetta/agent-data` (override with `SDLC_AGENT_DATA_DIR`) instead of
   the operator's `~/.cursor` history root. `sanitizedAgentEnv()` sets
