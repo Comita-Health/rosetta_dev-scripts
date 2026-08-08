@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** `extractJson` prefers an explicitly `json`-tagged fence
+  anywhere in the response, then the earliest fenced object that parses, then
+  a raw scan — so a leading checklist fence can no longer turn a passing
+  verifier verdict into `no JSON object found in response`
+  (SPEC-BUG-verifier-json-fence-P1 T-01).
+
 - **sdlc-workflow:** enforce runs no longer sandbox-deploy (or CI) a tip
   that envelope or reviewer already rejected. Remediable findings invoke
   `remediationRound` immediately; on success the pass abandons so

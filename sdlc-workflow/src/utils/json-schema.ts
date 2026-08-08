@@ -73,16 +73,65 @@ export const validateJson = (
 };
 
 /**
- * Extract a JSON payload from a model response that may wrap it in a
- * ```json fence or surrounding prose.
+ * Try to parse a JSON object from text that may contain surrounding noise.
+ * Returns undefined when no balanced, parseable object is present.
  */
-export const extractJson = (raw: string): unknown => {
-  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
-  const candidate = (fenced ? fenced[1] : raw).trim();
+const tryParseJsonObject = (text: string): unknown | undefined => {
+  const candidate = text.trim();
   const start = candidate.indexOf('{');
   const end = candidate.lastIndexOf('}');
   if (start === -1 || end === -1 || end < start) {
-    throw new Error('no JSON object found in response');
+    return undefined;
   }
-  return JSON.parse(candidate.slice(start, end + 1));
+  try {
+    return JSON.parse(candidate.slice(start, end + 1));
+  } catch {
+    return undefined;
+  }
+};
+
+interface FencedBlock {
+  lang: string;
+  body: string;
+}
+
+/**
+ * Collect markdown fenced blocks with their language tags. Anchored so a
+ * closing fence cannot be mistaken for an opening one.
+ */
+const collectFences = (raw: string): FencedBlock[] => {
+  const fences: FencedBlock[] = [];
+  const re =
+    /(?:^|\n)```([\w+-]*)[ \t]*\r?\n([\s\S]*?)\r?\n```[ \t]*(?=\r?\n|$)/g;
+  let match: RegExpExecArray | null = re.exec(raw);
+  while (match !== null) {
+    fences.push({ lang: match[1].toLowerCase(), body: match[2] });
+    match = re.exec(raw);
+  }
+  return fences;
+};
+
+/**
+ * Extract a JSON payload from a model response that may wrap it in a
+ * ```json fence or surrounding prose.
+ *
+ * Preference: json-tagged fences (document order), then any other fence
+ * that yields a parseable object (document order), then a raw scan.
+ */
+export const extractJson = (raw: string): unknown => {
+  const fences = collectFences(raw);
+  const candidates: string[] = [
+    ...fences.filter(f => f.lang === 'json').map(f => f.body),
+    ...fences.filter(f => f.lang !== 'json').map(f => f.body),
+    raw
+  ];
+
+  for (const candidate of candidates) {
+    const parsed = tryParseJsonObject(candidate);
+    if (parsed !== undefined) {
+      return parsed;
+    }
+  }
+
+  throw new Error('no JSON object found in response');
 };
