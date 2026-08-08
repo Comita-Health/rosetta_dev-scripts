@@ -169,6 +169,17 @@ export class DaemonConfigRepository implements IDaemonConfigRepository {
       configFile
     );
     const headlessRunner = requireString(raw, 'headlessRunner', configFile);
+    const operatorRaw = raw.operator;
+    let operator: string | undefined;
+    if (operatorRaw !== undefined) {
+      if (typeof operatorRaw !== 'string' || operatorRaw.trim().length === 0) {
+        throw new WorkflowError(
+          `Daemon config ${configFile} operator must be a non-empty string when set`,
+          'DAEMON_CONFIG_INVALID'
+        );
+      }
+      operator = operatorRaw.trim();
+    }
 
     return {
       config: {
@@ -176,7 +187,8 @@ export class DaemonConfigRepository implements IDaemonConfigRepository {
         activateScript,
         runsDir,
         defaultPollSeconds,
-        headlessRunner
+        headlessRunner,
+        ...(operator === undefined ? {} : { operator })
       },
       paths: deriveDaemonRuntimePaths(absoluteRoot)
     };

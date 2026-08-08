@@ -106,6 +106,19 @@ export class DaemonLifecycleService implements IDaemonLifecycleService {
     const cliEntry =
       options.cliEntry ?? path.resolve(__dirname, '..', 'index.js');
 
+    const environment: Record<string, string> = {
+      PATH: process.env.PATH ?? '',
+      HOME: process.env.HOME ?? ''
+    };
+    // Optional workspace operator → launchd env so relaunched / headless
+    // children see the same SDLC_OPERATOR as `run --operator`.
+    if (
+      typeof config.operator === 'string' &&
+      config.operator.trim().length > 0
+    ) {
+      environment.SDLC_OPERATOR = config.operator.trim();
+    }
+
     const result = this._launchdRepo.install({
       label: paths.launchdLabel,
       program,
@@ -118,10 +131,7 @@ export class DaemonLifecycleService implements IDaemonLifecycleService {
       workingDirectory: config.workspaceRoot,
       stdoutPath: paths.logPath,
       stderrPath: paths.logPath,
-      environment: {
-        PATH: process.env.PATH ?? '',
-        HOME: process.env.HOME ?? ''
-      },
+      environment,
       plistDir: options.plistDir,
       load: options.load
     });
