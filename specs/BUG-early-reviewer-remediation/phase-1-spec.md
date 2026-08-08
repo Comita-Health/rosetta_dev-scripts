@@ -82,18 +82,18 @@ still uses the existing post-phase path (out of scope for this early skip).
 
 ### Acceptance criteria
 
-- [ ] test: when reviewer returns non-pass in enforce mode, sandbox deploy
+- [x] test: when reviewer returns non-pass in enforce mode, sandbox deploy
       is **never** called for that head (whether or not remediation runs)
-- [ ] test: when reviewer returns remediable `breach`, remediation is
+- [x] test: when reviewer returns remediable `breach`, remediation is
       invoked before any sandbox call; on success the pass abandons and the
       next selection re-gates the new tip
-- [ ] test: when remediation is skipped or fails on reviewer/envelope red,
+- [x] test: when remediation is skipped or fails on reviewer/envelope red,
       sandbox is still **not** called; escalation/halt path remains loud
-- [ ] test: envelope non-pass follows the same skip-sandbox + optional
+- [x] test: envelope non-pass follows the same skip-sandbox + optional
       early-remediation path as reviewer
-- [ ] test: shadow mode never early-remediates and keeps today's gate order
+- [x] test: shadow mode never early-remediates and keeps today's gate order
       (unchanged)
-- [ ] test: adjacent green path unchanged — when envelope + reviewer both
+- [x] test: adjacent green path unchanged — when envelope + reviewer both
       `pass`, sandbox is still invoked
 - [ ] agent: diff is confined to the skip-sandbox / early-remediation reorder
       and its tests — no unrelated refactor of gate services or budgets
