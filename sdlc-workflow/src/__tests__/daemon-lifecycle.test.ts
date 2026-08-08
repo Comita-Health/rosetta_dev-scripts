@@ -25,7 +25,10 @@ import type { IPollSchedulerService } from '../services/poll-scheduler.service';
 import { WORKFLOW_TOKENS } from '../tokens';
 import { WorkflowError } from '../types';
 
-const writeDaemonConfig = (root: string): void => {
+const writeDaemonConfig = (
+  root: string,
+  overrides: Record<string, unknown> = {}
+): void => {
   mkdirSync(path.join(root, '.sdlc'), { recursive: true });
   writeFileSync(
     path.join(root, '.sdlc', 'daemon.json'),
@@ -33,7 +36,8 @@ const writeDaemonConfig = (root: string): void => {
       activateScript: 'scripts/activate.sh',
       runsDir: 'var/runs',
       defaultPollSeconds: 30,
-      headlessRunner: 'test-runner'
+      headlessRunner: 'test-runner',
+      ...overrides
     }),
     'utf-8'
   );
@@ -324,6 +328,21 @@ describe('DaemonLifecycleService.run', () => {
     const result = lifecycle.install(root, { plistDir, load: false });
     expect(result.plistXml).toContain(process.execPath);
     expect(result.loaded).toBe(false);
+  });
+
+  it('install stamps SDLC_OPERATOR into the plist when config.operator is set', () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'daemon-operator-'));
+    writeDaemonConfig(root, { operator: 'Roustalski' });
+    const plistDir = mkdtempSync(path.join(os.tmpdir(), 'daemon-plist-op-'));
+    const lifecycle = new DaemonLifecycleService(
+      new DaemonConfigRepository(),
+      new DaemonProcessRepository(),
+      new LaunchdRepository()
+    );
+
+    const result = lifecycle.install(root, { plistDir, load: false });
+    expect(result.plistXml).toContain('<key>SDLC_OPERATOR</key>');
+    expect(result.plistXml).toContain('<string>Roustalski</string>');
   });
 
   it('install creates the daemon state directory and log before launchd load', () => {

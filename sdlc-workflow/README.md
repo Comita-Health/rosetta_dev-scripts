@@ -119,6 +119,11 @@ bun run dev -- status --queue
 # consumption dispatches the Phase 1 notify mirror (chat/desktop), with headless
 # dispatch left for Phase 3 on the same action interface.
 # Config is `.sdlc/daemon.json` under the workspace root (DaemonConfig contract).
+# Optional `operator` (GitHub login) is written into the launchd plist as
+# `SDLC_OPERATOR` so KeepAlive restarts and future headless/continuity children
+# inherit your assignee. Interactive `run` still honors `--operator` / shell
+# `SDLC_OPERATOR` — put `export SDLC_OPERATOR=YourLogin` in ~/.zshrc for CLIs
+# started outside launchd.
 # `install` creates `.sdlc/daemon/` + touches the log before launchd load;
 # load is transactional (enable failure → bootout + plist remove);
 # `uninstall` derives the label/plist from the workspace root alone so a

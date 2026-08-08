@@ -517,6 +517,13 @@ export interface DaemonConfig {
   runsDir: string;
   defaultPollSeconds: number;
   headlessRunner: string;
+  /**
+   * GitHub login stamped into launchd as `SDLC_OPERATOR` so continuity /
+   * headless children inherit the same assignee as interactive
+   * `run --operator`. Absent → no `SDLC_OPERATOR` in the plist (runs still
+   * accept `--operator` / shell env).
+   */
+  operator?: string;
 }
 
 /** Process-local paths and launchd identity derived for one workspace root. */
