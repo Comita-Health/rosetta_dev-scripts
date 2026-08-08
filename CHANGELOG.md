@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **team-setup:** document Comita Cloud GitHub **issue-comment** automation
+  (`docs/comita-cloud-issue-automation.md`) — trigger, Addi identity rules,
+  safe auto-remediation scope, and smoke test.
+
 - **Cursor Cloud / Comita environment:** add `.cursor/environment.json` +
   `install-comita-cloud.sh` so the multi-repo **Comita** cloud environment
   materializes Addi (`~/.config/comita`) from environment-scoped secrets,
