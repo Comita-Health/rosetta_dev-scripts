@@ -119,6 +119,11 @@ bun run dev -- status --queue
 # consumption dispatches the Phase 1 notify mirror (chat/desktop), with headless
 # dispatch left for Phase 3 on the same action interface.
 # Config is `.sdlc/daemon.json` under the workspace root (DaemonConfig contract).
+# Optional `operator` (GitHub login) is written into the launchd plist as
+# `SDLC_OPERATOR` so KeepAlive restarts and future headless/continuity children
+# inherit your assignee. Interactive `run` still honors `--operator` / shell
+# `SDLC_OPERATOR` — put `export SDLC_OPERATOR=YourLogin` in ~/.zshrc for CLIs
+# started outside launchd.
 # `install` creates `.sdlc/daemon/` + touches the log before launchd load;
 # load is transactional (enable failure → bootout + plist remove);
 # `uninstall` derives the label/plist from the workspace root alone so a
@@ -387,7 +392,14 @@ owned (SPEC-PRD-0021-P1):
   doing the work — a silent no-op indistinguishable from "nothing to change",
   after which every gate judges an unmodified branch. The list is a denylist,
   not a `CURSOR_*` wildcard, because the engine dispatches _with_
-  `CURSOR_AGENT_BIN` and `CURSOR_MODEL`.
+  `CURSOR_AGENT_BIN` and `CURSOR_MODEL`. Every dispatch also gets
+  `CURSOR_DATA_DIR` pointed at the engine agent-data root
+  (`~/.rosetta/agent-data`, or `SDLC_AGENT_DATA_DIR` when set) so engine
+  transcripts never enter the operator's `~/.cursor` history; an inherited
+  `CURSOR_DATA_DIR` is overridden on purpose. Credentials still resolve from
+  `CURSOR_CONFIG_DIR` / the operator's logged-in CLI session. To inspect or
+  resume an engine session:
+  `CURSOR_DATA_DIR=~/.rosetta/agent-data cursor-agent ls`.
 - **Detached launches are verified, not assumed.** The parent used to sample
   child liveness once at 1.5s; on a loaded machine it sampled mid-boot, so it
   printed "detached" and exited 0 for a run that died a second later. It now
@@ -799,6 +811,7 @@ operator-auth pattern as `gh`).
 | `SDLC_INFERENCE_BACKEND` | no       | Force a backend: `anthropic`, `openai`, or `cursor-cli`        |
 | `CURSOR_AGENT_BIN`       | no       | Cursor Agent CLI binary (default: `cursor-agent`)              |
 | `CURSOR_MODEL`           | no       | Model passed to the Cursor Agent CLI                           |
+| `SDLC_AGENT_DATA_DIR`    | no       | Override engine agent transcript root (default: `~/.rosetta/agent-data`) |
 
 \* With neither key set, a logged-in `cursor-agent` session is required.
 
@@ -861,11 +874,19 @@ Handler / Service / Repository with InversifyJS (workspace rule):
   exception entries into interrupting `action-required` queue items,
   assigned needs-human GitHub issues (`--operator` / `SDLC_OPERATOR`), and
   durable wake-inbox events (idempotent by title **and** `occurrenceKey`, so
-  the same finding on a new head SHA re-notifies). Swallowed GitHub failures
-  append a loud `monitor.log` warning without blocking the run. Issue creates
-  always run as the workspace GitHub App (Addi) via `envForAddiWrite` —
-  ambient human `gh` auth is refused with `GH_NOT_ADDI` rather than filing
-  under the operator's login.
+  the same finding on a new head SHA re-notifies). Issue body / wake / queue
+  tags carry rich operator refs when known: **Blocker PR**, branch, head SHA,
+  spec path, verification human-required criteria, failed CI check URLs, and
+  sandbox sha/status/evidence (`utils/escalation-refs.ts`). When the task
+  checkout's `origin` slug is known, Branch / Head / Spec / sandbox SHA render
+  as GitHub `tree` / `commit` / `blob` markdown links; repo-relative paths
+  inside human-required criteria (e.g. `sdlc-workflow/README.md`) are
+  linkified the same way. `runs://…` evidence stays monospace — that scheme is
+  local engine evidence, not a browser URL. Swallowed GitHub
+  failures append a loud `monitor.log` warning without blocking the run.
+  Issue creates always run as the workspace GitHub App (Addi) via
+  `envForAddiWrite` — ambient human `gh` auth is refused with `GH_NOT_ADDI`
+  rather than filing under the operator's login.
 - `repositories/issue.repository.ts` — `gh issue` create / find-by-title
   (creates require Addi).
 - `utils/gh-auth.ts` / `utils/gh-cli.ts` — shared `gh` runner; calls mint or

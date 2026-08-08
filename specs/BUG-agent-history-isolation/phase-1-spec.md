@@ -99,17 +99,17 @@ entries, timeouts, or any gate behavior.
 
 ### Acceptance criteria
 
-- [ ] test: `sanitizedAgentEnv()` returns `CURSOR_DATA_DIR` pointing at the
+- [x] test: `sanitizedAgentEnv()` returns `CURSOR_DATA_DIR` pointing at the
       engine agent-data root when the variable is absent from the base env
-- [ ] test: `sanitizedAgentEnv()` overrides an inherited `CURSOR_DATA_DIR`
+- [x] test: `sanitizedAgentEnv()` overrides an inherited `CURSOR_DATA_DIR`
       (an operator's own history root must not be reused for dispatches)
-- [ ] test: `SDLC_AGENT_DATA_DIR` takes precedence over the built-in default
-- [ ] test: `sanitizedAgentEnv()` leaves `CURSOR_CONFIG_DIR` and the existing
+- [x] test: `SDLC_AGENT_DATA_DIR` takes precedence over the built-in default
+- [x] test: `sanitizedAgentEnv()` leaves `CURSOR_CONFIG_DIR` and the existing
       passthrough variables (`CURSOR_AGENT_BIN`, `CURSOR_MODEL`) unchanged, and
       still strips every `NESTED_AGENT_ENV_KEYS` entry
-- [ ] test: the workspace-mutating runner spawns with `CURSOR_DATA_DIR` set to
+- [x] test: the workspace-mutating runner spawns with `CURSOR_DATA_DIR` set to
       the engine root
-- [ ] test: the completion transport spawns with `CURSOR_DATA_DIR` set to the
+- [x] test: the completion transport spawns with `CURSOR_DATA_DIR` set to the
       engine root
 - [ ] docs: `sdlc-workflow/README.md` states where engine agent transcripts
       live and gives the `CURSOR_DATA_DIR=… cursor-agent ls` resume command

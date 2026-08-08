@@ -1,0 +1,11 @@
+{
+  "name": "Comita",
+  "install": "bash .cursor/install-comita-cloud.sh",
+  "repositoryDependencies": [
+    "github.com/Comita-Health/rosetta_dev-scripts",
+    "github.com/Comita-Health/comita_admissions",
+    "github.com/Comita-Health/comita_docs",
+    "github.com/Comita-Health/comita_website",
+    "github.com/Comita-Health/rosetta_chronicle_comita-health"
+  ]
+}

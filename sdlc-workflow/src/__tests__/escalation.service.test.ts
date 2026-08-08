@@ -153,6 +153,120 @@ describe('EscalationService (P3 T-06 + fail-loud T-04)', () => {
     );
   });
 
+  it('links rich refs (PR, branch/head, spec, human-required, CI, sandbox) in the issue body, queue tags, and wake', () => {
+    const prUrl = 'https://github.com/org/repo/pull/65';
+    const refs = {
+      repoSlug: 'org/repo',
+      repoPath: '/workspace',
+      prUrl,
+      branch: 'sdlc/bug-run/T-01',
+      headSha: 'abc123def456',
+      specPath: '/workspace/specs/BUG-x/phase-1-spec.md',
+      humanRequired: [
+        'docs: sdlc-workflow/README.md states where engine agent transcripts live'
+      ],
+      ciCheckUrls: [
+        {
+          name: 'test',
+          url: 'https://github.com/org/repo/actions/runs/9'
+        }
+      ],
+      sandbox: {
+        sha: 'abc123def456',
+        status: 'healthy' as const,
+        evidenceId: 'T-01-sandbox-health'
+      }
+    };
+    const outcome = service.post({
+      chronicleRepo: '/chronicle',
+      runId: 'bug-run',
+      repoPath: '/repo',
+      operator: 'russwatson',
+      entries: [entry('merge-blocked')],
+      evidenceIds: ['T-01-ci-monitor'],
+      refs,
+      monitorPath,
+      wakeDir
+    });
+
+    expect(createIssue).toHaveBeenCalledTimes(1);
+    const [, issueInput] = createIssue.mock.calls[0];
+    expect(issueInput.body).toContain(`- **Blocker PR:** ${prUrl}`);
+    expect(issueInput.body).toContain(
+      '[`sdlc/bug-run/T-01`](https://github.com/org/repo/tree/sdlc/bug-run/T-01)'
+    );
+    expect(issueInput.body).toContain(
+      '[`abc123def456`](https://github.com/org/repo/commit/abc123def456)'
+    );
+    expect(issueInput.body).toContain(
+      '[`specs/BUG-x/phase-1-spec.md`](https://github.com/org/repo/blob/abc123def456/specs/BUG-x/phase-1-spec.md)'
+    );
+    expect(issueInput.body).toContain('### Human-required criteria');
+    expect(issueInput.body).toContain(
+      '[`sdlc-workflow/README.md`](https://github.com/org/repo/blob/abc123def456/sdlc-workflow/README.md)'
+    );
+    expect(issueInput.body).toContain(
+      '- [test](https://github.com/org/repo/actions/runs/9)'
+    );
+    expect(issueInput.body).toContain('### Sandbox');
+    expect(issueInput.body).toContain(
+      'runs://bug-run/evidence/T-01-sandbox-health'
+    );
+    expect(issueInput.body).toContain('merge-blocked detail');
+
+    const [, , tags] = appendItem.mock.calls[0];
+    expect(tags).toEqual(
+      expect.arrayContaining([
+        `pr:${prUrl}`,
+        'branch:sdlc/bug-run/T-01',
+        'head:abc123def456'
+      ])
+    );
+
+    const title = escalationTitle('bug-run', entry('merge-blocked'));
+    expect(outcome.wakes).toEqual([title]);
+    const wakes = readdirSync(path.join(wakeDir, 'pending'));
+    expect(wakes.length).toBe(1);
+    const wake = JSON.parse(
+      readFileSync(path.join(wakeDir, 'pending', wakes[0]), 'utf8')
+    ) as { prompt: string; data: { refs?: { prUrl?: string } } };
+    expect(wake.data.refs?.prUrl).toBe(prUrl);
+    expect(wake.prompt).toContain(prUrl);
+  });
+
+  it('wake prompt falls back to branch when there is no blocker PR', () => {
+    const outcome = service.post({
+      runId: 'bug-run',
+      entries: [entry('sandbox-failed')],
+      refs: { branch: 'sdlc/bug-run/T-01', headSha: 'deadbeef' },
+      wakeDir
+    });
+
+    const title = escalationTitle('bug-run', entry('sandbox-failed'));
+    expect(outcome.wakes).toEqual([title]);
+    const wakes = readdirSync(path.join(wakeDir, 'pending'));
+    const wake = JSON.parse(
+      readFileSync(path.join(wakeDir, 'pending', wakes[0]), 'utf8')
+    ) as { prompt: string };
+    expect(wake.prompt).toContain('Inspect branch sdlc/bug-run/T-01');
+    expect(wake.prompt).not.toContain('Open the blocker PR');
+  });
+
+  it('issue body omits ref sections when refs are absent', () => {
+    service.post({
+      chronicleRepo: '/chronicle',
+      runId: 'bug-run',
+      repoPath: '/repo',
+      entries: [entry('budget-exhaustion')],
+      wakeDir
+    });
+
+    const [, issueInput] = createIssue.mock.calls[0];
+    expect(issueInput.body).not.toContain('**Blocker PR:**');
+    expect(issueInput.body).not.toContain('### Human-required criteria');
+    expect(issueInput.body).toContain('### Context');
+  });
+
   it('without an operator, issues still post and monitor.log warns about no assignee', () => {
     const outcome = service.post({
       chronicleRepo: '/chronicle',

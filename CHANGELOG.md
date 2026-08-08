@@ -8,6 +8,45 @@
   verifier verdict into `no JSON object found in response`
   (SPEC-BUG-verifier-json-fence-P1 T-01).
 
+- **Cursor Cloud / Comita environment:** `install-comita-cloud.sh` now
+  rewraps space-collapsed single-line `GITHUB_APP_PRIVATE_KEY` pastes
+  (Cursor secrets UI often replaces PEM newlines with spaces) in addition
+  to quote / literal `\n` normalization, and validates the materialized
+  PEM can deserialize when `cryptography` is available.
+
+- **sdlc-workflow:** engine-spawned agents write transcripts under
+  `~/.rosetta/agent-data` (override with `SDLC_AGENT_DATA_DIR`) instead of
+  the operator's `~/.cursor` history root. `sanitizedAgentEnv()` sets
+  `CURSOR_DATA_DIR` unconditionally on both dispatch paths; credentials
+  still resolve from `CURSOR_CONFIG_DIR`. Resume with
+  `CURSOR_DATA_DIR=~/.rosetta/agent-data cursor-agent ls`
+  (SPEC-BUG-agent-history-isolation-P1 T-01).
+
+- **team-setup:** document Comita Cloud GitHub **issue-comment** automation
+  (`docs/comita-cloud-issue-automation.md`) — trigger, Addi identity rules,
+  safe auto-remediation scope, and smoke test.
+
+- **Cursor Cloud / Comita environment:** add `.cursor/environment.json` +
+  `install-comita-cloud.sh` so the multi-repo **Comita** cloud environment
+  materializes Addi (`~/.config/comita`) from environment-scoped secrets,
+  installs bun/`gh` deps, and documents Cloud + Slack + Addi identity in
+  `AGENTS.md`.
+
+- **sdlc-workflow:** needs-human escalations now carry rich operator
+  references alongside the **Blocker PR**: branch, head SHA, spec path,
+  verification human-required criteria, failed CI check URLs (from the
+  Checks API `html_url` / `details_url`), and sandbox sha/status/evidence.
+  When the task checkout's origin slug is known, Branch / Head / Spec /
+  sandbox SHA render as GitHub `tree` / `commit` / `blob` markdown links;
+  repo-relative paths in human-required criteria are linkified the same way.
+  `runs://…` evidence stays monospace (local engine URI). Wake payloads and
+  queue tags include the same refs.
+
+- **sdlc-workflow:** needs-human escalation issues (and their wake / queue
+  tags) link the task **Blocker PR** when one is open, so the operator can
+  jump straight to the actionable surface instead of reconstructing
+  `sdlc/<runId>/<taskId>` from the title alone.
+
 - **sdlc-workflow:** enforce runs no longer sandbox-deploy (or CI) a tip
   that envelope or reviewer already rejected. Remediable findings invoke
   `remediationRound` immediately; on success the pass abandons so
