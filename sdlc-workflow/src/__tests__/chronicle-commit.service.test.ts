@@ -233,6 +233,7 @@ describe('ChronicleCommitService + GatePolicyQueryService (T-08)', () => {
 
   it('record-merge with a task ID also marks that task merged (P3 T-01)', async () => {
     const state = makeState();
+    state.mergeBlockedRetries = 3;
     state.taskResults['T-01'] = {
       taskId: 'T-01',
       status: 'completed',
@@ -250,6 +251,8 @@ describe('ChronicleCommitService + GatePolicyQueryService (T-08)', () => {
 
     const reloaded = stateRepo.load(runsDir, 'run-1');
     expect(reloaded?.taskResults['T-01'].mergedSha).toBe('abc123def456');
+    // #79: unsticking a merge-blocked task must refill the supervise budget.
+    expect(reloaded?.mergeBlockedRetries).toBe(0);
 
     const repo = new ChronicleArtifactRepository();
     const merge = repo

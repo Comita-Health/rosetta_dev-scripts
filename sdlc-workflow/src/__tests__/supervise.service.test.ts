@@ -269,10 +269,14 @@ describe('SuperviseService', () => {
     isAlive.mockReturnValue(false);
     const logPath = path.join(runsDir, 'run-1', 'supervise.log');
     mkdirSync(path.dirname(logPath), { recursive: true });
-    writeFileSync(
-      logPath,
-      '\nRun run-1 — /spec.md\n\n✗ SPEC_MALFORMED: Spec file not found: /spec.md\n'
-    );
+    // Child writes after spawn — pre-spawn bytes are ignored as stale (#79).
+    spawnDetached.mockImplementationOnce(() => {
+      writeFileSync(
+        logPath,
+        '\nRun run-1 — /spec.md\n\n✗ SPEC_MALFORMED: Spec file not found: /spec.md\n'
+      );
+      return { pid: 4242 };
+    });
 
     const result = await supervise.run(
       input({
@@ -347,13 +351,19 @@ describe('SuperviseService', () => {
 
   it('trusts the child own exit record over its liveness', async () => {
     // The pid may still be winding down, or already reused. The record the
-    // child wrote about itself is the deterministic evidence.
+    // child wrote about itself is the deterministic evidence. Stale exits from
+    // a prior supervise are cleared before spawn (#79) — this writes a *new*
+    // exit after spawn, which must still fail the parent.
     isAlive.mockReturnValue(true);
-    exitRepo.write(path.join(runsDir, 'run-1'), {
-      code: 1,
-      reason: 'SPEC_MALFORMED',
-      abnormal: true,
-      at: '2026-08-05T00:00:00Z'
+    const runDir = path.join(runsDir, 'run-1');
+    spawnDetached.mockImplementationOnce(() => {
+      exitRepo.write(runDir, {
+        code: 1,
+        reason: 'SPEC_MALFORMED',
+        abnormal: true,
+        at: '2026-08-05T00:00:00Z'
+      });
+      return { pid: 4242 };
     });
 
     const result = await supervise.run(
@@ -854,7 +864,13 @@ describe('SuperviseService', () => {
     isAlive.mockReturnValue(false);
     const logPath = path.join(runsDir, 'run-1', 'supervise.log');
     mkdirSync(path.dirname(logPath), { recursive: true });
-    writeFileSync(logPath, '✗ SPEC_MALFORMED: Spec file not found: /nope.md\n');
+    spawnDetached.mockImplementationOnce(() => {
+      writeFileSync(
+        logPath,
+        '✗ SPEC_MALFORMED: Spec file not found: /nope.md\n'
+      );
+      return { pid: 4242 };
+    });
 
     const result = await supervise.run(
       input({
@@ -879,7 +895,7 @@ describe('SuperviseService', () => {
 
   it('reports detach startup failure even when the child left an empty log', async () => {
     isAlive.mockReturnValue(false);
-    // No supervise.log — tailFile returns '' and the parent still fails loud.
+    // No supervise.log — tail after offset returns '' and the parent still fails loud.
 
     const result = await supervise.run(
       input({
@@ -900,6 +916,90 @@ describe('SuperviseService', () => {
 
     expect(result.kind).toBe('failed');
     expect(result.detail).toBe('');
+  });
+
+  it('does not false-fail detach when a prior supervise.exit is still on disk (#79)', async () => {
+    // Repro: previous supervise of this runId exited merge-blocked; re-detach
+    // used to see the stale supervise.exit and report "child exited during
+    // startup" while the new child was alive.
+    isAlive.mockReturnValue(true);
+    const runDir = path.join(runsDir, 'run-1');
+    mkdirSync(runDir, { recursive: true });
+    exitRepo.write(runDir, {
+      code: 1,
+      reason: 'merge-blocked',
+      abnormal: true,
+      at: '2026-08-09T00:00:00.000Z'
+    });
+    const logPath = path.join(runDir, 'supervise.log');
+    writeFileSync(
+      logPath,
+      '[supervise] MERGE BLOCKED after wave 3 — escalate / fix gates, then resume\n'
+    );
+
+    const result = await supervise.run(
+      input({
+        detach: true,
+        supervise: true,
+        detachArgv: [
+          'node',
+          'src/index.ts',
+          'run',
+          '--spec',
+          '/s.md',
+          '--repo',
+          '/r',
+          '--detach'
+        ]
+      })
+    );
+
+    expect(result.kind).toBe('detached');
+    expect(result.pid).toBe(4242);
+    // Stale exit must be cleared before the new child's startup probe.
+    expect(exitRepo.read(runDir)).toBeNull();
+  });
+
+  it('surfaces only post-spawn supervise.log lines on detach startup failure (#79)', async () => {
+    isAlive.mockReturnValue(false);
+    const runDir = path.join(runsDir, 'run-1');
+    mkdirSync(runDir, { recursive: true });
+    const logPath = path.join(runDir, 'supervise.log');
+    writeFileSync(
+      logPath,
+      '[supervise] MERGE BLOCKED after wave 3 — escalate\n'
+    );
+
+    spawnDetached.mockImplementationOnce(() => {
+      // Append the child's real startup error after the stale prefix.
+      writeFileSync(
+        logPath,
+        '[supervise] MERGE BLOCKED after wave 3 — escalate\n' +
+          '✗ SPEC_MALFORMED: Spec file not found: /nope.md\n'
+      );
+      return { pid: 4242 };
+    });
+
+    const result = await supervise.run(
+      input({
+        detach: true,
+        supervise: true,
+        detachArgv: [
+          'node',
+          'src/index.ts',
+          'run',
+          '--spec',
+          '/nope.md',
+          '--repo',
+          '/r',
+          '--detach'
+        ]
+      })
+    );
+
+    expect(result.kind).toBe('failed');
+    expect(result.detail).toContain('SPEC_MALFORMED');
+    expect(result.detail).not.toContain('MERGE BLOCKED');
   });
 
   describe('durable launch queue consumption (T-02)', () => {

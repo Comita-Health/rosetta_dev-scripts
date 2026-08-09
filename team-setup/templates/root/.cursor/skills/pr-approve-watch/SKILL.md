@@ -33,6 +33,10 @@ When the repo has **Addi merge on Approve** enabled
 - **GHA merges** on Approve (as Addi). Do **not** `gh pr merge` from this watch.
 - This watch still arms for **Request changes**, **comment triage**, and
   conflict follow-up the agent must resolve before the next Approve.
+- **SDLC task PRs:** prefer Approve only after engine verification/phase is
+  green. Early Approve can land a red-gate PR via GHA; the engine reconciles
+  that out-of-band merge (`mergedSha` + continue the wave — see #79), but
+  waiting for green avoids landing broken tips.
 
 When GHA is **not** enabled for the repo, keep the legacy wake → triage →
 merge path below.

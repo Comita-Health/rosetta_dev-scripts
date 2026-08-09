@@ -466,6 +466,9 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
               if (s.taskResults[taskId] !== undefined) {
                 s.taskResults[taskId].mergedSha = sha;
               }
+              // Mirror production: a landed task merge clears the supervise
+              // merge-blocked retry budget (#79).
+              s.mergeBlockedRetries = 0;
             }
           ),
         recordTaskPrUrl,
@@ -998,11 +1001,14 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
           verdict: verdictOf('phase', 'breach', [`failing gates: ${gate}`]),
           exceptions: []
         });
+        mergeCommitOid.mockReturnValue(null);
 
         await handler.runTask(INPUT);
 
         expect(prMerge).not.toHaveBeenCalled();
         expect(recordMerge).not.toHaveBeenCalled();
+        // Red phase still asks GitHub whether the PR already landed (#79).
+        expect(mergeCommitOid).toHaveBeenCalledWith('/repo', 7);
         expect(state.exceptions).toContainEqual(
           expect.objectContaining({
             trigger: 'merge-blocked',
@@ -1012,6 +1018,43 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
         );
       }
     );
+
+    it('reconciles an out-of-band merge when phase is red but GitHub already MERGED the PR (#79)', async () => {
+      // Repro: GHA Addi merge-on-approve (or human gh pr merge) lands the PR
+      // while the engine is still merge-blocked on a red verification/phase
+      // gate. Without reconcile, supervise retries the cached red verdict,
+      // exhausts the budget, and leaves dependents unblocked forever.
+      greenGates();
+      aggregate.mockReturnValue({
+        verdict: verdictOf('phase', 'breach', ['failing gates: verification']),
+        exceptions: []
+      });
+      mergeCommitOid.mockReturnValue('oob-merged-sha');
+      state.mergeBlockedRetries = 3;
+
+      await handler.runTask({ ...INPUT, chronicleRepo: '/chronicle' });
+
+      expect(prMerge).not.toHaveBeenCalled();
+      expect(mergeCommitOid).toHaveBeenCalledWith('/repo', 7);
+      expect(state.taskResults['T-01'].mergedSha).toBe('oob-merged-sha');
+      expect(state.mergedSha).toBe('oob-merged-sha');
+      // recordTaskMerged zeros the supervise retry budget so resume can
+      // continue after an operator unstick or this reconcile.
+      expect(state.mergeBlockedRetries).toBe(0);
+      expect(state.exceptions).not.toContainEqual(
+        expect.objectContaining({ trigger: 'merge-blocked' })
+      );
+      expect(escalationPost).not.toHaveBeenCalled();
+      expect(recordMerge).toHaveBeenCalledWith(
+        expect.objectContaining({
+          mergedSha: 'oob-merged-sha',
+          taskId: 'T-01',
+          approvedBy: 'out-of-band'
+        })
+      );
+      expect(gitFetch).toHaveBeenCalledWith('/repo');
+      expect(removeWorktreeAsync).toHaveBeenCalled();
+    });
 
     // Wave 0 instrumentation: 52.6% of measured work was unobservable because
     // only `starting`, `implementation` and `reviewer` set a heartbeat step —

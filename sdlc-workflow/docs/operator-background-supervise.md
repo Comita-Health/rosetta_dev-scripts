@@ -51,8 +51,10 @@ Under `~/.rosetta/sdlc-runs/<runId>/`:
 
 ## Shadow vs enforce
 
-- **Enforce** (`--shadow` omitted): green gates auto-merge; `--supervise` resumes until all `mergedSha`s are set. A red phase, or a green phase whose `gh pr merge` failed (e.g. conflicts), **fails the supervise loop** (exit 1) — it does not spin another empty wave. After you fix gates or conflicts, resume: a green-phase unmerged task is re-selected so merge can retry. Stale `merge-blocked` exceptions from an earlier red phase do not block that resume. After each successful merge the engine runs `git fetch origin` so the next wave’s tip SHA exists locally (no manual fetch between waves).
+- **Enforce** (`--shadow` omitted): green gates auto-merge; `--supervise` resumes until all `mergedSha`s are set. A red phase, or a green phase whose `gh pr merge` failed (e.g. conflicts), **fails the supervise loop** (exit 1) — it does not spin another empty wave. Before recording merge-blocked on a red phase, the engine asks GitHub whether the task PR already landed (GHA Addi merge-on-approve / human merge); if MERGED, it records `mergedSha` and continues so dependents and `queue-run` are not stuck waiting for a manual `record-merge` (#79). After you fix gates or conflicts, resume: a green-phase unmerged task is re-selected so merge can retry. Stale `merge-blocked` exceptions from an earlier red phase do not block that resume. `record-merge --task` (and any engine merge) zeros `mergeBlockedRetries`. After each successful merge the engine runs `git fetch origin` so the next wave’s tip SHA exists locally (no manual fetch between waves).
 - **Shadow**: after a wave with completed-but-unmerged tasks, supervise **stops** at the human gate. Merge + `record-merge`, then re-invoke with `--supervise` (and `--detach` if backgrounding).
+
+**Merge-on-approve orgs:** Approving an sdlc task PR while engine verification is still red will land the PR out-of-band. Prefer waiting for green gates before Approve; if you Approve early, the engine reconciles the merge (above) instead of stalling the queue.
 
 Gate log lines are labeled `[enforce]` or `[shadow]` to match the mode. When supervise exits, `monitor.log` gets an `[hb-watch] stopped` line (the watch is not a healer — it only mirrors heartbeats while the loop runs).
 

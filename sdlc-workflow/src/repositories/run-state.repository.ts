@@ -271,6 +271,11 @@ export class RunStateRepository implements IRunStateRepository {
     const result = state.taskResults[taskId];
     if (result === undefined) return;
     result.mergedSha = sha;
+    // A landed merge unsticks the supervise merge-blocked budget. Without
+    // this, an operator `record-merge` (or out-of-band reconcile) after
+    // MERGE_BLOCKED_RETRY_LIMIT leaves resume immediately "retries
+    // exhausted" even though the blocker is gone (#79).
+    state.mergeBlockedRetries = 0;
     this.save(runsDir, state);
   }
 
