@@ -24,10 +24,19 @@ export interface GitHubPrReviewComment {
   path: string;
 }
 
-/** Minimal PR snapshot needed by Phase 1 watch adapters. */
+/** Minimal PR snapshot needed by watch adapters. */
 export interface GitHubPrSnapshot {
   state: string;
   headSha: string;
+  /** Present when the PR is merged; otherwise null. */
+  mergeCommitOid: string | null;
+}
+
+/** Minimal issue snapshot for `issue-state` watches. */
+export interface GitHubIssueSnapshot {
+  state: string;
+  title: string;
+  closedAt: string | null;
 }
 
 /** One Checks API run for a commit. */
@@ -65,6 +74,11 @@ export interface IGitHubWatchSourceRepository {
     repo: string,
     number: number
   ): GitHubPrSnapshot;
+  getIssue(
+    workspaceRoot: string,
+    repo: string,
+    number: number
+  ): GitHubIssueSnapshot;
   listReviews(
     workspaceRoot: string,
     repo: string,
@@ -128,12 +142,13 @@ export class GitHubWatchSourceRepository implements IGitHubWatchSourceRepository
     const raw = this.gh(
       workspaceRoot,
       repo,
-      `gh pr view ${number} -R "${slug}" --json state,headRefOid`
+      `gh pr view ${number} -R "${slug}" --json state,headRefOid,mergeCommit`
     );
-    const parsed = parseJson<{ state?: string; headRefOid?: string }>(
-      raw,
-      'pr view'
-    );
+    const parsed = parseJson<{
+      state?: string;
+      headRefOid?: string;
+      mergeCommit?: { oid?: string } | null;
+    }>(raw, 'pr view');
     const state =
       typeof parsed.state === 'string' && parsed.state.length > 0
         ? parsed.state
@@ -147,7 +162,47 @@ export class GitHubWatchSourceRepository implements IGitHubWatchSourceRepository
         []
       );
     }
-    return { state, headSha };
+    const mergeOid =
+      parsed.mergeCommit !== null &&
+      parsed.mergeCommit !== undefined &&
+      typeof parsed.mergeCommit.oid === 'string'
+        ? parsed.mergeCommit.oid.trim()
+        : '';
+    return {
+      state,
+      headSha,
+      mergeCommitOid: mergeOid.length > 0 ? mergeOid : null
+    };
+  }
+
+  getIssue(
+    workspaceRoot: string,
+    repo: string,
+    number: number
+  ): GitHubIssueSnapshot {
+    const { slug } = requireRepo(repo);
+    const raw = this.gh(
+      workspaceRoot,
+      repo,
+      `gh issue view ${number} -R "${slug}" --json state,title,closedAt`
+    );
+    const parsed = parseJson<{
+      state?: string;
+      title?: string;
+      closedAt?: string | null;
+    }>(raw, 'issue view');
+    const state =
+      typeof parsed.state === 'string' && parsed.state.length > 0
+        ? parsed.state
+        : 'OPEN';
+    return {
+      state,
+      title: typeof parsed.title === 'string' ? parsed.title : '',
+      closedAt:
+        typeof parsed.closedAt === 'string' && parsed.closedAt.length > 0
+          ? parsed.closedAt
+          : null
+    };
   }
 
   listReviews(

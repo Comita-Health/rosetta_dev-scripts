@@ -320,6 +320,9 @@ export class WatchRegistryService implements IWatchRegistryService {
     if (input.expiresAt !== undefined) {
       record.expiresAt = input.expiresAt;
     }
+    if (input.resumeContext !== undefined) {
+      record.resumeContext = input.resumeContext;
+    }
     return this._store.writeWatch(workspaceRoot, record);
   }
 

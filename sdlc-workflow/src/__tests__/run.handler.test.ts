@@ -491,6 +491,28 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
     container
       .bind<ICloseoutService>(WORKFLOW_TOKENS.CloseoutService)
       .toConstantValue({ generate: closeoutGenerate });
+    container.bind(WORKFLOW_TOKENS.WatchRegistryService).toConstantValue({
+      register: jest.fn(),
+      get: jest.fn().mockReturnValue(null),
+      getByTarget: jest.fn().mockReturnValue(null),
+      list: jest.fn().mockReturnValue([]),
+      recordPoll: jest.fn(),
+      recordPollFailure: jest.fn(),
+      expire: jest.fn()
+    });
+    container.bind(WORKFLOW_TOKENS.DaemonConfigRepository).toConstantValue({
+      derivePaths: jest.fn(),
+      load: jest.fn().mockReturnValue({
+        config: {
+          workspaceRoot: '/ws',
+          activateScript: '/activate.sh',
+          runsDir: '/runs',
+          defaultPollSeconds: 30,
+          headlessRunner: 'test'
+        },
+        paths: {}
+      })
+    });
     // The real executor: retry policy is behavior under test here, not a
     // collaborator to stub out. Backoff is zeroed per call via input.
     container

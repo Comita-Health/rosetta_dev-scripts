@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **sdlc-workflow (PRD-0020 remote-resume):** `--supervise` / `--detach` persist
+  `launch.json`; watches carry `resumeContext` into wake data; `issue-state`
+  adapter + CLI kind; `pr-review` emits `merged` (with merge OID) before
+  expire; `engine-resume` wake action record-merges out-of-band landings and
+  relaunches supervise when the pid is dead; escalations register issue + PR
+  watches so remote blocker-close / PR-merge can unstick a run without chat.
+
 - **sdlc-workflow (#79):** red-phase / merge-blocked path reconciles
   already-merged task PRs (GHA Addi merge-on-approve or human `gh pr merge`)
   via `mergeCommitOid` before escalating, records `mergedSha` with Chronicle

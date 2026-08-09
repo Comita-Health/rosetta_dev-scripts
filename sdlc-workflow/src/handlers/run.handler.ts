@@ -15,8 +15,10 @@ import type { ICloseoutAggregateService } from '../services/closeout-aggregate.s
 import type { ICloseoutService } from '../services/closeout.service';
 import type { IDigestService } from '../services/digest.service';
 import type { IEnvelopeGateService } from '../services/envelope-gate.service';
+import type { IDaemonConfigRepository } from '../repositories/daemon-config.repository';
 import type { IEscalationService } from '../services/escalation.service';
 import type { IGateRemediationService } from '../services/gate-remediation.service';
+import type { IWatchRegistryService } from '../services/watch-registry.service';
 import type {
   ExecutorOutcome,
   IExecutorService,
@@ -44,6 +46,11 @@ import type {
 import { WORKFLOW_TOKENS } from '../tokens';
 import { collectEscalationRefs } from '../utils/escalation-refs';
 import { originSlug } from '../utils/gh-repo';
+import {
+  findWorkspaceRootWithDaemonConfig,
+  parseGitHubIssueUrl,
+  parseGitHubPrUrl
+} from '../utils/launch-record';
 import {
   CriterionVerdict,
   DeployTrigger,
@@ -297,7 +304,11 @@ export class RunHandler implements IRunHandler {
     @inject(WORKFLOW_TOKENS.CloseoutAggregateService)
     private readonly _closeoutAggregate: ICloseoutAggregateService,
     @inject(WORKFLOW_TOKENS.CloseoutService)
-    private readonly _closeout: ICloseoutService
+    private readonly _closeout: ICloseoutService,
+    @inject(WORKFLOW_TOKENS.WatchRegistryService)
+    private readonly _watches: IWatchRegistryService,
+    @inject(WORKFLOW_TOKENS.DaemonConfigRepository)
+    private readonly _daemonConfig: IDaemonConfigRepository
   ) {}
 
   async runTask(input: RunTaskInput): Promise<RunTaskResult> {
@@ -1329,6 +1340,76 @@ export class RunHandler implements IRunHandler {
     });
     for (const title of outcome.posted) {
       console.log(chalk.yellow(`  [escalate] ${title}`));
+    }
+    this.registerResumeWatches(input, taskId, refs?.prUrl, outcome.issues);
+  }
+
+  /**
+   * Arm daemon `issue-state` + `pr-review` watches so blocker-close / out-of-
+   * band merge can headless-resume without a chat session (PRD-0020).
+   *
+   * @remarks
+   * Best-effort: missing workspace daemon config or register failures never
+   * block the escalate path. Composed here (Handler) — EscalationService only
+   * posts issues/queue/wakes.
+   */
+  private registerResumeWatches(
+    input: RunTaskInput,
+    taskId: string,
+    prUrl: string | undefined,
+    issues: Record<string, string>
+  ): void {
+    const workspaceRoot =
+      findWorkspaceRootWithDaemonConfig(input.repoPath) ??
+      findWorkspaceRootWithDaemonConfig(process.cwd());
+    if (workspaceRoot === null) {
+      return;
+    }
+    let pollSeconds = 30;
+    try {
+      pollSeconds =
+        this._daemonConfig.load(workspaceRoot).config.defaultPollSeconds;
+    } catch {
+      // Keep the 30s floor when the contract is temporarily unreadable.
+    }
+    const resumeContext = {
+      runId: input.runId,
+      taskId,
+      runsDir: input.runsDir,
+      ...(input.chronicleRepo !== undefined
+        ? { chronicleRepo: input.chronicleRepo }
+        : {}),
+      repoPath: input.repoPath
+    };
+    const createdBy = `escalate:${input.runId}:${taskId}`;
+    try {
+      for (const url of Object.values(issues)) {
+        const parsed = parseGitHubIssueUrl(url);
+        if (parsed === null) {
+          continue;
+        }
+        this._watches.register(workspaceRoot, {
+          kind: 'issue-state',
+          target: { repo: parsed.repo, number: parsed.number },
+          pollSeconds,
+          createdBy,
+          resumeContext
+        });
+      }
+      if (prUrl !== undefined) {
+        const parsed = parseGitHubPrUrl(prUrl);
+        if (parsed !== null) {
+          this._watches.register(workspaceRoot, {
+            kind: 'pr-review',
+            target: { repo: parsed.repo, number: parsed.number },
+            pollSeconds,
+            createdBy,
+            resumeContext
+          });
+        }
+      }
+    } catch {
+      // Watch registration must never turn escalate into a hard failure.
     }
   }
 

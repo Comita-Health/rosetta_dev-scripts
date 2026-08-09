@@ -233,11 +233,14 @@ import {
 } from './repositories/github-watch-source.repository';
 import { PrReviewWatchSourceAdapter } from './services/pr-review-watch-source.adapter';
 import { PrChecksWatchSourceAdapter } from './services/pr-checks-watch-source.adapter';
+import { IssueStateWatchSourceAdapter } from './services/issue-state-watch-source.adapter';
 import {
   IWakeActionRegistry,
   WakeActionRegistry
 } from './services/wake-action';
 import { NotifyWakeAction } from './services/notify-wake.action';
+import { EngineResumeWakeAction } from './services/engine-resume-wake.action';
+import type { IWakeAction } from './services/wake-action';
 import {
   IWakeConsumptionService,
   WakeConsumptionService
@@ -428,6 +431,9 @@ container
   .bind<IWatchSourceAdapter>(WORKFLOW_TOKENS.PrChecksWatchSourceAdapter)
   .to(PrChecksWatchSourceAdapter);
 container
+  .bind<IWatchSourceAdapter>(WORKFLOW_TOKENS.IssueStateWatchSourceAdapter)
+  .to(IssueStateWatchSourceAdapter);
+container
   .bind<IPollSchedulerService>(WORKFLOW_TOKENS.PollSchedulerService)
   .to(PollSchedulerService)
   .inSingletonScope();
@@ -435,6 +441,9 @@ container
   .bind<IWakeActionRegistry>(WORKFLOW_TOKENS.WakeActionRegistry)
   .to(WakeActionRegistry)
   .inSingletonScope();
+container
+  .bind<EngineResumeWakeAction>(WORKFLOW_TOKENS.EngineResumeWakeAction)
+  .to(EngineResumeWakeAction);
 container
   .bind<IWakeConsumptionService>(WORKFLOW_TOKENS.WakeConsumptionService)
   .to(WakeConsumptionService)
@@ -453,8 +462,8 @@ container
   .to(LegacyWakeMigrateService);
 
 {
-  // Phase 1 wires only pr-review and pr-checks. Remaining kinds are Phase 3
-  // and must not be stubbed here — an unregistered kind stays unpolled.
+  // pr-review / pr-checks (Phase 1) + issue-state (remote-resume slice).
+  // Remaining kinds stay unregistered until their adapters land.
   const adapters = container.get<IWatchSourceAdapterRegistry>(
     WORKFLOW_TOKENS.WatchSourceAdapterRegistry
   );
@@ -470,13 +479,21 @@ container
       WORKFLOW_TOKENS.PrChecksWatchSourceAdapter
     )
   );
+  adapters.register(
+    'issue-state',
+    container.get<IWatchSourceAdapter>(
+      WORKFLOW_TOKENS.IssueStateWatchSourceAdapter
+    )
+  );
 
-  // Phase 1 follow-up: best-effort chat/desktop notify. Phase 3 headless
-  // dispatch registers beside this without changing the consumption loop.
+  // Notify mirrors plus headless EngineResume (blocker-close / PR merge).
   const actions = container.get<IWakeActionRegistry>(
     WORKFLOW_TOKENS.WakeActionRegistry
   );
   actions.register(new NotifyWakeAction());
+  actions.register(
+    container.get<IWakeAction>(WORKFLOW_TOKENS.EngineResumeWakeAction)
+  );
 }
 
 container.bind<IDaemonHandler>(WORKFLOW_TOKENS.DaemonHandler).to(DaemonHandler);
@@ -1252,10 +1269,7 @@ yargs(hideBin(process.argv))
                 workspaceRoot: argv.workspace,
                 from: argv.from,
                 disposition: argv.disposition as
-                  | 'auto'
-                  | 'pending'
-                  | 'consumed'
-                  | undefined,
+                  'auto' | 'pending' | 'consumed' | undefined,
                 dryRun: argv['dry-run'] === true,
                 json: argv.json === true
               })

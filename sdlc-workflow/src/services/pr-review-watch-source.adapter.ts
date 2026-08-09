@@ -56,11 +56,36 @@ export class PrReviewWatchSourceAdapter implements IWatchSourceAdapter {
   ): Promise<WatchSourcePollResult> {
     const { repo, number } = requirePrTarget(watch);
     const pr = this._github.getPullRequest(workspaceRoot, repo, number);
-    if (pr.state === 'MERGED' || pr.state === 'CLOSED') {
-      return { signals: [], terminalState: pr.state.toLowerCase() };
+    const now = new Date().toISOString();
+
+    // Emit `merged` before terminal expire so EngineResume can record-merge
+    // + relaunch; CLOSED (unmerged) expires quietly.
+    if (pr.state === 'MERGED') {
+      const oid = pr.mergeCommitOid ?? 'unknown';
+      return {
+        signals: [
+          {
+            id: `merged:${oid}`,
+            observedAt: now,
+            prompt:
+              pr.mergeCommitOid !== null
+                ? `PR ${repo}#${number} merged (${pr.mergeCommitOid})`
+                : `PR ${repo}#${number} merged`,
+            data: {
+              signal: 'merged',
+              repo,
+              number,
+              mergeCommitOid: pr.mergeCommitOid
+            }
+          }
+        ],
+        terminalState: 'merged'
+      };
+    }
+    if (pr.state === 'CLOSED') {
+      return { signals: [], terminalState: 'closed' };
     }
 
-    const now = new Date().toISOString();
     const signals: WatchSourceSignal[] = [];
 
     for (const review of this._github.listReviews(

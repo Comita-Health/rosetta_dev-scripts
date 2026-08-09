@@ -41,7 +41,11 @@ import {
   phaseComplete
 } from '../utils/run-completion';
 import { closeoutBranch } from '../utils/spec-closeout';
-import { buildSuperviseChildArgv } from '../utils/supervise-argv';
+import { writeSuperviseLaunchRecord } from '../utils/launch-record';
+import {
+  buildSuperviseChildArgv,
+  resolveSuperviseLaunchArgv
+} from '../utils/supervise-argv';
 import {
   exitRecordFromError,
   exitRecordFromResult,
@@ -282,6 +286,19 @@ export class SuperviseService implements ISuperviseService {
     const logOffset = fileByteLength(logPath);
 
     const childArgv = buildSuperviseChildArgv(input.detachArgv ?? process.argv);
+    // Continuity / headless resume need this before spawn so a parent crash
+    // cannot leave a live child without a relaunch record (PRD-0020).
+    writeSuperviseLaunchRecord({
+      runsDir: input.runsDir,
+      runId: input.runId,
+      argv: childArgv,
+      execArgv: [...process.execArgv],
+      execPath: process.execPath,
+      cwd: process.cwd(),
+      repoPath: input.repoPath,
+      specPath: input.specPath,
+      chronicleRepo: input.chronicleRepo
+    });
     const { pid } = this._detachRepo.spawnDetached({
       command: process.execPath,
       // Replay the interpreter flags. Running from source, execPath is plain
@@ -380,6 +397,30 @@ export class SuperviseService implements ISuperviseService {
       path.join(runDir, 'monitor.log');
     const heartbeatPath = path.join(runDir, 'heartbeat.jsonl');
 
+    // Refresh on every supervise session so argv/cwd stay current for
+    // continuity relaunch and EngineResume (including non-detach --supervise).
+    writeSuperviseLaunchRecord({
+      runsDir: input.runsDir,
+      runId: input.runId,
+      argv: resolveSuperviseLaunchArgv({
+        specPath: input.specPath,
+        repoPath: input.repoPath,
+        runsDir: input.runsDir,
+        runId: input.runId,
+        chronicleRepo: input.chronicleRepo,
+        maxParallel: input.maxParallel,
+        heartbeatSeconds: input.heartbeatSeconds,
+        maxWaves: input.maxWaves,
+        monitorPath: input.monitorPath,
+        operator: input.operator
+      }),
+      execArgv: [...process.execArgv],
+      execPath: process.execPath,
+      cwd: process.cwd(),
+      repoPath: input.repoPath,
+      specPath: input.specPath,
+      chronicleRepo: input.chronicleRepo
+    });
     writeFileSync(path.join(runDir, 'supervise.pid'), `${process.pid}\n`);
     this._hbWatch.start({
       heartbeatPath,

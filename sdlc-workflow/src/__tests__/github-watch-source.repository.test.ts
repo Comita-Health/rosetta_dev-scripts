@@ -38,7 +38,8 @@ describe('GitHubWatchSourceRepository', () => {
 
     expect(repo.getPullRequest(workspace, 'Acme/widgets', 9)).toEqual({
       state: 'OPEN',
-      headSha: 'abc123'
+      headSha: 'abc123',
+      mergeCommitOid: null
     });
     expect(ghMock).toHaveBeenCalledWith(
       workspace,
@@ -47,6 +48,32 @@ describe('GitHubWatchSourceRepository', () => {
         requireAddi: true,
         owner: 'Acme',
         env: { SDLC_GH_ACTIVATE: path.join(workspace, 'activate.sh') }
+      })
+    );
+    expect(ghMock.mock.calls[0][1]).toContain('mergeCommit');
+  });
+
+  it('loads an issue state under the workspace Addi activate script', () => {
+    const workspace = workspaceWithConfig();
+    ghMock.mockReturnValue(
+      JSON.stringify({
+        state: 'CLOSED',
+        title: 'ACTION REQUIRED',
+        closedAt: '2026-08-09T12:00:00Z'
+      })
+    );
+
+    expect(repo.getIssue(workspace, 'Acme/widgets', 42)).toEqual({
+      state: 'CLOSED',
+      title: 'ACTION REQUIRED',
+      closedAt: '2026-08-09T12:00:00Z'
+    });
+    expect(ghMock).toHaveBeenCalledWith(
+      workspace,
+      expect.stringContaining('gh issue view 42 -R "Acme/widgets"'),
+      expect.objectContaining({
+        requireAddi: true,
+        owner: 'Acme'
       })
     );
   });
@@ -255,11 +282,13 @@ describe('GitHubWatchSourceRepository', () => {
 
     expect(repo.getPullRequest(workspace, 'Acme/widgets', 9)).toEqual({
       state: 'OPEN',
-      headSha: 'abc123'
+      headSha: 'abc123',
+      mergeCommitOid: null
     });
     expect(repo.getPullRequest(workspace, 'Acme/widgets', 9)).toEqual({
       state: 'OPEN',
-      headSha: 'abc123'
+      headSha: 'abc123',
+      mergeCommitOid: null
     });
   });
 
