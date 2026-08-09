@@ -1,4 +1,10 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync
+} from 'fs';
 import { injectable } from 'inversify';
 import path from 'path';
 
@@ -28,6 +34,13 @@ export interface SuperviseExitRecord {
 export interface ISuperviseExitRepository {
   write(runDir: string, record: SuperviseExitRecord): string;
   read(runDir: string): SuperviseExitRecord | null;
+  /**
+   * Drop a prior terminal record before a new detached spawn of the same
+   * runId. A stale `supervise.exit` from the previous supervise would make
+   * the parent's startup probe report "child exited" while the new child
+   * is still alive (#79).
+   */
+  clear(runDir: string): void;
 }
 
 const exitFile = (runDir: string): string =>
@@ -40,6 +53,19 @@ export class SuperviseExitRepository implements ISuperviseExitRepository {
     const file = exitFile(runDir);
     writeFileSync(file, `${JSON.stringify(record)}\n`);
     return file;
+  }
+
+  clear(runDir: string): void {
+    const file = exitFile(runDir);
+    if (!existsSync(file)) {
+      return;
+    }
+    try {
+      unlinkSync(file);
+    } catch {
+      // Best-effort — a raced delete is fine; a leftover stale exit is the
+      // failure mode we are clearing for.
+    }
   }
 
   read(runDir: string): SuperviseExitRecord | null {

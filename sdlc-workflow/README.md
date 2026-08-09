@@ -340,6 +340,17 @@ entries that could produce a different answer (`ci` and the phase
 aggregate). Retries are counted in `state.mergeBlockedRetries`, and
 exhaustion is still a loud terminal exit.
 
+**Out-of-band merge reconcile (#79).** A red phase never used to ask GitHub
+whether the task PR already landed. When GHA **Addi merge on Approve** (or a
+human `gh pr merge`) merges the PR while the engine is still merge-blocked,
+supervise retried the same cached red verdict, exhausted the budget, and
+left dependents without a `mergedSha` — stalling `queue-run` until a manual
+`record-merge`. The red-phase path now calls `mergeCommitOid` before
+recording merge-blocked; a confirmed MERGED PR records `mergedSha` (Chronicle
+`approvedBy: out-of-band`) and continues the wave. Any `recordTaskMerged`
+(engine or `record-merge --task`) also zeros `mergeBlockedRetries` so resume
+after an operator unstick does not immediately hit “retries exhausted”.
+
 **Recurring escalations re-notify.** `emitOnce` deduped on the escalation
 title alone, so a given escalation woke a human exactly once ever and
 recurrence was silently swallowed. Escalations now carry an `occurrenceKey`
@@ -403,8 +414,11 @@ owned (SPEC-PRD-0021-P1):
 - **Detached launches are verified, not assumed.** The parent used to sample
   child liveness once at 1.5s; on a loaded machine it sampled mid-boot, so it
   printed "detached" and exited 0 for a run that died a second later. It now
-  watches for up to 8s and stops early on evidence either way — the child's
-  own `supervise.exit` record, or a dead pid.
+  watches for up to 8s and stops early on evidence either way — a _new_
+  `supervise.exit` (stale records from a prior supervise of the same runId
+  are cleared before spawn), or a dead pid. Failure detail tails only the
+  post-spawn bytes of `supervise.log`, so a historical terminal exit is never
+  misreported as this child's startup failure (#79).
 
 ### Engine branches and target-repo hooks (#41)
 
@@ -801,16 +815,16 @@ Inference runs over one of three transports, selected automatically:
 logged-in Cursor Agent CLI session (`cursor-agent -p`, the same
 operator-auth pattern as `gh`).
 
-| Variable                 | Required | Purpose                                                        |
-| ------------------------ | -------- | -------------------------------------------------------------- |
-| `ANTHROPIC_API_KEY`      | no\*     | Anthropic API model calls (ADR-0003 / PRD-0011 §5)             |
-| `ANTHROPIC_MODEL`        | no       | Override the Anthropic default model (`claude-sonnet-4-5`)     |
-| `OPENAI_API_KEY`         | no\*     | OpenAI Responses API model calls                               |
-| `OPENAI_MODEL`           | no       | Override the OpenAI default model (`gpt-5.6`)                  |
-| `OPENAI_BASE_URL`        | no       | OpenAI-compatible gateway base URL (default: `api.openai.com`) |
-| `SDLC_INFERENCE_BACKEND` | no       | Force a backend: `anthropic`, `openai`, or `cursor-cli`        |
-| `CURSOR_AGENT_BIN`       | no       | Cursor Agent CLI binary (default: `cursor-agent`)              |
-| `CURSOR_MODEL`           | no       | Model passed to the Cursor Agent CLI                           |
+| Variable                 | Required | Purpose                                                                  |
+| ------------------------ | -------- | ------------------------------------------------------------------------ |
+| `ANTHROPIC_API_KEY`      | no\*     | Anthropic API model calls (ADR-0003 / PRD-0011 §5)                       |
+| `ANTHROPIC_MODEL`        | no       | Override the Anthropic default model (`claude-sonnet-4-5`)               |
+| `OPENAI_API_KEY`         | no\*     | OpenAI Responses API model calls                                         |
+| `OPENAI_MODEL`           | no       | Override the OpenAI default model (`gpt-5.6`)                            |
+| `OPENAI_BASE_URL`        | no       | OpenAI-compatible gateway base URL (default: `api.openai.com`)           |
+| `SDLC_INFERENCE_BACKEND` | no       | Force a backend: `anthropic`, `openai`, or `cursor-cli`                  |
+| `CURSOR_AGENT_BIN`       | no       | Cursor Agent CLI binary (default: `cursor-agent`)                        |
+| `CURSOR_MODEL`           | no       | Model passed to the Cursor Agent CLI                                     |
 | `SDLC_AGENT_DATA_DIR`    | no       | Override engine agent transcript root (default: `~/.rosetta/agent-data`) |
 
 \* With neither key set, a logged-in `cursor-agent` session is required.

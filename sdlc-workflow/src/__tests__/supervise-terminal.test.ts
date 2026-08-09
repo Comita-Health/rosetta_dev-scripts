@@ -49,6 +49,23 @@ describe('SuperviseExitRepository', () => {
     writeFileSync(path.join(dir, 'supervise.exit'), 'not-json{\n');
     expect(repo.read(dir)).toBeNull();
   });
+
+  it('clear removes a prior exit record so a re-detach does not inherit it (#79)', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'sdlc-exit-'));
+    const repo = new SuperviseExitRepository();
+    repo.write(dir, {
+      code: 1,
+      reason: 'merge-blocked',
+      abnormal: true,
+      at: '2026-08-09T00:00:00.000Z'
+    });
+    expect(repo.read(dir)).not.toBeNull();
+    repo.clear(dir);
+    expect(repo.read(dir)).toBeNull();
+    // Idempotent on a missing file.
+    repo.clear(dir);
+    expect(repo.read(dir)).toBeNull();
+  });
 });
 
 describe('WakeInboxRepository', () => {

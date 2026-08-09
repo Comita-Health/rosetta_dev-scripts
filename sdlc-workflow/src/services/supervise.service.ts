@@ -100,10 +100,34 @@ const MERGE_BLOCKED_RETRY_STEPS = new Set(['ci', 'phase']);
 const sleep = (ms: number): Promise<void> =>
   new Promise(resolve => setTimeout(resolve, ms));
 
-/** Last `count` non-empty lines of a log, for surfacing a child's own error. */
-const tailFile = (filePath: string, count: number): string => {
+/** Byte length of a file, or 0 when missing — used to ignore stale log prefix. */
+const fileByteLength = (filePath: string): number => {
   try {
-    return readFileSync(filePath, 'utf-8')
+    return Buffer.byteLength(readFileSync(filePath));
+  } catch {
+    return 0;
+  }
+};
+
+/**
+ * Tail only the bytes written after `offset`. A re-detach of the same runId
+ * appends to an existing supervise.log; surfacing the prior terminal exit
+ * as "startup failure" is a false positive (#79).
+ */
+const tailFileAfter = (
+  filePath: string,
+  offset: number,
+  count: number
+): string => {
+  try {
+    const raw = readFileSync(filePath);
+    const slice =
+      offset > 0 && offset < raw.length ? raw.subarray(offset) : raw;
+    if (offset >= raw.length) {
+      return '';
+    }
+    return slice
+      .toString('utf-8')
       .split('\n')
       .filter(line => line.trim().length > 0)
       .slice(-count)
@@ -251,6 +275,12 @@ export class SuperviseService implements ISuperviseService {
     const monitorPath = input.monitorPath ?? path.join(runDir, 'monitor.log');
     const pidPath = path.join(runDir, 'supervise.pid');
 
+    // Drop the prior supervise's terminal record and ignore historical log
+    // bytes — otherwise a re-detach of the same runId false-fails on stale
+    // supervise.exit / supervise.log from the last exit (#79).
+    this._exitRepo.clear(runDir);
+    const logOffset = fileByteLength(logPath);
+
     const childArgv = buildSuperviseChildArgv(input.detachArgv ?? process.argv);
     const { pid } = this._detachRepo.spawnDetached({
       command: process.execPath,
@@ -274,7 +304,11 @@ export class SuperviseService implements ISuperviseService {
     // from a run that never began. Confirm the child actually survived before
     // claiming success.
     if (!(await this.survivedStartup(pid, runDir, input.detachVerifyMs))) {
-      const detail = tailFile(logPath, DETACH_FAILURE_LOG_LINES);
+      const detail = tailFileAfter(
+        logPath,
+        logOffset,
+        DETACH_FAILURE_LOG_LINES
+      );
       console.error(
         chalk.red(`\n[supervise] detached child exited during startup`)
       );
@@ -313,11 +347,13 @@ export class SuperviseService implements ISuperviseService {
    * evidence it did not.
    *
    * @remarks
-   * Two independent proofs of failure, because either alone has a blind spot:
-   * the child's own `supervise.exit` record is deterministic but only exists
-   * once it reached its terminal handler, and pid liveness catches a child that
-   * died too hard to record anything. Returning `true` on deadline is the only
-   * optimistic branch, and by then the child has had the whole window to fail.
+   * Failure proofs: a *new* `supervise.exit` (stale records are cleared before
+   * spawn — #79), or a dead pid. Success is optimistic at the deadline when
+   * the child is still alive; by then it has had the whole window to fail.
+   * Do **not** treat a fresh `[supervise] wave N start` as early success —
+   * the loop writes that marker *before* `runTask`, so a missing/Draft spec
+   * still emits it and then dies. Do not treat historical `supervise.log`
+   * tails as startup evidence either (#79).
    */
   private async survivedStartup(
     pid: number,
@@ -331,7 +367,7 @@ export class SuperviseService implements ISuperviseService {
       if (this._exitRepo.read(runDir) !== null) return false;
       if (!this._detachRepo.isAlive(pid)) return false;
     } while (Date.now() < deadline);
-    return true;
+    return this._detachRepo.isAlive(pid);
   }
 
   private async loop(input: SuperviseInput): Promise<SuperviseResult> {
@@ -812,6 +848,9 @@ export class SuperviseService implements ISuperviseService {
     const logPath = path.join(runDir, 'supervise.log');
     const monitorPath = path.join(runDir, 'monitor.log');
 
+    this._exitRepo.clear(runDir);
+    const logOffset = fileByteLength(logPath);
+
     const childArgv = buildSuperviseChildArgv(record.argv);
     // Replay the record's captured interpreter, not this (enforcing)
     // process's own — the record is the contract precisely so a relaunch
@@ -836,7 +875,9 @@ export class SuperviseService implements ISuperviseService {
       pid,
       alive,
       runId,
-      detail: alive ? '' : tailFile(logPath, DETACH_FAILURE_LOG_LINES)
+      detail: alive
+        ? ''
+        : tailFileAfter(logPath, logOffset, DETACH_FAILURE_LOG_LINES)
     };
   }
 

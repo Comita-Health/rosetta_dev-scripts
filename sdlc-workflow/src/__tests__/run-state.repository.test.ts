@@ -305,6 +305,23 @@ describe('RunStateRepository', () => {
       expect(repo.load(dir, 'run-1')?.mergeBlockedRetries).toBe(2);
     });
 
+    it('recordTaskMerged zeros mergeBlockedRetries so resume is not stuck exhausted (#79)', () => {
+      const state = makeState();
+      state.mergeBlockedRetries = 3;
+      state.taskResults['T-01'] = {
+        taskId: 'T-01',
+        status: 'completed',
+        recordedAt: 'x'
+      };
+      repo.save(dir, state);
+
+      repo.recordTaskMerged(dir, state, 'T-01', 'merge-sha');
+
+      const loaded = repo.load(dir, 'run-1');
+      expect(loaded?.taskResults['T-01'].mergedSha).toBe('merge-sha');
+      expect(loaded?.mergeBlockedRetries).toBe(0);
+    });
+
     it('invalidates only the steps matching the predicate, and persists', () => {
       const state = makeState();
       const step = (name: string, taskId: string) => ({

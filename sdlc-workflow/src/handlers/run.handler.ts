@@ -1021,7 +1021,50 @@ export class RunHandler implements IRunHandler {
       return;
     }
 
+    const digest = inputsDigest({ ...chain, step: 'merge' });
+    const key = stepKey('merge', task.id, digest);
+    const cached = state.steps[key];
+    if (cached !== undefined) {
+      console.log(
+        chalk.gray(`  [cached] already merged (${cached.detail ?? 'no SHA'})`)
+      );
+      return;
+    }
+
+    const prUrl = state.taskResults[task.id]?.prUrl;
+    const prNumber = prUrl?.match(/\/pull\/(\d+)$/)?.[1];
+
     if (phaseVerdict.outcome !== 'pass') {
+      // Out-of-band merge reconcile (#79): GHA Addi merge-on-approve (or a
+      // human `gh pr merge`) can land the PR while the engine is still on a
+      // red phase. Without asking GitHub, supervise retries the cached red
+      // verdict, exhausts MERGE_BLOCKED_RETRY_LIMIT, and leaves dependents
+      // blocked forever (no mergedSha). Treat a confirmed MERGED PR as
+      // authoritative and continue the wave.
+      if (prUrl !== undefined && prNumber !== undefined) {
+        const reconciled = this.reconcileOutOfBandMerge(
+          input.repoPath,
+          Number(prNumber)
+        );
+        if (reconciled !== null) {
+          await this.recordEnforcedMerge(
+            input,
+            state,
+            task,
+            key,
+            digest,
+            prUrl,
+            reconciled,
+            'out-of-band'
+          );
+          console.log(
+            chalk.yellow(
+              `  [enforce] phase red but PR #${prNumber} already merged at ${reconciled.slice(0, 12)} — reconciled out-of-band`
+            )
+          );
+          return;
+        }
+      }
       const entries = [
         {
           trigger: 'merge-blocked' as const,
@@ -1040,24 +1083,12 @@ export class RunHandler implements IRunHandler {
       return;
     }
 
-    const digest = inputsDigest({ ...chain, step: 'merge' });
-    const key = stepKey('merge', task.id, digest);
-    const cached = state.steps[key];
-    if (cached !== undefined) {
-      console.log(
-        chalk.gray(`  [cached] already merged (${cached.detail ?? 'no SHA'})`)
-      );
-      return;
-    }
-
     this._heartbeat.setContext({
       taskId: task.id,
       step: 'merge',
       lastLine: 'gates green — merging the task PR'
     });
 
-    const prUrl = state.taskResults[task.id]?.prUrl;
-    const prNumber = prUrl?.match(/\/pull\/(\d+)$/)?.[1];
     if (prUrl === undefined || prNumber === undefined) {
       const entries = [
         {
@@ -1092,7 +1123,7 @@ export class RunHandler implements IRunHandler {
       // non-zero when the run worktree still has the branch checked out even
       // though GitHub already created the merge commit. Query actual state
       // before filing merge-blocked; only a confirmed-unmerged PR escalates.
-      const reconciled = this.reconcileThrownMerge(
+      const reconciled = this.reconcileOutOfBandMerge(
         input.repoPath,
         Number(prNumber)
       );
@@ -1136,11 +1167,12 @@ export class RunHandler implements IRunHandler {
   }
 
   /**
-   * After a thrown merge call, ask GitHub whether the PR actually landed.
-   * Returns the merge commit OID when confirmed merged; null when the PR
-   * is unmerged or the view itself fails (treat as unconfirmed → escalate).
+   * Ask GitHub whether the PR actually landed (thrown `gh pr merge`, or a
+   * red-phase path that never attempted merge). Returns the merge commit
+   * OID when confirmed merged; null when the PR is unmerged or the view
+   * itself fails (treat as unconfirmed → escalate / merge-blocked).
    */
-  private reconcileThrownMerge(
+  private reconcileOutOfBandMerge(
     repoPath: string,
     prNumber: number
   ): string | null {
@@ -1162,7 +1194,8 @@ export class RunHandler implements IRunHandler {
     key: string,
     digest: string,
     prUrl: string,
-    mergedSha: string
+    mergedSha: string,
+    approvedBy: 'human' | 'machine-gates' | 'out-of-band' = 'machine-gates'
   ): Promise<void> {
     // Bring the merge commit into the local object store before the next
     // wave's worktree add (Phase 0b: gh merge SHA is remote-only).
@@ -1182,19 +1215,22 @@ export class RunHandler implements IRunHandler {
       completedAt: new Date().toISOString()
     });
     if (input.chronicleRepo !== undefined) {
-      // The sdlc.merge.v1 artifact, attributed to the machine gates.
+      // The sdlc.merge.v1 artifact — machine-gates for engine merges,
+      // out-of-band when GHA/human landed the PR ahead of the engine (#79).
       await this._chronicle.recordMerge({
         chronicleRepo: input.chronicleRepo,
         runsDir: input.runsDir,
         runId: input.runId,
         mergedSha,
         taskId: task.id,
-        approvedBy: 'machine-gates'
+        approvedBy
       });
     }
     console.log(
       chalk.green(
-        `  [enforce] all gates green — merged ${prUrl} at ${mergedSha.slice(0, 12)}`
+        approvedBy === 'out-of-band'
+          ? `  [enforce] out-of-band merge recorded for ${prUrl} at ${mergedSha.slice(0, 12)}`
+          : `  [enforce] all gates green — merged ${prUrl} at ${mergedSha.slice(0, 12)}`
       )
     );
     this.scheduleWorktreeCleanup(input, task.id);
@@ -1807,9 +1843,7 @@ export class RunHandler implements IRunHandler {
             : result.status === 'failed'
               ? 'failed'
               : 'completed-unmerged') as
-            | 'merged'
-            | 'failed'
-            | 'completed-unmerged',
+            'merged' | 'failed' | 'completed-unmerged',
           detail: result.mergedSha ?? result.detail
         }));
       }

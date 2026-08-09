@@ -36,7 +36,7 @@ export interface RecordMergeInput {
    */
   taskId?: string;
   /** P3 T-04: who authorized the merge. Defaults to 'human'. */
-  approvedBy?: 'human' | 'machine-gates';
+  approvedBy?: 'human' | 'machine-gates' | 'out-of-band';
 }
 
 /**
@@ -283,7 +283,11 @@ export class ChronicleCommitService implements IChronicleCommitService {
         gate: verdict.gate,
         verdictInputsDigest:
           verdict.inputsDigest ??
-          inputsDigest({ gate: verdict.gate, taskId, reasons: verdict.reasons }),
+          inputsDigest({
+            gate: verdict.gate,
+            taskId,
+            reasons: verdict.reasons
+          }),
         outcome
       };
       this._artifactRepo.writeArtifact(

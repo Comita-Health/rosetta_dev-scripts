@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **sdlc-workflow (#79):** red-phase / merge-blocked path reconciles
+  already-merged task PRs (GHA Addi merge-on-approve or human `gh pr merge`)
+  via `mergeCommitOid` before escalating, records `mergedSha` with Chronicle
+  `approvedBy: out-of-band`, and continues the wave so dependents /
+  `queue-run` are not stuck waiting for a manual `record-merge`.
+  `recordTaskMerged` zeros `mergeBlockedRetries`. Detach clears stale
+  `supervise.exit` before spawn and tails only post-spawn `supervise.log`
+  bytes so re-detach does not false-fail on history.
+
 - **team-setup:** workspace agent secrets onboarding — scaffold
   `~/.config/<workspace>/` (GitHub App activate + Slack + Cursor
   `sessionStart` hook), 1Password `op inject` materialize helpers, verify
