@@ -26,11 +26,35 @@ Install materializes `~/.config/comita/` from environment-scoped secrets:
 `GITHUB_APP_SLUG`, `GITHUB_APP_PRIVATE_KEY`, and `GIT_AUTHOR_*` /
 `GIT_COMMITTER_*`.
 
-### Slack
+### Slack + laptop secrets onboarding
 
-Environment secrets: `SLACK_BOT_TOKEN`, `SLACK_CHANNEL_ID`,
-`SLACK_SIGNING_SECRET`. Use these for operator notify mirrors when asked;
-do not log token values.
+Credentials (never log values):
+
+| Source               | Vars                                                          |
+| -------------------- | ------------------------------------------------------------- |
+| Cursor Cloud secrets | `SLACK_BOT_TOKEN`, `SLACK_CHANNEL_ID`, `SLACK_SIGNING_SECRET` |
+| Local desktop        | `~/.config/comita/slack.env` (`chmod 600`)                    |
+
+Local wiring:
+
+- Shell: `~/.zshrc` sources `slack.env`; or
+  `eval "$(bash ~/.config/comita/slack-activate.sh)"`.
+- Cursor Agent: `sessionStart` hook
+  `~/.cursor/hooks/comita-slack-session-start.sh` (or
+  `<workspace>-slack-session-start.sh` from scaffold) injects the same vars
+  into new agent sessions (registered in `~/.cursor/hooks.json`).
+
+**New laptop / teammate setup** (shared Slack vs private GitHub App, optional
+personal bot name, 1Password materialize): see
+[`team-setup/docs/workspace-agent-secrets.md`](./team-setup/docs/workspace-agent-secrets.md).
+
+```bash
+cd team-setup
+bun run dev -- scaffold-secrets --workspace comita --register-cursor-hook
+bun run dev -- verify-secrets --workspace comita
+```
+
+Use Slack credentials for reading threads / operator notify mirrors when asked.
 
 ### Remediations from GitHub issues
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
+import { execFileSync } from 'child_process';
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'fs';
 import path from 'path';
 import chalk from 'chalk';
@@ -27,6 +28,41 @@ import {
 import { generateWorkspaceFile } from './services/workspace.service';
 import { installDeps } from './services/install.service';
 import { verifySetup } from './services/verify.service';
+
+const TEAM_SETUP_ROOT = path.resolve(__dirname, '..');
+const SCAFFOLD_SECRETS_SCRIPT = path.join(
+  TEAM_SETUP_ROOT,
+  'scripts',
+  'scaffold-workspace-secrets.sh'
+);
+const VERIFY_SECRETS_SCRIPT = path.join(
+  TEAM_SETUP_ROOT,
+  'scripts',
+  'verify-workspace-secrets.sh'
+);
+
+/**
+ * Run a workspace-secrets bash helper with inherited stdio.
+ * Scripts live beside the compiled `dist/` tree under `team-setup/scripts/`.
+ */
+const runWorkspaceSecretsScript = (
+  scriptPath: string,
+  args: string[]
+): void => {
+  if (!existsSync(scriptPath)) {
+    console.error(chalk.red(`Missing script: ${scriptPath}`));
+    process.exit(1);
+  }
+  try {
+    execFileSync('bash', [scriptPath, ...args], { stdio: 'inherit' });
+  } catch (err) {
+    const code =
+      err && typeof err === 'object' && 'status' in err
+        ? Number((err as { status?: number }).status)
+        : 1;
+    process.exit(Number.isFinite(code) && code !== null ? code : 1);
+  }
+};
 
 const CONFIG_DIR = path.resolve(__dirname, 'config');
 const TRACKS_DIR = path.resolve(CONFIG_DIR, 'tracks');
@@ -175,9 +211,7 @@ yargs(hideBin(process.argv))
       const baseDir = resolveBaseDir(argv['base-dir'], shared.baseDir);
 
       console.log(
-        chalk.bold.blue(
-          `\n🧭  Rosetta Workspace Setup: Track ${track.track}\n`
-        )
+        chalk.bold.blue(`\n🧭  Rosetta Workspace Setup: Track ${track.track}\n`)
       );
       console.log(chalk.gray(`Base directory: ${baseDir}`));
       console.log(chalk.gray(`Track: ${track.track} — ${track.description}\n`));
@@ -312,6 +346,68 @@ yargs(hideBin(process.argv))
       console.log(
         chalk.gray('  Run `source ~/.zshrc` or open a new terminal to use it.')
       );
+    }
+  )
+  .command(
+    'scaffold-secrets',
+    'Scaffold ~/.config/<workspace>/ agent secrets layout (no secret values)',
+    yargs =>
+      yargs
+        .option('workspace', {
+          type: 'string',
+          demandOption: true,
+          describe: 'Config directory name under ~/.config (e.g. comita)'
+        })
+        .option('register-cursor-hook', {
+          type: 'boolean',
+          default: false,
+          describe: 'Register Slack sessionStart hook in ~/.cursor/hooks.json'
+        })
+        .option('force', {
+          type: 'boolean',
+          default: false,
+          describe: 'Replace scaffolded scripts (never overwrites *.env/*.pem)'
+        }),
+    argv => {
+      const args = ['--workspace', argv.workspace];
+      if (argv['register-cursor-hook'] === true) {
+        args.push('--register-cursor-hook');
+      }
+      if (argv.force === true) {
+        args.push('--force');
+      }
+      runWorkspaceSecretsScript(SCAFFOLD_SECRETS_SCRIPT, args);
+    }
+  )
+  .command(
+    'verify-secrets',
+    'Verify workspace agent secrets layout (never prints secret values)',
+    yargs =>
+      yargs
+        .option('workspace', {
+          type: 'string',
+          demandOption: true,
+          describe: 'Config directory name under ~/.config (e.g. comita)'
+        })
+        .option('online', {
+          type: 'boolean',
+          default: false,
+          describe: 'Also call Slack auth.test and GitHub viewer login'
+        })
+        .option('strict', {
+          type: 'boolean',
+          default: false,
+          describe: 'Fail when slack.env / github-app.env are missing'
+        }),
+    argv => {
+      const args = ['--workspace', argv.workspace];
+      if (argv.online === true) {
+        args.push('--online');
+      }
+      if (argv.strict === true) {
+        args.push('--strict');
+      }
+      runWorkspaceSecretsScript(VERIFY_SECRETS_SCRIPT, args);
     }
   )
   .demandCommand(1, 'You must specify a command')

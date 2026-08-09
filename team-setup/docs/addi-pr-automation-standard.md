@@ -124,6 +124,10 @@ Planner tests: `node --test team-setup/scripts/emit-sdlc-run-launch.test.mjs`.
 Each org has **its own** Addi GitHub App (separate Client ID + PEM). Do not
 cross-wire Rosetta credentials into consumer-org Actions (or the reverse).
 
+Laptop / teammate setup for local activate scripts, shared Slack, and optional
+personal bots (not only Addi) is documented in
+[`workspace-agent-secrets.md`](./workspace-agent-secrets.md).
+
 | Name                    | Kind     | Purpose                                                                                         |
 | ----------------------- | -------- | ----------------------------------------------------------------------------------------------- |
 | `ADDI_CLIENT_ID`        | variable | Org Addi App Client ID (`client-id` for `create-github-app-token@v3`; also preferred JWT `iss`) |
