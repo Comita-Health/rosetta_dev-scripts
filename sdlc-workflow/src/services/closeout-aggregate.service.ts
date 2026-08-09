@@ -34,7 +34,8 @@ export interface CloseoutAggregateInput {
  * Criteria the run never judged come back as `no-verdict` rather than being
  * dropped — the generator writes a checkbox for every criterion, so a gap has
  * to be visible as a gap. Callers must treat the result as evidence, not as
- * permission: nothing here decides whether a phase may complete.
+ * permission: nothing here decides whether a phase may complete. Phase
+ * coverage accepts `pass` or `stood`+`mergedSha` (#169) — never merge alone.
  */
 export interface ICloseoutAggregateService {
   aggregate(input: CloseoutAggregateInput): CloseoutAggregate;
@@ -154,6 +155,12 @@ export class CloseoutAggregateService implements ICloseoutAggregateService {
     );
   }
 
+  /**
+   * Phase coverage for closeout: a green phase, or a human-approved merge
+   * that left a prior breach standing (`phase: stood` from `record-merge`).
+   * MergedSha alone is not enough — escalate-then-Approve must leave an
+   * explicit stood (or pass) record, never a silent gap.
+   */
   private phasePassed(state: RunState, taskId: string): boolean {
     const phases = state.verdicts.filter(
       verdict => verdict.gate === 'phase' && verdict.taskId === taskId
@@ -165,6 +172,16 @@ export class CloseoutAggregateService implements ICloseoutAggregateService {
           : best,
       undefined
     );
-    return newest?.outcome === 'pass';
+    if (newest === undefined) {
+      return false;
+    }
+    if (newest.outcome === 'pass') {
+      return true;
+    }
+    if (newest.outcome !== 'stood') {
+      return false;
+    }
+    const merged = state.taskResults[taskId]?.mergedSha;
+    return merged !== undefined && merged.length > 0;
   }
 }

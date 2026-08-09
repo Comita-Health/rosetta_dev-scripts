@@ -111,7 +111,15 @@ export interface TaskRunResult {
   recordedAt: string; // ISO timestamp
 }
 
-export type GateOutcome = 'pass' | 'breach' | 'blocked' | 'human-required';
+/**
+ * Machine-gate outcomes. `stood` is recorded by `record-merge --task` when a
+ * human approved the merge after a red/missing phase — the prior breach
+ * stood, and closeout treats that as phase coverage for `status: Done`.
+ * It is never produced by a gate evaluator and never means "the gate went
+ * green."
+ */
+export type GateOutcome =
+  'pass' | 'breach' | 'blocked' | 'human-required' | 'stood';
 
 /**
  * A machine-gate verdict. Phase 2 runs every gate in shadow mode: the

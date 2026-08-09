@@ -78,7 +78,9 @@ bun run dev -- run --spec ../specs/PRD-0011/phase-3-spec.md --repo .. \
 # See docs/operator-background-supervise.md (team-setup skill: sdlc-run-supervise).
 
 # Record a human-approved merge in the run's Chronicle artifact (T-08);
-# --task marks that task merged, which unblocks its dependents (P3 T-01)
+# --task marks that task merged, which unblocks its dependents (P3 T-01).
+# After escalate → human Approve, --task also appends phase:stood in run
+# state so a later `closeout` can write status: Done (#169).
 bun run dev -- record-merge --run-id <run-id> --sha <merged-sha> \
   --task T-01 --chronicle-repo ../../rosetta_chronicle_roustalski
 
@@ -353,8 +355,9 @@ generates a **closeout PR** whose entire diff is derived from `state.json`:
 2. `spec-closeout.ts` applies that map to the spec markdown on the default
    branch: a criterion with a passing verdict is ticked, everything else is
    left alone, and `status: Done` is written **only** when every criterion
-   passes, every task merged, and every phase gate is green. Partial coverage
-   never downgrades or placeholders the existing status.
+   passes, every task merged, and every phase gate is green **or** `stood`
+   (human-approved merge after escalate — see `record-merge --task` / #169).
+   Partial coverage never downgrades or placeholders the existing status.
 3. `closeout.service` commits through `SpecFileRepository.writeCloseout` — the
    one route allowed to overwrite a spec — onto the stable branch
    `sdlc/closeout/<spec-id>`, then opens or **updates in place** the PR for

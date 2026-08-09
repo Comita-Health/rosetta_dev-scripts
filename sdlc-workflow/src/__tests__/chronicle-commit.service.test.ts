@@ -278,7 +278,8 @@ describe('ChronicleCommitService + GatePolicyQueryService (T-08)', () => {
     const outcomes = repo
       .readArtifacts(ledger, 'run-1')
       .filter(artifact => artifact.schema === 'sdlc.outcome.v1');
-    expect(outcomes).toHaveLength(2);
+    // envelope + verification + phase:stood appended for closeout (#169)
+    expect(outcomes).toHaveLength(3);
     expect(outcomes.map(o => o.payload)).toEqual(
       expect.arrayContaining([
         {
@@ -292,9 +293,77 @@ describe('ChronicleCommitService + GatePolicyQueryService (T-08)', () => {
           gate: 'verification',
           verdictInputsDigest: 'ver-digest',
           outcome: 'stood'
-        }
+        },
+        expect.objectContaining({
+          taskId: 'T-01',
+          gate: 'phase',
+          outcome: 'stood'
+        })
       ])
     );
+  });
+
+  it('#169: record-merge --task appends phase:stood in run state for closeout', async () => {
+    const state = makeState();
+    state.verdicts.push({
+      gate: 'phase',
+      taskId: 'T-01',
+      outcome: 'breach',
+      wouldEscalate: true,
+      reasons: ['failing gates: reviewer'],
+      inputsDigest: 'phase-digest',
+      recordedAt: '2026-08-05T00:00:00.000Z'
+    });
+    stateRepo.save(runsDir, state);
+
+    await service.recordMerge({
+      chronicleRepo: ledger,
+      runsDir,
+      runId: 'run-1',
+      mergedSha: 'abc123def456',
+      taskId: 'T-01'
+    });
+
+    const reloaded = stateRepo.load(runsDir, 'run-1');
+    const phases = (reloaded?.verdicts ?? []).filter(
+      verdict => verdict.gate === 'phase' && verdict.taskId === 'T-01'
+    );
+    const newest = phases.reduce((best, verdict) =>
+      verdict.recordedAt > best.recordedAt ? verdict : best
+    );
+    expect(newest.outcome).toBe('stood');
+    expect(newest.inputsDigest).toBe('phase-digest');
+    expect(newest.reasons[0]).toContain('human-approved merge');
+  });
+
+  it('#169: record-merge does not overwrite an existing phase:pass with stood', async () => {
+    const state = makeState();
+    state.verdicts.push({
+      gate: 'phase',
+      taskId: 'T-01',
+      outcome: 'pass',
+      wouldEscalate: false,
+      reasons: [],
+      inputsDigest: 'phase-digest',
+      recordedAt: '2026-08-05T00:00:00.000Z'
+    });
+    stateRepo.save(runsDir, state);
+
+    await service.recordMerge({
+      chronicleRepo: ledger,
+      runsDir,
+      runId: 'run-1',
+      mergedSha: 'abc123def456',
+      taskId: 'T-01',
+      approvedBy: 'machine-gates'
+    });
+
+    const reloaded = stateRepo.load(runsDir, 'run-1');
+    const phases = (reloaded?.verdicts ?? []).filter(
+      verdict => verdict.gate === 'phase' && verdict.taskId === 'T-01'
+    );
+    expect(phases).toHaveLength(1);
+    expect(phases[0].outcome).toBe('pass');
   });
 
   it('BUG-reviewer-house-bar-P1 T-02: record-merge without a task ID annotates nothing (run-level merges have no task verdicts)', async () => {
@@ -339,7 +408,8 @@ describe('ChronicleCommitService + GatePolicyQueryService (T-08)', () => {
     const outcomes = repo
       .readArtifacts(ledger, 'run-1')
       .filter(artifact => artifact.schema === 'sdlc.outcome.v1');
-    expect(outcomes).toHaveLength(2); // one per gate, not four
+    // envelope + verification + phase:stood — one per gate, not doubled
+    expect(outcomes).toHaveLength(3);
   });
 
   it('rejects record-merge for an unknown run', async () => {

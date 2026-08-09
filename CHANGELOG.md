@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** `record-merge --task` now appends a run-state `phase: stood`
+  verdict when a human approved the merge after a red/missing phase, and
+  closeout treats `stood` + `mergedSha` as phase coverage so `status: Done`
+  can be derived without hand-editing the SPEC (#169).
 - **sdlc-workflow:** add the workspace-scoped durable watch registry lifecycle
   API with deterministic kind/target deduplication, active-watch age and
   last-poll projections, explicit expiry, and automatic expiry when a poll
