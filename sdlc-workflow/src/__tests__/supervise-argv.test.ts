@@ -25,7 +25,12 @@ describe('resolveSuperviseLaunchArgv', () => {
       repoPath: '/repo',
       runsDir: '/runs',
       runId: 'run-1',
-      chronicleRepo: '/chronicle'
+      chronicleRepo: '/chronicle',
+      maxParallel: 2,
+      heartbeatSeconds: 15,
+      maxWaves: 8,
+      monitorPath: '/mon.log',
+      operator: 'alice'
     });
     expect(out).toEqual(
       expect.arrayContaining([
@@ -38,6 +43,16 @@ describe('resolveSuperviseLaunchArgv', () => {
         'run-1',
         '--chronicle-repo',
         '/chronicle',
+        '--max-parallel',
+        '2',
+        '--heartbeat',
+        '15',
+        '--max-waves',
+        '8',
+        '--monitor',
+        '/mon.log',
+        '--operator',
+        'alice',
         '--supervise'
       ])
     );
