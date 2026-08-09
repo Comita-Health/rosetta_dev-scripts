@@ -1,4 +1,63 @@
-import { buildSuperviseChildArgv } from '../utils/supervise-argv';
+import {
+  buildSuperviseChildArgv,
+  resolveSuperviseLaunchArgv
+} from '../utils/supervise-argv';
+
+describe('resolveSuperviseLaunchArgv', () => {
+  it('uses live argv when it already contains run', () => {
+    const out = resolveSuperviseLaunchArgv({
+      argv: ['node', 'src/index.ts', 'run', '--repo', '/r', '--supervise'],
+      specPath: '/s',
+      repoPath: '/r',
+      runsDir: '/runs',
+      runId: 'run-1'
+    });
+    expect(out).toContain('run');
+    expect(out).toContain('--supervise');
+    expect(out).not.toContain('--detach');
+  });
+
+  it('synthesizes argv when process.argv has no run subcommand', () => {
+    const out = resolveSuperviseLaunchArgv({
+      argv: ['node', 'jest'],
+      scriptEntry: 'src/index.ts',
+      specPath: '/spec.md',
+      repoPath: '/repo',
+      runsDir: '/runs',
+      runId: 'run-1',
+      chronicleRepo: '/chronicle',
+      maxParallel: 2,
+      heartbeatSeconds: 15,
+      maxWaves: 8,
+      monitorPath: '/mon.log',
+      operator: 'alice'
+    });
+    expect(out).toEqual(
+      expect.arrayContaining([
+        'run',
+        '--spec',
+        '/spec.md',
+        '--repo',
+        '/repo',
+        '--run-id',
+        'run-1',
+        '--chronicle-repo',
+        '/chronicle',
+        '--max-parallel',
+        '2',
+        '--heartbeat',
+        '15',
+        '--max-waves',
+        '8',
+        '--monitor',
+        '/mon.log',
+        '--operator',
+        'alice',
+        '--supervise'
+      ])
+    );
+  });
+});
 
 describe('buildSuperviseChildArgv', () => {
   it('strips --detach and injects --supervise after run', () => {

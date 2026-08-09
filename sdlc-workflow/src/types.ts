@@ -566,6 +566,18 @@ export interface HeadlessAction {
   transcriptDir: string;
 }
 
+/**
+ * SDLC run identity carried on a watch so resume wakes can relaunch without
+ * stuffing `runId` into {@link WatchTarget} (identity rejects extra fields).
+ */
+export interface WatchResumeContext {
+  runId: string;
+  taskId?: string;
+  runsDir?: string;
+  chronicleRepo?: string;
+  repoPath?: string;
+}
+
 /** PRD-0020 §4 durable watch registration contract. */
 export interface WatchRegistration {
   /** Stable identity derived from `kind + target`. */
@@ -576,6 +588,11 @@ export interface WatchRegistration {
   action?: HeadlessAction;
   createdBy: string;
   expiresAt?: string;
+  /**
+   * Opaque resume metadata merged into wake `data` on signal commit.
+   * Not part of watch identity — first registration wins (idempotent register).
+   */
+  resumeContext?: WatchResumeContext;
 }
 
 /** Input accepted by the registry; identity and lifecycle fields are derived. */

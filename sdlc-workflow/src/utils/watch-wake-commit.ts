@@ -27,12 +27,16 @@ export const commitWatchSignal = (
       'Watch source signal observedAt must be an ISO timestamp'
     );
   }
+  const data: Record<string, unknown> = {
+    ...(watch.resumeContext ?? {}),
+    ...(signal.data ?? {})
+  };
   return store.writeWake(workspaceRoot, {
     kind: watch.kind,
     target: watch.id,
     signal: signal.id,
     createdAt: signal.observedAt,
     ...(signal.prompt === undefined ? {} : { prompt: signal.prompt }),
-    ...(signal.data === undefined ? {} : { data: signal.data })
+    ...(Object.keys(data).length === 0 ? {} : { data })
   });
 };

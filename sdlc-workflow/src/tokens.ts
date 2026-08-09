@@ -70,6 +70,9 @@ export const WORKFLOW_TOKENS = {
   GitHubWatchSourceRepository: Symbol.for('GitHubWatchSourceRepository'),
   PrReviewWatchSourceAdapter: Symbol.for('PrReviewWatchSourceAdapter'),
   PrChecksWatchSourceAdapter: Symbol.for('PrChecksWatchSourceAdapter'),
+  // PRD-0020 remote-resume slice (blocker-close / PR-merge → relaunch)
+  IssueStateWatchSourceAdapter: Symbol.for('IssueStateWatchSourceAdapter'),
+  EngineResumeWakeAction: Symbol.for('EngineResumeWakeAction'),
   // SPEC-PRD-0020-P1 T-06
   WakeActionRegistry: Symbol.for('WakeActionRegistry'),
   WakeConsumptionService: Symbol.for('WakeConsumptionService'),

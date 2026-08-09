@@ -115,9 +115,10 @@ bun run dev -- status --queue
 # Per-workspace SDLC event daemon (SPEC-PRD-0020-P1 T-01/T-04/T-06) — process
 # bootstrap, durable storage, watch registry, bounded poll scheduler, and the
 # wake consumption loop (atomic claim → consumedBy → registered actions).
-# The scheduler polls with the Phase 1 GitHub adapters (pr-review / pr-checks);
-# consumption dispatches the Phase 1 notify mirror (chat/desktop), with headless
-# dispatch left for Phase 3 on the same action interface.
+# The scheduler polls pr-review / pr-checks / issue-state; consumption runs
+# notify (chat/desktop) plus engine-resume (blocker-close / out-of-band merge
+# → record-merge + relaunch from launch.json). Full Phase 3 headless agent
+# dispatch remains on the same action interface.
 # Config is `.sdlc/daemon.json` under the workspace root (DaemonConfig contract).
 # Optional `operator` (GitHub login) is written into the launchd plist as
 # `SDLC_OPERATOR` so KeepAlive restarts and future headless/continuity children
@@ -147,7 +148,7 @@ node dist/index.js daemon migrate-wake --workspace ../.. --dry-run
 # Options
 #   --workspace   required workspace root (all paths/ids derived from it)
 #   --json        machine-readable status / watch-registration output
-#   --kind        `daemon watch` kind: pr-review (default) or pr-checks —
+#   --kind        `daemon watch` kind: pr-review (default), pr-checks, or issue-state —
 #                 the only kinds whose targets are owner/repo#N
 #   --poll-seconds  override cadence (default: workspace defaultPollSeconds)
 #   --created-by  registration attribution (default: cli)
@@ -215,34 +216,43 @@ A watch whose kind has no registered source adapter is _skipped, not failed_ —
 missing adapter is a wiring gap, not a signal-source fault, so it neither
 consumes the watch's failure budget nor degrades it. While the adapter registry
 is empty the loop does no polling work at all: it logs that once and keeps its
-timer. Phase 1 registers the GitHub `pr-review` and `pr-checks` source adapters
-(SPEC-PRD-0020-P1 T-05) into `WatchSourceAdapterRegistry` at process start:
-`pr-review` normalizes Approve, Request-changes, and new inline review comments
-into distinct signals; `pr-checks` normalizes Checks API and commit
-status-context terminal success/failure for the PR head SHA. `pr-checks` reads
-the individual commit status contexts rather than the combined rollup, because
-the combined `pending` state means "no statuses **or** a context is pending" —
-trusting the rollup would wedge every Checks-API-only PR (any repo on GitHub
-Actions), which reports `pending` with no contexts forever. All pages of check
-runs are fetched before a verdict is taken, so a busy commit cannot be called
-green off an incomplete first page. Both call GitHub
-under the workspace daemon contract's Addi activate script (with token refresh)
-and return signals only — the scheduler commits them through the shared
-wake-inbox writer (`commitWatchSignal`) so no adapter can bypass exactly-once
-delivery. Remaining watch kinds (`issue-state`, `workflow-run`,
-`run-supervisor`, `queue-item`) stay unregistered until Phase 3.
+timer. The process registers GitHub `pr-review`, `pr-checks`, and `issue-state`
+source adapters into `WatchSourceAdapterRegistry` at start: `pr-review`
+normalizes Approve, Request-changes, new inline review comments, and a
+`merged` signal (with merge commit OID) before terminal expire; `pr-checks`
+normalizes Checks API and commit status-context terminal success/failure for
+the PR head SHA; `issue-state` emits `closed` when a needs-human blocker
+issue closes. `pr-checks` reads the individual commit status contexts rather
+than the combined rollup, because the combined `pending` state means "no
+statuses **or** a context is pending" — trusting the rollup would wedge every
+Checks-API-only PR (any repo on GitHub Actions), which reports `pending` with
+no contexts forever. All pages of check runs are fetched before a verdict is
+taken, so a busy commit cannot be called green off an incomplete first page.
+Adapters call GitHub under the workspace daemon contract's Addi activate
+script (with token refresh) and return signals only — the scheduler commits
+them through the shared wake-inbox writer (`commitWatchSignal`), which also
+merges watch `resumeContext` into wake `data` so resume actions see `runId` /
+`taskId`. Remaining watch kinds (`workflow-run`, `run-supervisor`,
+`queue-item`) stay unregistered until Phase 3.
 
 `WakeConsumptionService` is the consumer side of that inbox. It lists
 `wake/pending/`, claims each wake with the store's atomic rename (exactly one
 winner under concurrency), stamps `consumedBy` onto the shared ledger inode,
-then invokes every action registered in `WakeActionRegistry`. Phase 1 registers
-only the `notify` action — best-effort desktop (`osascript`) and chat-mirror
-(`AGENT_LOOP_WAKE_*` stdout) channels, the same mirrors `wake-inbox.sh` already
-used. A channel failure is appended to the wake's `actionFailures` and never
-moves the wake back to pending: notification is observability, not a gate.
-The action context is `{ workspaceRoot, wake, consumedBy }` with no
-chat/conversation/session object, so Phase 3 headless agent dispatch can
-register beside `notify` without reshaping the loop.
+then invokes every action registered in `WakeActionRegistry`. Registered
+actions include `notify` (desktop / chat-mirror) and `engine-resume`: on
+`closed` / `merged` wakes that carry `runId`, it record-merges when needed and
+relaunches `--supervise` from the run's `launch.json` (no-op when the
+supervisor pid is still alive). A channel/action failure is appended to the
+wake's `actionFailures` and never moves the wake back to pending. The action
+context is `{ workspaceRoot, wake, consumedBy }` with no chat/conversation/
+session object, so Phase 3 headless agent dispatch can register beside these
+without reshaping the loop.
+
+`--supervise` / `--detach` persist `<runsDir>/<runId>/launch.json` (argv,
+execArgv, execPath, cwd, repoPath, specPath) so continuity and
+`engine-resume` can relaunch without a chat session. Escalation posts also
+register `issue-state` (+ `pr-review` when a PR URL is known) watches with
+`resumeContext` so remote blocker-close / out-of-band merge can unstick a run.
 
 `daemon status` (SPEC-PRD-0020-P1 T-07) is the operator coverage surface over
 that store. It lists every active watch (`kind`, `target`, `age`,
@@ -258,9 +268,9 @@ as a single object validated by a fixed schema.
 the thin `pr-approve-watch` skill client. It writes durable `pr-review`
 registrations through `WatchRegistryService` and returns — the long-lived
 daemon keeps polling. Re-registering an active kind+target is idempotent.
-`--kind` accepts `pr-review` and `pr-checks` only: every target on this
-command is parsed as `owner/repo#N`, which the run-id kinds cannot express,
-and the remaining Phase 3 kinds have no source adapter to poll them yet.
+`--kind` accepts `pr-review`, `pr-checks`, and `issue-state`: every target on
+this command is parsed as `owner/repo#N`, which the run-id kinds cannot
+express.
 
 `decompose` grounds the synthesized envelope in the target repo tree (#35):
 every `allowedPaths` glob must match at least one existing path in the

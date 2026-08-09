@@ -207,7 +207,7 @@ describe('pr-approve-watch thin daemon client (SPEC-PRD-0020-P1 T-08)', () => {
     const handler = buildHandler();
     console.log = jest.fn();
 
-    expect(PR_WATCH_KINDS).toEqual(['pr-review', 'pr-checks']);
+    expect(PR_WATCH_KINDS).toEqual(['pr-review', 'pr-checks', 'issue-state']);
 
     for (const kind of PR_WATCH_KINDS) {
       const records = handler.watch({
@@ -220,7 +220,6 @@ describe('pr-approve-watch thin daemon client (SPEC-PRD-0020-P1 T-08)', () => {
     }
 
     for (const kind of [
-      'issue-state',
       'workflow-run',
       'run-supervisor',
       'queue-item',
@@ -232,7 +231,7 @@ describe('pr-approve-watch thin daemon client (SPEC-PRD-0020-P1 T-08)', () => {
           kind,
           targets: ['Owner/Repo#8']
         })
-      ).toThrow(/--kind must be one of pr-review, pr-checks/);
+      ).toThrow(/--kind must be one of pr-review, pr-checks, issue-state/);
     }
 
     // Rejected kinds must leave no registration behind.
@@ -240,6 +239,7 @@ describe('pr-approve-watch thin daemon client (SPEC-PRD-0020-P1 T-08)', () => {
       workspace
     );
     expect(listed.map(watch => watch.kind).sort()).toEqual([
+      'issue-state',
       'pr-checks',
       'pr-review'
     ]);

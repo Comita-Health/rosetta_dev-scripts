@@ -10,6 +10,7 @@ import path from 'path';
 import { DaemonStoreRepository } from '../repositories/daemon-store.repository';
 import type { IGitHubWatchSourceRepository } from '../repositories/github-watch-source.repository';
 import { PollSchedulerService } from '../services/poll-scheduler.service';
+import { IssueStateWatchSourceAdapter } from '../services/issue-state-watch-source.adapter';
 import { PrChecksWatchSourceAdapter } from '../services/pr-checks-watch-source.adapter';
 import { PrReviewWatchSourceAdapter } from '../services/pr-review-watch-source.adapter';
 import { WatchSourceAdapterRegistry } from '../services/watch-source-adapter';
@@ -20,7 +21,8 @@ import type { DurableWatchRecord, WakeEvent } from '../types';
 const ADAPTER_DIR = path.join(__dirname, '..', 'services');
 const ADAPTER_FILES = [
   'pr-review-watch-source.adapter.ts',
-  'pr-checks-watch-source.adapter.ts'
+  'pr-checks-watch-source.adapter.ts',
+  'issue-state-watch-source.adapter.ts'
 ] as const;
 
 const FORBIDDEN_WAKE_WRITE_PATTERNS = [
@@ -64,7 +66,13 @@ const githubStub = (
 ): IGitHubWatchSourceRepository => ({
   getPullRequest: jest.fn().mockReturnValue({
     state: 'OPEN',
-    headSha: 'abc123def456'
+    headSha: 'abc123def456',
+    mergeCommitOid: null
+  }),
+  getIssue: jest.fn().mockReturnValue({
+    state: 'OPEN',
+    title: 'blocker',
+    closedAt: null
   }),
   listReviews: jest.fn().mockReturnValue([]),
   listReviewComments: jest.fn().mockReturnValue([]),
@@ -90,6 +98,7 @@ describe('watch source adapters (SPEC-PRD-0020-P1 T-05)', () => {
         name.endsWith('-watch-source.adapter.ts')
       );
       expect(serviceFiles.sort()).toEqual([
+        'issue-state-watch-source.adapter.ts',
         'pr-checks-watch-source.adapter.ts',
         'pr-review-watch-source.adapter.ts'
       ]);
@@ -285,11 +294,12 @@ describe('watch source adapters (SPEC-PRD-0020-P1 T-05)', () => {
       ).rejects.toThrow(/target\.number/);
     });
 
-    it('expires a merged PR via terminalState without emitting review wakes', async () => {
+    it('emits merged then terminals without emitting review wakes', async () => {
       const github = githubStub({
         getPullRequest: jest.fn().mockReturnValue({
           state: 'MERGED',
-          headSha: 'deadbeef'
+          headSha: 'deadbeef',
+          mergeCommitOid: 'mergeoid123'
         }),
         listReviews: jest.fn().mockReturnValue([
           {
@@ -304,8 +314,114 @@ describe('watch source adapters (SPEC-PRD-0020-P1 T-05)', () => {
       });
       const adapter = new PrReviewWatchSourceAdapter(github);
       const result = await adapter.poll('/workspace', prWatch('pr-review'));
-      expect(result).toEqual({ signals: [], terminalState: 'merged' });
+      expect(result.terminalState).toBe('merged');
+      expect(result.signals).toHaveLength(1);
+      expect(result.signals[0]).toMatchObject({
+        id: 'merged:mergeoid123',
+        data: {
+          signal: 'merged',
+          mergeCommitOid: 'mergeoid123'
+        }
+      });
       expect(github.listReviews).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('IssueStateWatchSourceAdapter', () => {
+    it('emits closed then terminals when the issue is closed', async () => {
+      const github = githubStub({
+        getIssue: jest.fn().mockReturnValue({
+          state: 'CLOSED',
+          title: 'ACTION REQUIRED: SDLC',
+          closedAt: '2026-08-09T12:00:00.000Z'
+        })
+      });
+      const adapter = new IssueStateWatchSourceAdapter(github);
+      const watch: DurableWatchRecord = {
+        id: 'issue-state:owner/repo#9',
+        kind: 'issue-state',
+        target: { repo: 'owner/repo', number: 9 },
+        pollSeconds: 30,
+        createdBy: 'test',
+        createdAt: '2026-08-09T10:00:00.000Z',
+        resumeContext: { runId: 'run-1', taskId: 'T-05' }
+      };
+      const result = await adapter.poll('/workspace', watch);
+      expect(result).toEqual({
+        signals: [
+          {
+            id: 'closed:9',
+            observedAt: '2026-08-09T12:00:00.000Z',
+            prompt: 'Issue owner/repo#9 closed: ACTION REQUIRED: SDLC',
+            data: {
+              signal: 'closed',
+              repo: 'owner/repo',
+              number: 9,
+              title: 'ACTION REQUIRED: SDLC'
+            }
+          }
+        ],
+        terminalState: 'closed'
+      });
+    });
+
+    it('stays quiet while the issue is open', async () => {
+      const adapter = new IssueStateWatchSourceAdapter(githubStub());
+      await expect(
+        adapter.poll('/workspace', {
+          id: 'issue-state:owner/repo#9',
+          kind: 'issue-state',
+          target: { repo: 'owner/repo', number: 9 },
+          pollSeconds: 30,
+          createdBy: 'test',
+          createdAt: '2026-08-09T10:00:00.000Z'
+        })
+      ).resolves.toEqual({ signals: [] });
+    });
+
+    it('rejects a watch whose target is not an issue', async () => {
+      const adapter = new IssueStateWatchSourceAdapter(githubStub());
+      const base: DurableWatchRecord = {
+        id: 'issue-state:x',
+        kind: 'issue-state',
+        target: { repo: 'owner/repo', number: 1 },
+        pollSeconds: 30,
+        createdBy: 'test',
+        createdAt: '2026-08-09T10:00:00.000Z'
+      };
+      await expect(
+        adapter.poll('/workspace', { ...base, target: {} })
+      ).rejects.toThrow(/target\.repo/);
+      await expect(
+        adapter.poll('/workspace', {
+          ...base,
+          target: { repo: 'owner/repo' }
+        })
+      ).rejects.toThrow(/target\.number/);
+    });
+
+    it('uses now when closedAt is missing', async () => {
+      const github = githubStub({
+        getIssue: jest.fn().mockReturnValue({
+          state: 'CLOSED',
+          title: '',
+          closedAt: null
+        })
+      });
+      const adapter = new IssueStateWatchSourceAdapter(github);
+      const result = await adapter.poll('/workspace', {
+        id: 'issue-state:owner/repo#1',
+        kind: 'issue-state',
+        target: { repo: 'owner/repo', number: 1 },
+        pollSeconds: 30,
+        createdBy: 'test',
+        createdAt: '2026-08-09T10:00:00.000Z'
+      });
+      expect(result.terminalState).toBe('closed');
+      expect(result.signals[0]?.prompt).toBe('Issue owner/repo#1 closed');
+      expect(
+        Number.isNaN(Date.parse(result.signals[0]?.observedAt ?? ''))
+      ).toBe(false);
     });
   });
 

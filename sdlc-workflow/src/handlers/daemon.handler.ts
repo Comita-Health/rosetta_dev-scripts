@@ -73,11 +73,14 @@ export interface DaemonMigrateWakeCommandInput {
  * Every target is parsed with {@link parsePrWatchTarget}, so the command may
  * only advertise kinds whose target really is `owner/repo#N`. `workflow-run`,
  * `run-supervisor`, and `queue-item` are identified by run id, so this
- * grammar cannot express them at all. `issue-state` happens to share the
- * shape but is Phase 3 with no source adapter, and registering it here would
- * advertise a watch nothing polls.
+ * grammar cannot express them at all. `issue-state` shares the same target
+ * shape and is polled by {@link IssueStateWatchSourceAdapter}.
  */
-export const PR_WATCH_KINDS: readonly WatchKind[] = ['pr-review', 'pr-checks'];
+export const PR_WATCH_KINDS: readonly WatchKind[] = [
+  'pr-review',
+  'pr-checks',
+  'issue-state'
+];
 
 const PR_TARGET_PATTERN = /^([^/#\s]+\/[^/#\s]+)#([1-9][0-9]*)$/;
 

@@ -161,6 +161,8 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
   let removeWorktreeAsync: jest.Mock;
   let specRead: jest.Mock;
   let escalationPost: jest.Mock;
+  let watchRegister: jest.Mock;
+  let daemonConfigLoad: jest.Mock;
   let remediate: jest.Mock;
   let closeoutAggregate: jest.Mock;
   let closeoutGenerate: jest.Mock;
@@ -491,6 +493,30 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
     container
       .bind<ICloseoutService>(WORKFLOW_TOKENS.CloseoutService)
       .toConstantValue({ generate: closeoutGenerate });
+    watchRegister = jest.fn();
+    daemonConfigLoad = jest.fn().mockReturnValue({
+      config: {
+        workspaceRoot: '/ws',
+        activateScript: '/activate.sh',
+        runsDir: '/runs',
+        defaultPollSeconds: 45,
+        headlessRunner: 'test'
+      },
+      paths: {}
+    });
+    container.bind(WORKFLOW_TOKENS.WatchRegistryService).toConstantValue({
+      register: watchRegister,
+      get: jest.fn().mockReturnValue(null),
+      getByTarget: jest.fn().mockReturnValue(null),
+      list: jest.fn().mockReturnValue([]),
+      recordPoll: jest.fn(),
+      recordPollFailure: jest.fn(),
+      expire: jest.fn()
+    });
+    container.bind(WORKFLOW_TOKENS.DaemonConfigRepository).toConstantValue({
+      derivePaths: jest.fn(),
+      load: daemonConfigLoad
+    });
     // The real executor: retry policy is behavior under test here, not a
     // collaborator to stub out. Backoff is zeroed per call via input.
     container
@@ -1018,6 +1044,136 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
         );
       }
     );
+
+    it('registers issue-state and pr-review resume watches on escalate', async () => {
+      const { mkdirSync, mkdtempSync, writeFileSync } = await import('fs');
+      const os = await import('os');
+      const path = await import('path');
+      const workspace = mkdtempSync(path.join(os.tmpdir(), 'resume-watch-'));
+      mkdirSync(path.join(workspace, '.sdlc'), { recursive: true });
+      writeFileSync(
+        path.join(workspace, '.sdlc', 'daemon.json'),
+        JSON.stringify({
+          activateScript: '/a',
+          runsDir: '/runs',
+          defaultPollSeconds: 45,
+          headlessRunner: 'test'
+        })
+      );
+      greenGates();
+      aggregate.mockReturnValue({
+        verdict: verdictOf('phase', 'breach', ['failing gates: ci']),
+        exceptions: []
+      });
+      mergeCommitOid.mockReturnValue(null);
+      escalationPost.mockReturnValue({
+        posted: ['ACTION REQUIRED: SDLC run-1 T-01 — merge-blocked'],
+        wakes: [],
+        issues: {
+          'ACTION REQUIRED: SDLC run-1 T-01 — merge-blocked':
+            'https://github.com/Acme/widgets/issues/42'
+        }
+      });
+
+      await handler.runTask({
+        ...INPUT,
+        repoPath: workspace,
+        chronicleRepo: '/chronicle'
+      });
+
+      expect(watchRegister).toHaveBeenCalledWith(
+        workspace,
+        expect.objectContaining({
+          kind: 'issue-state',
+          target: { repo: 'Acme/widgets', number: 42 },
+          pollSeconds: 45,
+          resumeContext: expect.objectContaining({
+            runId: 'run-1',
+            taskId: 'T-01',
+            chronicleRepo: '/chronicle'
+          })
+        })
+      );
+      expect(watchRegister).toHaveBeenCalledWith(
+        workspace,
+        expect.objectContaining({
+          kind: 'pr-review',
+          target: { repo: 'org/repo', number: 7 },
+          resumeContext: expect.objectContaining({ runId: 'run-1' })
+        })
+      );
+    });
+
+    it('skips malformed issue URLs when arming resume watches', async () => {
+      const { mkdirSync, mkdtempSync, writeFileSync } = await import('fs');
+      const os = await import('os');
+      const path = await import('path');
+      const workspace = mkdtempSync(
+        path.join(os.tmpdir(), 'resume-watch-bad-')
+      );
+      mkdirSync(path.join(workspace, '.sdlc'), { recursive: true });
+      writeFileSync(
+        path.join(workspace, '.sdlc', 'daemon.json'),
+        JSON.stringify({
+          activateScript: '/a',
+          runsDir: '/runs',
+          defaultPollSeconds: 30,
+          headlessRunner: 'test'
+        })
+      );
+      greenGates();
+      aggregate.mockReturnValue({
+        verdict: verdictOf('phase', 'breach', ['failing gates: ci']),
+        exceptions: []
+      });
+      mergeCommitOid.mockReturnValue(null);
+      escalationPost.mockReturnValue({
+        posted: ['x'],
+        wakes: [],
+        issues: { x: 'not-a-github-issue-url' }
+      });
+
+      await handler.runTask({ ...INPUT, repoPath: workspace });
+
+      expect(watchRegister).toHaveBeenCalledWith(
+        workspace,
+        expect.objectContaining({ kind: 'pr-review' })
+      );
+      expect(
+        watchRegister.mock.calls.some(
+          call => (call[1] as { kind: string }).kind === 'issue-state'
+        )
+      ).toBe(false);
+    });
+
+    it('swallows resume-watch registration failures', async () => {
+      const { mkdirSync, mkdtempSync, writeFileSync } = await import('fs');
+      const os = await import('os');
+      const path = await import('path');
+      const workspace = mkdtempSync(
+        path.join(os.tmpdir(), 'resume-watch-fail-')
+      );
+      mkdirSync(path.join(workspace, '.sdlc'), { recursive: true });
+      writeFileSync(path.join(workspace, '.sdlc', 'daemon.json'), '{}');
+      greenGates();
+      aggregate.mockReturnValue({
+        verdict: verdictOf('phase', 'breach', ['failing gates: ci']),
+        exceptions: []
+      });
+      mergeCommitOid.mockReturnValue(null);
+      escalationPost.mockReturnValue({
+        posted: ['x'],
+        wakes: [],
+        issues: { x: 'https://github.com/Acme/widgets/issues/1' }
+      });
+      watchRegister.mockImplementation(() => {
+        throw new Error('registry down');
+      });
+
+      await expect(
+        handler.runTask({ ...INPUT, repoPath: workspace })
+      ).resolves.toBeDefined();
+    });
 
     it('reconciles an out-of-band merge when phase is red but GitHub already MERGED the PR (#79)', async () => {
       // Repro: GHA Addi merge-on-approve (or human gh pr merge) lands the PR
