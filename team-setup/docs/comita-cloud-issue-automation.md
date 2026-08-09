@@ -59,7 +59,11 @@ Execution
 2) Perform the smallest safe remediation on the correct branch/repo.
 3) Push as Addi; wait for CI if you pushed.
 4) Comment the result: PR URL, head SHA, what changed, what the human should do next (Approve / smoke / close issue).
-5) Optionally notify Slack using SLACK_BOT_TOKEN + SLACK_CHANNEL_ID with a one-line status (never print secret values).
+5) Optionally notify Slack using `SLACK_BOT_TOKEN` + `SLACK_CHANNEL_ID` with a
+   one-line status (never print secret values). On a local desktop, those vars
+   come from `~/.config/comita/slack.env` (scaffold + shared-vault walkthrough:
+   [`workspace-agent-secrets.md`](./workspace-agent-secrets.md)); in Cursor
+   Cloud they are environment secrets.
 
 If nothing actionable: reply on the issue explaining why and what you need from the human.
 ```
@@ -81,12 +85,12 @@ If nothing actionable: reply on the issue explaining why and what you need from 
 
 ## Troubleshooting Addi activate
 
-| Symptom                                                    | Likely cause                                                             | Fix                                                                                                                                                          |
-| ---------------------------------------------------------- | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `~/.config/comita/github-app-activate.sh: No such file`    | Install skipped (stale build) or secrets missing at materialize time     | `bash .cursor/install-comita-cloud.sh` with env secrets injected                                                                                             |
+| Symptom                                                    | Likely cause                                                             | Fix                                                                                                                                                         |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `~/.config/comita/github-app-activate.sh: No such file`    | Install skipped (stale build) or secrets missing at materialize time     | `bash .cursor/install-comita-cloud.sh` with env secrets injected                                                                                            |
 | Token mint / cryptography “Could not deserialize key data” | Truncated PEM, or dashboard paste collapsed newlines into **spaces**     | Paste the **full** addi-m App private key (BEGIN…END). Install normalizes quotes, literal `\n`, and space-collapsed single-line PEMs (re-chunks to 64-col). |
-| `gh` viewer is `cursor[bot]` / issue comment 403           | Addi activate never succeeded; ambient Cursor token lacks `issues:write` | Fix the PEM secret, rematerialize, then `eval "$(bash ~/.config/comita/github-app-activate.sh)"` and confirm `addi-m[bot]`                                   |
-| Install ERROR: “not a complete PEM (bytes=…)”              | Secret is a header/placeholder (~tens of bytes)                          | Replace secret with full PEM; expect typically >200 bytes after normalize                                                                                    |
+| `gh` viewer is `cursor[bot]` / issue comment 403           | Addi activate never succeeded; ambient Cursor token lacks `issues:write` | Fix the PEM secret, rematerialize, then `eval "$(bash ~/.config/comita/github-app-activate.sh)"` and confirm `addi-m[bot]`                                  |
+| Install ERROR: “not a complete PEM (bytes=…)”              | Secret is a header/placeholder (~tens of bytes)                          | Replace secret with full PEM; expect typically >200 bytes after normalize                                                                                   |
 
 Quick shape check (does not print the key):
 

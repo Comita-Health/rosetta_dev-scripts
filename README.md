@@ -152,6 +152,22 @@ the root run `agent`.
 
 **Claude Code:** open the same workspace root as usual.
 
+### Agent automation secrets (Slack + GitHub App)
+
+After bootstrap, each engineer scaffolds `~/.config/<workspace>/` for local
+agent credentials. **Shared** values (Slack bot) come from a team password
+manager; **private** values (personal or org GitHub App PEM) stay per-person.
+
+```bash
+cd ~/projects/rosetta/rosetta_dev-scripts/team-setup   # or your workspace path
+bun run dev -- scaffold-secrets --workspace comita --register-cursor-hook
+# Prefer 1Password inject for shared Slack — see the walkthrough
+bun run dev -- verify-secrets --workspace comita
+```
+
+Full walkthrough (safe sharing, personal bot naming, Cursor `sessionStart`):
+[`team-setup/docs/workspace-agent-secrets.md`](./team-setup/docs/workspace-agent-secrets.md).
+
 ## Commands
 
 Once bootstrapped, all commands run from inside `rosetta_dev-scripts/team-setup/`:
@@ -188,6 +204,19 @@ Health check — confirms repos are cloned and Claude + Cursor config files exis
 
 ```bash
 bun run dev -- verify
+```
+
+### `scaffold-secrets` / `verify-secrets`
+
+Scaffold and check `~/.config/<workspace>/` agent automation files (GitHub App
+activate scripts, Slack env layout, optional Cursor `sessionStart` hook).
+Does **not** write secret values — see
+[`team-setup/docs/workspace-agent-secrets.md`](./team-setup/docs/workspace-agent-secrets.md).
+
+```bash
+bun run dev -- scaffold-secrets --workspace comita --register-cursor-hook
+bun run dev -- verify-secrets --workspace comita
+bun run dev -- verify-secrets --workspace comita --online
 ```
 
 ### `tracks`

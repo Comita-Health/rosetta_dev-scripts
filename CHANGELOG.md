@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **team-setup:** workspace agent secrets onboarding — scaffold
+  `~/.config/<workspace>/` (GitHub App activate + Slack + Cursor
+  `sessionStart` hook), 1Password `op inject` materialize helpers, verify
+  script (no secret echo), and walkthrough for shared Slack vs private /
+  personal bot credentials
+  (`docs/workspace-agent-secrets.md`, `scaffold-secrets` /
+  `verify-secrets` CLI).
+
 - **sdlc-workflow:** `extractJson` prefers an explicitly `json`-tagged fence
   anywhere in the response, then the earliest fenced object that parses, then
   a raw scan — so a leading checklist fence can no longer turn a passing
@@ -819,7 +827,6 @@ prd-lint --prd <id> --docs-dir <dir>` — validates a PRD parses cleanly with
   non-`BUG-*` runs unaffected; a model failure degrades
   loud-but-nonblocking with a `[retro] WARNING` in `monitor.log`
   (SPEC-BUG-retro-and-queued-plans-P1 T-01).
-
 
 ## 1.0.0
 

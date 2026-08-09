@@ -10,9 +10,10 @@
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "dev": "tsx src/index.ts",
-    "test": "jest",
+    "test": "jest && node --test scripts/scaffold-workspace-secrets.test.mjs",
     "test:watch": "jest --watch",
-    "test:coverage": "jest --coverage"
+    "test:coverage": "jest --coverage && node --test scripts/scaffold-workspace-secrets.test.mjs",
+    "test:secrets": "node --test scripts/scaffold-workspace-secrets.test.mjs"
   },
   "author": "Rosetta Team",
   "license": "Apache-2.0",
