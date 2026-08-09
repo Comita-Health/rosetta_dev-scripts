@@ -1175,6 +1175,52 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
       ).resolves.toBeDefined();
     });
 
+    it('posts one ACTION REQUIRED issue when aggregator already escalated (no duplicate merge-blocked)', async () => {
+      // Repro: sandbox-failed + merge-blocked for the same T-07 head
+      // (Comita-Health/comita_admissions#435 / #436).
+      greenGates();
+      deploy.mockResolvedValue({
+        verdict: verdictOf('sandbox', 'breach', ['deploy command failed']),
+        status: 'failed'
+      });
+      aggregate.mockReturnValue({
+        verdict: verdictOf('phase', 'breach', [
+          'failing gates: ci, verification, sandbox'
+        ]),
+        exceptions: [
+          {
+            trigger: 'sandbox-failed' as const,
+            taskId: 'T-01',
+            context: ['deploy command failed'],
+            recordedAt: 'x'
+          }
+        ]
+      });
+      mergeCommitOid.mockReturnValue(null);
+      escalationPost.mockReturnValue({
+        posted: ['ACTION REQUIRED: SDLC run-1 T-01 — sandbox-failed'],
+        wakes: [],
+        issues: {
+          'ACTION REQUIRED: SDLC run-1 T-01 — sandbox-failed':
+            'https://github.com/Acme/widgets/issues/99'
+        }
+      });
+
+      await handler.runTask(INPUT);
+
+      expect(escalationPost).toHaveBeenCalledTimes(1);
+      expect(escalationPost.mock.calls[0][0].entries).toEqual([
+        expect.objectContaining({ trigger: 'sandbox-failed' })
+      ]);
+      // Ledger still records merge-blocked; only the GitHub issue is deduped.
+      expect(state.exceptions).toContainEqual(
+        expect.objectContaining({ trigger: 'merge-blocked' })
+      );
+      expect(state.exceptions).toContainEqual(
+        expect.objectContaining({ trigger: 'sandbox-failed' })
+      );
+    });
+
     it('reconciles an out-of-band merge when phase is red but GitHub already MERGED the PR (#79)', async () => {
       // Repro: GHA Addi merge-on-approve (or human gh pr merge) lands the PR
       // while the engine is still merge-blocked on a red verification/phase

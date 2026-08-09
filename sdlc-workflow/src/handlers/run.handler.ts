@@ -686,6 +686,9 @@ export class RunHandler implements IRunHandler {
     const phaseDigest = inputsDigest({ ...chain, step: 'phase' });
     const phaseKey = stepKey('phase', task.id, phaseDigest);
     let phaseVerdict: GateVerdict;
+    // When aggregator already filed sandbox-failed / envelope-breach / … for
+    // this head, skip enforcement's merge-blocked issue (same wave, same PR).
+    let aggregatorEscalated = false;
     if (state.steps[phaseKey]?.verdict !== undefined) {
       phaseVerdict = state.steps[phaseKey].verdict;
       console.log(chalk.gray('  [cached] phase gate reused (step cache)'));
@@ -752,11 +755,14 @@ export class RunHandler implements IRunHandler {
         aggregate.exceptions,
         chain.headSha
       );
+      aggregatorEscalated = aggregate.exceptions.length > 0;
     }
 
     // P3 T-04: enforcement. Green across the board auto-merges; any red
     // gate blocks and escalates. There is no code path that merges on red.
-    await this.enforcementStep(input, state, task, chain, phaseVerdict);
+    await this.enforcementStep(input, state, task, chain, phaseVerdict, {
+      escalateOnRed: !aggregatorEscalated
+    });
 
     await this.chronicleSteps(input, state, task, spec, chain, phaseVerdict);
   }
@@ -850,7 +856,9 @@ export class RunHandler implements IRunHandler {
       aggregate.exceptions,
       chain.headSha
     );
-    await this.enforcementStep(input, state, task, chain, phaseVerdict);
+    await this.enforcementStep(input, state, task, chain, phaseVerdict, {
+      escalateOnRed: aggregate.exceptions.length === 0
+    });
     await this.chronicleSteps(input, state, task, spec, chain, phaseVerdict);
   }
 
@@ -1017,14 +1025,22 @@ export class RunHandler implements IRunHandler {
    * Shadow mode records verdicts and never merges (calibration for new
    * repos). A red verdict records a merge-blocked escalation; the task
    * halts by staying unmerged, which is what blocks its dependents (T-01).
+   *
+   * @remarks
+   * When the caller already posted aggregator exceptions for this head
+   * (`sandbox-failed`, `envelope-breach`, …), pass `escalateOnRed: false`
+   * so we do not open a second ACTION REQUIRED issue titled
+   * `merge-blocked` for the same wave (Comita admissions #435/#436).
    */
   private async enforcementStep(
     input: RunTaskInput,
     state: RunState,
     task: SpecTask,
     chain: { implDigest?: string; headSha: string },
-    phaseVerdict: GateVerdict
+    phaseVerdict: GateVerdict,
+    options?: { escalateOnRed?: boolean }
   ): Promise<void> {
+    const escalateOnRed = options?.escalateOnRed !== false;
     if (input.shadow === true) {
       console.log(
         chalk.gray('  [shadow] enforcement off — verdicts recorded, no merge')
@@ -1085,7 +1101,11 @@ export class RunHandler implements IRunHandler {
         }
       ];
       this._runStateRepo.recordExceptions(input.runsDir, state, entries);
-      this.postEscalations(input, state, task.id, entries, chain.headSha);
+      // Ledger always records merge-blocked; GitHub issue is suppressed when
+      // the caller already posted aggregator exceptions for this head.
+      if (escalateOnRed) {
+        this.postEscalations(input, state, task.id, entries, chain.headSha);
+      }
       console.log(
         chalk.red(
           `  [enforce] merge blocked for ${task.id}: ${phaseVerdict.reasons.join('; ')}`

@@ -301,6 +301,14 @@ P3 T-04 the gates enforce by default: green across the board merges the
 task PR automatically; any red gate blocks and escalates (`--shadow`
 disables enforcement for calibration).
 
+**One ACTION REQUIRED issue per escalate wave.** When the phase aggregator
+already posts a specific exception (`sandbox-failed`, `envelope-breach`,
+`reviewer-disagreement`, …), enforcement still records `merge-blocked` in
+the run ledger but does **not** open a second GitHub issue with that
+title for the same head. `merge-blocked` issues remain when the
+aggregator has nothing to file (for example CI/verification-only red, or
+green gates with no recorded PR).
+
 The **sandbox gate is part of that aggregate.** A declared sandbox that
 deployed unhealthily blocks the merge, so "it merged" means "it deployed".
 A repo with no `.sdlc/environments.json` contract is not a failure — the
