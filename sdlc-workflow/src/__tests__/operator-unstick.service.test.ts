@@ -60,6 +60,8 @@ describe('OperatorUnstickService (SPEC-PRD-0025-P1 T-03)', () => {
   let headSha: jest.Mock;
   let push: jest.Mock;
   let status: jest.Mock;
+  let diffStat: jest.Mock;
+  let diffText: jest.Mock;
   let recordOperatorUnstickAttempt: jest.Mock;
   let recordOperatorUnstickOutcome: jest.Mock;
   let recordEscalateTier: jest.Mock;
@@ -89,6 +91,8 @@ describe('OperatorUnstickService (SPEC-PRD-0025-P1 T-03)', () => {
       .mockReturnValue('after-sha');
     push = jest.fn();
     status = jest.fn().mockReturnValue('');
+    diffStat = jest.fn().mockReturnValue({ files: [], totalLines: 0 });
+    diffText = jest.fn().mockReturnValue('');
     recordOperatorUnstickAttempt = jest
       .fn()
       .mockImplementation((_d, s: RunState, taskId: string) => {
@@ -121,8 +125,8 @@ describe('OperatorUnstickService (SPEC-PRD-0025-P1 T-03)', () => {
         push,
         status,
         addWorktree: jest.fn(),
-        diffStat: jest.fn(),
-        diffText: jest.fn(),
+        diffStat,
+        diffText,
         fetch: jest.fn(),
         defaultBranch: jest.fn(),
         readAtRef: jest.fn(),
@@ -295,6 +299,74 @@ describe('OperatorUnstickService (SPEC-PRD-0025-P1 T-03)', () => {
     expect(outcome.kind).toBe('abstained');
   });
 
+  it('routes a committed mid-run specs/** rewrite (clean tree) to abstained', async () => {
+    // Committed rewrite leaves porcelain clean; HEAD still moved. Must not
+    // classify as cleared via headMoved — that is the silent-policy hole.
+    status.mockReturnValue('');
+    diffStat.mockReturnValue({
+      files: [{ path: 'specs/PRD-0025/phase-1-spec.md', lines: 4 }],
+      totalLines: 4
+    });
+    agentRun.mockResolvedValue({
+      ok: true,
+      output: 'OUTCOME: cleared — flipped closeout checkboxes'
+    });
+
+    const outcome = await service.unstick(input());
+
+    expect(outcome.kind).toBe('abstained');
+    expect(diffStat).toHaveBeenCalledWith(
+      '/runs/run-1/worktrees/T-01',
+      'before-sha',
+      'after-sha'
+    );
+    expect(suppressesBlockingEscalate(outcome.kind)).toBe(false);
+  });
+
+  it('routes a committed envelope-limit rewrite in the diff text to abstained', async () => {
+    status.mockReturnValue('');
+    diffStat.mockReturnValue({
+      files: [{ path: 'sdlc-workflow/src/types.ts', lines: 2 }],
+      totalLines: 2
+    });
+    diffText.mockReturnValue(
+      '--- a/x\n+++ b/x\n@@\n-maxDiffLines: 400\n+maxDiffLines: 99999\n'
+    );
+    agentRun.mockResolvedValue({
+      ok: true,
+      output: 'OUTCOME: cleared — raised maxDiffLines'
+    });
+
+    const outcome = await service.unstick(input());
+
+    expect(outcome.kind).toBe('abstained');
+  });
+
+  it('does not treat a bare cleared marker without blocker-clear evidence as cleared', async () => {
+    headSha.mockReset().mockReturnValue('same-sha');
+    agentRun.mockResolvedValue({
+      ok: true,
+      output: 'OUTCOME: cleared'
+    });
+
+    const outcome = await service.unstick(input());
+
+    expect(outcome.kind).toBe('abstained');
+    expect(suppressesBlockingEscalate(outcome.kind)).toBe(false);
+  });
+
+  it('classifies cleared marker + resume evidence without HEAD move as cleared', async () => {
+    headSha.mockReset().mockReturnValue('same-sha');
+    agentRun.mockResolvedValue({
+      ok: true,
+      output: 'OUTCOME: cleared — resume path ready via launch.json'
+    });
+
+    const outcome = await service.unstick(input());
+
+    expect(outcome.kind).toBe('cleared');
+  });
+
   it('meters token spend even when the agent dispatch throws', async () => {
     agentRun.mockRejectedValue(new Error('transport died'));
     headSha.mockReset().mockReturnValue('before-sha');
@@ -304,6 +376,101 @@ describe('OperatorUnstickService (SPEC-PRD-0025-P1 T-03)', () => {
     expect(recordTokenSpend).toHaveBeenCalled();
     expect(outcome.kind).toBe('abstained');
     expect(outcome.detail).toContain('transport died');
+  });
+
+  it('skips when there are no remediable gate findings', async () => {
+    const outcome = await service.unstick(
+      input({ verdicts: [verdict('verification', 'breach')] })
+    );
+
+    expect(outcome).toMatchObject({ kind: 'skipped' });
+    expect(agentRun).not.toHaveBeenCalled();
+  });
+
+  it('records risky-proceed and sets advisory-risky tier', async () => {
+    headSha.mockReset().mockReturnValue('same-sha');
+    agentRun.mockResolvedValue({
+      ok: true,
+      output: 'OUTCOME: risky-proceed — continuing with advisory'
+    });
+
+    const outcome = await service.unstick(input());
+
+    expect(outcome.kind).toBe('risky-proceed');
+    expect(recordEscalateTier).toHaveBeenCalledWith(
+      '/runs',
+      state,
+      'T-01',
+      'advisory-risky'
+    );
+    expect(suppressesBlockingEscalate(outcome.kind)).toBe(true);
+  });
+
+  it('routes policy-rewrite + risky-proceed marker to risky-proceed', async () => {
+    status.mockReturnValue(' M specs/PRD-0025/phase-1-spec.md\n');
+    headSha.mockReset().mockReturnValue('same-sha');
+    agentRun.mockResolvedValue({
+      ok: true,
+      output: 'OUTCOME: risky-proceed — left dirty specs, advisory only'
+    });
+
+    const outcome = await service.unstick(input());
+
+    expect(outcome.kind).toBe('risky-proceed');
+  });
+
+  it('does not treat HEAD move as clear evidence when push fails', async () => {
+    push.mockImplementation(() => {
+      throw new Error('remote rejected');
+    });
+    agentRun.mockResolvedValue({
+      ok: true,
+      output: 'OUTCOME: cleared — rebased tip'
+    });
+
+    const outcome = await service.unstick(input());
+
+    expect(outcome.kind).toBe('abstained');
+    expect(outcome.detail).toContain('push failed');
+  });
+
+  it('classifies empty failed agent dispatch without inventing a clear', async () => {
+    headSha.mockReset().mockReturnValue('same-sha');
+    agentRun.mockResolvedValue({ ok: false, output: '' });
+
+    const outcome = await service.unstick(input());
+
+    expect(outcome.kind).toBe('abstained');
+    expect(outcome.detail).toContain('agent dispatch failed');
+  });
+
+  it('ignores committed-range inspection errors without false policy hits', async () => {
+    diffStat.mockImplementation(() => {
+      throw new Error('git diff failed');
+    });
+    agentRun.mockResolvedValue({
+      ok: true,
+      output: 'OUTCOME: cleared — rebased tip'
+    });
+
+    const outcome = await service.unstick(input());
+
+    // HEAD moved + cleared marker, and policy detection failed closed → cleared.
+    expect(outcome.kind).toBe('cleared');
+  });
+
+  it('treats status() failures as no dirty policy rewrite', async () => {
+    status.mockImplementation(() => {
+      throw new Error('status unavailable');
+    });
+    agentRun.mockResolvedValue({
+      ok: true,
+      output: 'OUTCOME: cleared — rebased tip'
+    });
+
+    const outcome = await service.unstick(input());
+
+    expect(outcome.kind).toBe('cleared');
   });
 });
 
@@ -395,6 +562,64 @@ describe('classifyOperatorUnstickOutcome', () => {
         taskMerged: true
       })
     ).toBe('cleared');
+  });
+
+  it('treats cleared marker + HEAD move as rebase/tip clear evidence', () => {
+    expect(
+      classifyOperatorUnstickOutcome({
+        ...base,
+        agentOutput: 'OUTCOME: cleared — rebased tip',
+        headMoved: true
+      })
+    ).toBe('cleared');
+  });
+
+  it('does not clear from a bare cleared marker alone', () => {
+    expect(
+      classifyOperatorUnstickOutcome({
+        ...base,
+        agentOutput: 'OUTCOME: cleared'
+      })
+    ).toBe('abstained');
+  });
+
+  it('does not clear from HEAD movement alone', () => {
+    expect(
+      classifyOperatorUnstickOutcome({
+        ...base,
+        agentOutput: 'rewrote something',
+        headMoved: true
+      })
+    ).toBe('abstained');
+  });
+
+  it('routes policy-rewrite attempts to abstained even with clear claims', () => {
+    expect(
+      classifyOperatorUnstickOutcome({
+        ...base,
+        agentOutput: 'OUTCOME: cleared — edited specs',
+        headMoved: true,
+        policyRewriteAttempt: true
+      })
+    ).toBe('abstained');
+  });
+
+  it('does not treat cannot-resume language as resume evidence', () => {
+    expect(
+      classifyOperatorUnstickOutcome({
+        ...base,
+        agentOutput: 'OUTCOME: cleared — cannot resume the run'
+      })
+    ).toBe('abstained');
+  });
+
+  it('classifies abstain naming smoke/veto as authority-bound', () => {
+    expect(
+      classifyOperatorUnstickOutcome({
+        ...base,
+        agentOutput: 'abstained — cannot waive live smoke / veto'
+      })
+    ).toBe('authority-bound');
   });
 
   it('marks the last attempt exhausted when nothing cleared', () => {

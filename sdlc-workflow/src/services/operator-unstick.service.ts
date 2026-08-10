@@ -12,6 +12,7 @@ import {
 } from '../types';
 import { agentSpendK } from '../utils/agent-spend';
 import { buildOperatorUnstickPrompt } from '../utils/operator-unstick-prompt';
+import { isSpecTreePath } from '../utils/spec-path';
 import {
   GATE_FIX_ATTEMPT_LIMIT,
   remediableVerdicts,
@@ -87,8 +88,39 @@ export const suppressesBlockingEscalate = (
 ): boolean => kind === 'cleared' || kind === 'risky-proceed';
 
 /**
- * Classify the agent turn into a durable outcome. Prefers explicit markers
- * in agent output; falls back to merge/head evidence and attempt budget.
+ * True when agent output claims a clear without the negative forms that
+ * accompany abstain / still-stuck language.
+ */
+const hasClearedMarker = (text: string): boolean => {
+  const lower = text.toLowerCase();
+  if (/\bnot\s+cleared\b/i.test(lower) || /\babstain/i.test(text)) {
+    return false;
+  }
+  return (
+    /\boutcome\s*[:=]\s*cleared\b/i.test(text) || /\bcleared\b/i.test(text)
+  );
+};
+
+/**
+ * True when agent output reports resume (or resume-path readiness) rather
+ * than inability to resume.
+ */
+const hasResumeEvidence = (text: string): boolean => {
+  const lower = text.toLowerCase();
+  if (/\b(?:cannot|can't|unable to)\s+resume\b/i.test(lower)) {
+    return false;
+  }
+  return /\bresumed?\b/i.test(text) || /\bresume\s+path\s+ready\b/i.test(text);
+};
+
+/**
+ * Classify the agent turn into a durable outcome.
+ *
+ * @remarks
+ * `cleared` requires blocker-clear evidence — `mergedSha` / record-merge,
+ * a cleared marker plus HEAD movement (rebase / integration tip), or a
+ * cleared marker plus resume evidence. A bare `cleared` marker or any HEAD
+ * movement alone is not enough (committed policy rewrites also move HEAD).
  */
 export const classifyOperatorUnstickOutcome = (args: {
   agentOutput: string;
@@ -139,26 +171,15 @@ export const classifyOperatorUnstickOutcome = (args: {
     return 'risky-proceed';
   }
 
-  if (
-    /\boutcome\s*[:=]\s*cleared\b/i.test(text) ||
-    (/\bcleared\b/i.test(text) &&
-      !/\bnot\s+cleared\b/i.test(lower) &&
-      !/\babstain/i.test(text))
-  ) {
-    return 'cleared';
-  }
+  const clearedMarker = hasClearedMarker(text);
+  const resumeEvidence = hasResumeEvidence(text);
+  // Durable evidence only — never bare marker or HEAD move alone.
+  const blockerClearEvidence =
+    args.taskMerged ||
+    (clearedMarker && args.headMoved) ||
+    (clearedMarker && resumeEvidence);
 
-  // Out-of-band merge + record-merge left durable evidence on run state.
-  if (args.taskMerged) {
-    return 'cleared';
-  }
-
-  // Rebase / integration tip that moved HEAD without an abstain signal.
-  if (
-    args.headMoved &&
-    !/\babstain(?:ed|ing)?\b/i.test(text) &&
-    !/\bauthority-bound\b/i.test(text)
-  ) {
+  if (blockerClearEvidence) {
     return 'cleared';
   }
 
@@ -187,6 +208,38 @@ export class OperatorUnstickService implements IOperatorUnstickService {
     private readonly _runStateRepo: IRunStateRepository
   ) {}
 
+  /**
+   * Dispatch one headless operator-unstick agent turn after remediable gate
+   * remediation has exhausted (SPEC-PRD-0025-P1 T-03).
+   *
+   * @remarks
+   * **Purpose.** Give the local supervise/daemon path a bounded chance to
+   * clear routine sticks (rebase / integration tip, out-of-band merge +
+   * `record-merge`, resume) before posting a human-blocking ACTION REQUIRED
+   * issue. {@link IAgentRunnerRepository.run} is invoked with cwd + prompt
+   * only — no chat/session object.
+   *
+   * **Invariants.**
+   * - Escalate tier is set to `unstick-in-flight` for the duration of the
+   *   turn so status/monitor can show the wave is not yet human-blocked.
+   * - When HEAD moves, the tip is pushed so re-selection / resume sees it
+   *   (mirrors gate-remediation); a push failure is not treated as a clear.
+   * - Mid-run `specs/**` or envelope-limit rewrites — dirty **or** committed
+   *   during the turn — route to abstain / risky-proceed, never `cleared`.
+   * - `cleared` / `risky-proceed` suppress blocking escalate for the wave;
+   *   `abstained` / `exhausted` / `authority-bound` fall through to the
+   *   existing escalate + issue-state watch path.
+   *
+   * **Failure modes.**
+   * - `skipped` — no remediable findings, or envelope token budget already
+   *   spent (no attempt recorded).
+   * - `exhausted` — per-task unstick attempt budget already spent; tier
+   *   becomes `halted-escalated` without dispatching.
+   * - Agent throw / empty failure — output is classified; typically
+   *   `abstained` unless the attempt budget is spent.
+   * - Policy-rewrite detection or missing blocker-clear evidence — never
+   *   suppress ACTION REQUIRED for that wave.
+   */
   async unstick(input: OperatorUnstickInput): Promise<OperatorUnstickResult> {
     const taskId = input.task.id;
     const targets = remediableVerdicts(input.verdicts);
@@ -286,7 +339,9 @@ export class OperatorUnstickService implements IOperatorUnstickService {
     const taskMerged =
       (input.state.taskResults[taskId]?.mergedSha ?? '').length > 0;
     const policyRewriteAttempt = this.detectPolicyRewriteAttempt(
-      input.worktreePath
+      input.worktreePath,
+      before,
+      after
     );
 
     const kind = classifyOperatorUnstickOutcome({
@@ -358,9 +413,38 @@ export class OperatorUnstickService implements IOperatorUnstickService {
 
   /**
    * Detect an unstick turn that tried to rewrite Approved policy (mid-run
-   * specs/ closeout or envelope limits) via dirty paths in the worktree.
+   * `specs/**` closeout or envelope limits).
+   *
+   * @remarks
+   * Inspects both a dirty worktree **and** the committed range
+   * `beforeSha..afterSha`. A clean tree after a committed `specs/**` rewrite
+   * must still route to abstain — otherwise `headMoved` would look like a
+   * successful tip clear.
    */
-  private detectPolicyRewriteAttempt(worktreePath: string): boolean {
+  private detectPolicyRewriteAttempt(
+    worktreePath: string,
+    beforeSha: string,
+    afterSha: string
+  ): boolean {
+    if (this.dirtyPathsIndicatePolicyRewrite(worktreePath)) {
+      return true;
+    }
+    if (beforeSha === afterSha) {
+      return false;
+    }
+    try {
+      const diff = this._gitRepo.diffStat(worktreePath, beforeSha, afterSha);
+      if (diff.files.some(file => this.isPolicyRewritePath(file.path))) {
+        return true;
+      }
+      const text = this._gitRepo.diffText(worktreePath, beforeSha, afterSha);
+      return this.diffIndicatesEnvelopeLimitRewrite(text);
+    } catch {
+      return false;
+    }
+  }
+
+  private dirtyPathsIndicatePolicyRewrite(worktreePath: string): boolean {
     let status = '';
     try {
       status = this._gitRepo.status(worktreePath);
@@ -375,14 +459,23 @@ export class OperatorUnstickService implements IOperatorUnstickService {
       const rel = pathPart.includes(' -> ')
         ? (pathPart.split(' -> ').pop() ?? pathPart)
         : pathPart;
-      if (
-        /(^|\/)specs\//.test(rel) ||
-        /maxDiffLines/.test(rel) ||
-        /allowedPaths/.test(rel)
-      ) {
+      if (this.isPolicyRewritePath(rel)) {
         return true;
       }
     }
     return false;
+  }
+
+  private isPolicyRewritePath(rel: string): boolean {
+    return (
+      isSpecTreePath(rel) ||
+      /maxDiffLines/.test(rel) ||
+      /allowedPaths/.test(rel)
+    );
+  }
+
+  /** Added envelope-limit lines in a committed diff (content, not path). */
+  private diffIndicatesEnvelopeLimitRewrite(diffText: string): boolean {
+    return /^\+.*(maxDiffLines|allowedPaths)/m.test(diffText);
   }
 }
