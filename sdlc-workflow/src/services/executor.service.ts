@@ -514,6 +514,9 @@ export class ExecutorService implements IExecutorService {
       tokenSpendK: 0,
       ciFixAttempts: {},
       gateFixAttempts: {},
+      operatorUnstickAttempts: {},
+      operatorUnstickOutcomes: {},
+      escalateTiers: {},
       remediations: {},
       mergeBlockedRetries: 0,
       updatedAt: now

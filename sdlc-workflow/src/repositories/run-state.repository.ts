@@ -4,8 +4,10 @@ import path from 'path';
 import { WORKFLOW_TOKENS } from '../tokens';
 import {
   CriterionVerdict,
+  EscalateTier,
   ExceptionEntry,
   GateVerdict,
+  OperatorUnstickOutcome,
   RunState,
   SandboxRecord,
   StepResult,
@@ -88,6 +90,37 @@ export interface IRunStateRepository {
     taskId: string
   ): number;
   /**
+   * SPEC-PRD-0025-P1 T-01: increment the task's operator-unstick counter
+   * and persist. Returns the new count. Persisted so resume never refills
+   * the unstick budget.
+   */
+  recordOperatorUnstickAttempt(
+    runsDir: string,
+    state: RunState,
+    taskId: string
+  ): number;
+  /**
+   * SPEC-PRD-0025-P1 T-01: record the latest operator-unstick outcome for
+   * a task and persist.
+   */
+  recordOperatorUnstickOutcome(
+    runsDir: string,
+    state: RunState,
+    taskId: string,
+    outcome: OperatorUnstickOutcome,
+    detail?: string
+  ): void;
+  /**
+   * SPEC-PRD-0025-P1 T-01: set the task's escalate tier for status
+   * surfaces and persist.
+   */
+  recordEscalateTier(
+    runsDir: string,
+    state: RunState,
+    taskId: string,
+    tier: EscalateTier
+  ): void;
+  /**
    * Wave 0: record the head SHA a remediation round produced. Task
    * re-selection consults this to reopen a task whose phase gate breached
    * before the fix landed.
@@ -142,6 +175,9 @@ export class RunStateRepository implements IRunStateRepository {
     state.tokenSpendK = state.tokenSpendK ?? 0;
     state.ciFixAttempts = state.ciFixAttempts ?? {};
     state.gateFixAttempts = state.gateFixAttempts ?? {};
+    state.operatorUnstickAttempts = state.operatorUnstickAttempts ?? {};
+    state.operatorUnstickOutcomes = state.operatorUnstickOutcomes ?? {};
+    state.escalateTiers = state.escalateTiers ?? {};
     state.remediations = state.remediations ?? {};
     state.mergeBlockedRetries = state.mergeBlockedRetries ?? 0;
     // #37 launch record — older states only had updatedAt.
@@ -332,6 +368,47 @@ export class RunStateRepository implements IRunStateRepository {
     state.gateFixAttempts[taskId] = next;
     this.save(runsDir, state);
     return next;
+  }
+
+  recordOperatorUnstickAttempt(
+    runsDir: string,
+    state: RunState,
+    taskId: string
+  ): number {
+    state.operatorUnstickAttempts = state.operatorUnstickAttempts ?? {};
+    const next = (state.operatorUnstickAttempts[taskId] ?? 0) + 1;
+    state.operatorUnstickAttempts[taskId] = next;
+    this.save(runsDir, state);
+    return next;
+  }
+
+  recordOperatorUnstickOutcome(
+    runsDir: string,
+    state: RunState,
+    taskId: string,
+    outcome: OperatorUnstickOutcome,
+    detail?: string
+  ): void {
+    state.operatorUnstickOutcomes = state.operatorUnstickOutcomes ?? {};
+    state.operatorUnstickAttempts = state.operatorUnstickAttempts ?? {};
+    state.operatorUnstickOutcomes[taskId] = {
+      outcome,
+      attempt: state.operatorUnstickAttempts[taskId] ?? 0,
+      recordedAt: new Date().toISOString(),
+      ...(detail !== undefined ? { detail } : {})
+    };
+    this.save(runsDir, state);
+  }
+
+  recordEscalateTier(
+    runsDir: string,
+    state: RunState,
+    taskId: string,
+    tier: EscalateTier
+  ): void {
+    state.escalateTiers = state.escalateTiers ?? {};
+    state.escalateTiers[taskId] = tier;
+    this.save(runsDir, state);
   }
 
   recordRemediation(

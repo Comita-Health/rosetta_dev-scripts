@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **sdlc-workflow (SPEC-PRD-0025-P1 T-01):** Persist operator-unstick attempt
+  budget and outcome model on run state. `state.json` carries per-task
+  `operatorUnstickAttempts`, latest `operatorUnstickOutcomes` (`cleared` |
+  `abstained` | `risky-proceed` | `authority-bound` | `exhausted`), and
+  `escalateTiers` (`unstick-in-flight` | `advisory-risky` |
+  `halted-escalated`) via `RunStateRepository` — mirrored on
+  `gateFixAttempts` so resume cannot refill the unstick budget.
+  `OperatorUnstickService` typed stub registered for DI; dispatch in T-03.
+
 - **sdlc-workflow (SPEC-PRD-0020-P2 T-05):** Retire the bash continuity
   StartInterval LaunchAgent. `team-setup` template scripts
   `sdlc-continuity-daemon.sh` and `install-continuity-daemon.sh` are

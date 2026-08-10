@@ -27,6 +27,9 @@ const makeState = (): RunState => ({
   tokenSpendK: 0,
   ciFixAttempts: {},
   gateFixAttempts: {},
+  operatorUnstickAttempts: {},
+  operatorUnstickOutcomes: {},
+  escalateTiers: {},
   remediations: {},
   mergeBlockedRetries: 0,
   updatedAt: 'x'
@@ -398,8 +401,102 @@ describe('RunStateRepository', () => {
 
       const loaded = repo.load(dir, 'run-legacy');
       expect(loaded?.gateFixAttempts).toEqual({});
+      expect(loaded?.operatorUnstickAttempts).toEqual({});
+      expect(loaded?.operatorUnstickOutcomes).toEqual({});
+      expect(loaded?.escalateTiers).toEqual({});
       expect(loaded?.remediations).toEqual({});
       expect(loaded?.mergeBlockedRetries).toBe(0);
+    });
+  });
+
+  // SPEC-PRD-0025-P1 T-01: operator-unstick budget + outcome + escalate tier.
+  describe('operator-unstick persistence (SPEC-PRD-0025-P1 T-01)', () => {
+    it('persists per-task unstick attempt counts and latest outcome across save/load', () => {
+      const state = makeState();
+      repo.save(dir, state);
+
+      expect(repo.recordOperatorUnstickAttempt(dir, state, 'T-01')).toBe(1);
+      repo.recordOperatorUnstickOutcome(
+        dir,
+        state,
+        'T-01',
+        'abstained',
+        'needs human rebase'
+      );
+      expect(repo.recordOperatorUnstickAttempt(dir, state, 'T-01')).toBe(2);
+      repo.recordOperatorUnstickOutcome(dir, state, 'T-01', 'cleared');
+      expect(repo.recordOperatorUnstickAttempt(dir, state, 'T-02')).toBe(1);
+      repo.recordOperatorUnstickOutcome(
+        dir,
+        state,
+        'T-02',
+        'risky-proceed',
+        'force-with-lease tip'
+      );
+
+      // Fresh load: resume must not reset counts or overwrite latest outcomes.
+      const loaded = repo.load(dir, 'run-1');
+      expect(loaded?.operatorUnstickAttempts).toEqual({
+        'T-01': 2,
+        'T-02': 1
+      });
+      expect(loaded?.operatorUnstickOutcomes['T-01']).toMatchObject({
+        outcome: 'cleared',
+        attempt: 2
+      });
+      expect(loaded?.operatorUnstickOutcomes['T-02']).toMatchObject({
+        outcome: 'risky-proceed',
+        attempt: 1,
+        detail: 'force-with-lease tip'
+      });
+      expect(loaded?.operatorUnstickOutcomes['T-01']?.recordedAt).toMatch(
+        /^\d{4}-/
+      );
+    });
+
+    it('round-trips escalate-tier values through RunStateRepository', () => {
+      const state = makeState();
+      repo.save(dir, state);
+
+      repo.recordEscalateTier(dir, state, 'T-01', 'unstick-in-flight');
+      repo.recordEscalateTier(dir, state, 'T-02', 'advisory-risky');
+      repo.recordEscalateTier(dir, state, 'T-03', 'halted-escalated');
+
+      const loaded = repo.load(dir, 'run-1');
+      expect(loaded?.escalateTiers).toEqual({
+        'T-01': 'unstick-in-flight',
+        'T-02': 'advisory-risky',
+        'T-03': 'halted-escalated'
+      });
+
+      // Latest write wins for a task; prior tiers for other tasks stay.
+      repo.recordEscalateTier(dir, state, 'T-01', 'halted-escalated');
+      expect(repo.load(dir, 'run-1')?.escalateTiers).toEqual({
+        'T-01': 'halted-escalated',
+        'T-02': 'advisory-risky',
+        'T-03': 'halted-escalated'
+      });
+    });
+
+    it('records a durable unstick attempt that a subsequent load still observes', () => {
+      const state = makeState();
+      repo.save(dir, state);
+
+      expect(repo.recordOperatorUnstickAttempt(dir, state, 'T-01')).toBe(1);
+
+      // Simulate a fresh process: new repository instance, load from disk.
+      const resumed = new RunStateRepository(new RunLockRepository());
+      const loaded = resumed.load(dir, 'run-1');
+      expect(loaded?.operatorUnstickAttempts['T-01']).toBe(1);
+
+      // Further increments continue from the persisted count — budget cannot refill.
+      expect(resumed.recordOperatorUnstickAttempt(dir, loaded!, 'T-01')).toBe(
+        2
+      );
+      expect(
+        new RunStateRepository(new RunLockRepository()).load(dir, 'run-1')
+          ?.operatorUnstickAttempts['T-01']
+      ).toBe(2);
     });
   });
 

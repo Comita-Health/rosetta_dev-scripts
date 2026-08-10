@@ -138,6 +138,10 @@ import {
   IGateRemediationService
 } from './services/gate-remediation.service';
 import {
+  OperatorUnstickService,
+  IOperatorUnstickService
+} from './services/operator-unstick.service';
+import {
   RetryExecutorService,
   IRetryExecutorService
 } from './services/retry-executor.service';
@@ -380,6 +384,9 @@ container
 container
   .bind<IGateRemediationService>(WORKFLOW_TOKENS.GateRemediationService)
   .to(GateRemediationService);
+container
+  .bind<IOperatorUnstickService>(WORKFLOW_TOKENS.OperatorUnstickService)
+  .to(OperatorUnstickService);
 container
   .bind<IRetryExecutorService>(WORKFLOW_TOKENS.RetryExecutorService)
   .to(RetryExecutorService);

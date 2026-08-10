@@ -26,6 +26,9 @@ const makeState = (): RunState => ({
   tokenSpendK: 0,
   ciFixAttempts: {},
   gateFixAttempts: {},
+  operatorUnstickAttempts: {},
+  operatorUnstickOutcomes: {},
+  escalateTiers: {},
   remediations: {},
   mergeBlockedRetries: 0,
   updatedAt: 'x'
@@ -150,6 +153,9 @@ describe('CiGateService (P3 T-03 live monitor + bounded fix cycle)', () => {
             return s.tokenSpendK;
           }),
         recordGateFixAttempt: jest.fn(),
+        recordOperatorUnstickAttempt: jest.fn(),
+        recordOperatorUnstickOutcome: jest.fn(),
+        recordEscalateTier: jest.fn(),
         recordRemediation: jest.fn(),
         recordMergeBlockedRetry: jest.fn(),
         invalidateSteps: jest.fn().mockReturnValue([])
