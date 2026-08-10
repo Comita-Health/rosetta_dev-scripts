@@ -392,10 +392,12 @@ out-of-band merge + `record-merge`, and resume via existing engine CLIs —
 not gate-remediation trim-the-diff. Cleared / risky-proceed suppress
 blocking ACTION REQUIRED for that wave; abstain / exhaust /
 authority-bound keep the escalate + issue-state resume path. `cleared`
-requires blocker-clear evidence (record-merge / `mergedSha`, cleared marker
-plus tip HEAD move, or cleared plus resume) — not a bare marker or HEAD
-move alone — and committed mid-run `specs/**` / envelope-limit rewrites
-route to abstain even when the worktree is clean. Budget lives in
+requires durable blocker-clear evidence (disk-reloaded `mergedSha` /
+record-merge, or an explicit cleared outcome marker plus a successful tip
+HEAD move) — never agent text / resume wording alone, a bare `cleared`
+token, or HEAD move alone. Committed mid-run `specs/**` / envelope-limit
+rewrites route to abstain even when the worktree is clean; policy detection
+is fail-closed when git status/diff inspection throws. Budget lives in
 `operatorUnstickAttempts`, outcomes in `operatorUnstickOutcomes`, status
 tiers in `escalateTiers` — durable across resume so the unstick budget
 cannot refill.

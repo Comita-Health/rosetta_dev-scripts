@@ -88,39 +88,35 @@ export const suppressesBlockingEscalate = (
 ): boolean => kind === 'cleared' || kind === 'risky-proceed';
 
 /**
- * True when agent output claims a clear without the negative forms that
- * accompany abstain / still-stuck language.
+ * True when agent output carries an explicit cleared outcome marker, not
+ * negatives like "not yet cleared" / "uncleared".
+ *
+ * @remarks
+ * A bare `/\bcleared\b/` match is intentionally rejected — strings such as
+ * "not yet cleared … resume later" must not suppress ACTION REQUIRED.
  */
 const hasClearedMarker = (text: string): boolean => {
   const lower = text.toLowerCase();
-  if (/\bnot\s+cleared\b/i.test(lower) || /\babstain/i.test(text)) {
+  if (
+    /\bnot(?:\s+\w+){0,3}\s+cleared\b/i.test(lower) ||
+    /\b(?:un|never\s+)cleared\b/i.test(lower) ||
+    /\babstain/i.test(text)
+  ) {
     return false;
   }
-  return (
-    /\boutcome\s*[:=]\s*cleared\b/i.test(text) || /\bcleared\b/i.test(text)
-  );
-};
-
-/**
- * True when agent output reports resume (or resume-path readiness) rather
- * than inability to resume.
- */
-const hasResumeEvidence = (text: string): boolean => {
-  const lower = text.toLowerCase();
-  if (/\b(?:cannot|can't|unable to)\s+resume\b/i.test(lower)) {
-    return false;
-  }
-  return /\bresumed?\b/i.test(text) || /\bresume\s+path\s+ready\b/i.test(text);
+  return /\boutcome\s*[:=]\s*cleared\b/i.test(text);
 };
 
 /**
  * Classify the agent turn into a durable outcome.
  *
  * @remarks
- * `cleared` requires blocker-clear evidence — `mergedSha` / record-merge,
- * a cleared marker plus HEAD movement (rebase / integration tip), or a
- * cleared marker plus resume evidence. A bare `cleared` marker or any HEAD
- * movement alone is not enough (committed policy rewrites also move HEAD).
+ * `cleared` requires durable blocker-clear evidence — `mergedSha` /
+ * record-merge on run state (reloaded from disk after the agent turn), or
+ * an explicit cleared outcome marker plus a successful HEAD move (rebase /
+ * integration tip). Agent text alone (cleared marker + resume wording) is
+ * never enough; a bare `cleared` token or HEAD movement alone is not
+ * enough (committed policy rewrites also move HEAD).
  */
 export const classifyOperatorUnstickOutcome = (args: {
   agentOutput: string;
@@ -172,12 +168,9 @@ export const classifyOperatorUnstickOutcome = (args: {
   }
 
   const clearedMarker = hasClearedMarker(text);
-  const resumeEvidence = hasResumeEvidence(text);
-  // Durable evidence only — never bare marker or HEAD move alone.
+  // Durable evidence only — never agent text / resume wording alone.
   const blockerClearEvidence =
-    args.taskMerged ||
-    (clearedMarker && args.headMoved) ||
-    (clearedMarker && resumeEvidence);
+    args.taskMerged || (clearedMarker && args.headMoved);
 
   if (blockerClearEvidence) {
     return 'cleared';
@@ -226,6 +219,12 @@ export class OperatorUnstickService implements IOperatorUnstickService {
    *   (mirrors gate-remediation); a push failure is not treated as a clear.
    * - Mid-run `specs/**` or envelope-limit rewrites — dirty **or** committed
    *   during the turn — route to abstain / risky-proceed, never `cleared`.
+   *   Policy detection is fail-closed: when `status` / `diffStat` /
+   *   `diffText` throws, the turn is treated as a policy-rewrite attempt
+   *   rather than a silent clear.
+   * - After the agent turn, `mergedSha` is reloaded from disk onto the
+   *   in-memory {@link RunState} so a subprocess `record-merge` is visible
+   *   even when HEAD did not move.
    * - `cleared` / `risky-proceed` suppress blocking escalate for the wave;
    *   `abstained` / `exhausted` / `authority-bound` fall through to the
    *   existing escalate + issue-state watch path.
@@ -237,8 +236,9 @@ export class OperatorUnstickService implements IOperatorUnstickService {
    *   becomes `halted-escalated` without dispatching.
    * - Agent throw / empty failure — output is classified; typically
    *   `abstained` unless the attempt budget is spent.
-   * - Policy-rewrite detection or missing blocker-clear evidence — never
-   *   suppress ACTION REQUIRED for that wave.
+   * - Policy-rewrite detection (including inspection errors) or missing
+   *   durable blocker-clear evidence — never suppress ACTION REQUIRED for
+   *   that wave.
    */
   async unstick(input: OperatorUnstickInput): Promise<OperatorUnstickResult> {
     const taskId = input.task.id;
@@ -336,6 +336,9 @@ export class OperatorUnstickService implements IOperatorUnstickService {
       }
     }
 
+    // Subprocess record-merge writes mergedSha to disk; the in-memory
+    // RunState the handler handed us will not see it unless we reload.
+    this.syncMergedShaFromDisk(input, taskId);
     const taskMerged =
       (input.state.taskResults[taskId]?.mergedSha ?? '').length > 0;
     const policyRewriteAttempt = this.detectPolicyRewriteAttempt(
@@ -412,6 +415,33 @@ export class OperatorUnstickService implements IOperatorUnstickService {
   }
 
   /**
+   * Copy `mergedSha` written by a subprocess (e.g. `record-merge`) from
+   * disk onto the caller's in-memory {@link RunState}.
+   */
+  private syncMergedShaFromDisk(
+    input: OperatorUnstickInput,
+    taskId: string
+  ): void {
+    const reloaded = this._runStateRepo.load(input.runsDir, input.state.runId);
+    if (reloaded === null) {
+      return;
+    }
+    const diskTask = reloaded.taskResults[taskId];
+    const diskMerged = diskTask?.mergedSha;
+    if (diskMerged !== undefined && diskMerged.length > 0) {
+      const mem = input.state.taskResults[taskId];
+      if (mem !== undefined) {
+        mem.mergedSha = diskMerged;
+      } else if (diskTask !== undefined) {
+        input.state.taskResults[taskId] = { ...diskTask };
+      }
+    }
+    if (reloaded.mergedSha !== undefined && reloaded.mergedSha.length > 0) {
+      input.state.mergedSha = reloaded.mergedSha;
+    }
+  }
+
+  /**
    * Detect an unstick turn that tried to rewrite Approved policy (mid-run
    * `specs/**` closeout or envelope limits).
    *
@@ -420,13 +450,23 @@ export class OperatorUnstickService implements IOperatorUnstickService {
    * `beforeSha..afterSha`. A clean tree after a committed `specs/**` rewrite
    * must still route to abstain — otherwise `headMoved` would look like a
    * successful tip clear.
+   *
+   * Fail-closed: when `status` / `diffStat` / `diffText` throws, return
+   * `true` so classification cannot grant `cleared` while the audit is
+   * blind (a committed mid-run specs/** rewrite that moved HEAD must not
+   * suppress ACTION REQUIRED).
    */
   private detectPolicyRewriteAttempt(
     worktreePath: string,
     beforeSha: string,
     afterSha: string
   ): boolean {
-    if (this.dirtyPathsIndicatePolicyRewrite(worktreePath)) {
+    try {
+      if (this.dirtyPathsIndicatePolicyRewrite(worktreePath)) {
+        return true;
+      }
+    } catch {
+      // Cannot audit the dirty tree — fail closed rather than assume clean.
       return true;
     }
     if (beforeSha === afterSha) {
@@ -440,17 +480,13 @@ export class OperatorUnstickService implements IOperatorUnstickService {
       const text = this._gitRepo.diffText(worktreePath, beforeSha, afterSha);
       return this.diffIndicatesEnvelopeLimitRewrite(text);
     } catch {
-      return false;
+      // HEAD moved but the committed range cannot be audited — fail closed.
+      return true;
     }
   }
 
   private dirtyPathsIndicatePolicyRewrite(worktreePath: string): boolean {
-    let status = '';
-    try {
-      status = this._gitRepo.status(worktreePath);
-    } catch {
-      return false;
-    }
+    const status = this._gitRepo.status(worktreePath);
     if (status.trim().length === 0) return false;
     const lines = status.split('\n').map(line => line.trimEnd());
     for (const line of lines) {

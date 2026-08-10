@@ -12,10 +12,11 @@
   Wired from `run.handler` `remediationRound` only when
   `GateRemediationService` returns skipped/failed for exhausted remediable
   reviewer|envelope findings. Policy-rewrite detection covers committed
-  mid-run `specs/**` / envelope-limit edits (not only a dirty tree), and
-  `cleared` requires blocker-clear evidence (`mergedSha` / record-merge,
-  cleared+HEAD move, or cleared+resume) — never a bare marker or HEAD move
-  alone.
+  mid-run `specs/**` / envelope-limit edits (not only a dirty tree; fail-closed
+  when git status/diff throws), and `cleared` requires durable blocker-clear
+  evidence (disk-reloaded `mergedSha` / record-merge, or cleared outcome
+  marker + HEAD move) — never agent text / resume wording alone, a bare
+  marker, or HEAD move alone.
 
 - **sdlc-workflow (SPEC-PRD-0025-P1 T-02):** Author `buildOperatorUnstickPrompt`
   with an explicit operator mandate (rebase/integration tip, out-of-band

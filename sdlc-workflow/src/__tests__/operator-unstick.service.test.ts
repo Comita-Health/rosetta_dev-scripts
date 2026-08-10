@@ -67,6 +67,7 @@ describe('OperatorUnstickService (SPEC-PRD-0025-P1 T-03)', () => {
   let recordEscalateTier: jest.Mock;
   let recordTokenSpend: jest.Mock;
   let save: jest.Mock;
+  let load: jest.Mock;
 
   const input = (over: Record<string, unknown> = {}) => ({
     worktreePath: '/runs/run-1/worktrees/T-01',
@@ -113,6 +114,8 @@ describe('OperatorUnstickService (SPEC-PRD-0025-P1 T-03)', () => {
         return s.tokenSpendK;
       });
     save = jest.fn();
+    // Default: disk mirrors the in-memory state (no subprocess merge).
+    load = jest.fn().mockImplementation(() => state);
 
     const container = new Container();
     container
@@ -139,6 +142,7 @@ describe('OperatorUnstickService (SPEC-PRD-0025-P1 T-03)', () => {
     container
       .bind<IRunStateRepository>(WORKFLOW_TOKENS.RunStateRepository)
       .toConstantValue({
+        load,
         recordOperatorUnstickAttempt,
         recordOperatorUnstickOutcome,
         recordEscalateTier,
@@ -219,6 +223,42 @@ describe('OperatorUnstickService (SPEC-PRD-0025-P1 T-03)', () => {
     const outcome = await service.unstick(input());
 
     expect(outcome.kind).toBe('cleared');
+  });
+
+  it('reloads mergedSha from disk after the agent turn (subprocess record-merge)', async () => {
+    // In-memory state has no merge; subprocess record-merge wrote disk only.
+    headSha.mockReset().mockReturnValue('same-sha');
+    agentRun.mockResolvedValue({
+      ok: true,
+      output: 'OUTCOME: cleared — recorded out-of-band merge via record-merge'
+    });
+    state.taskResults = {
+      'T-01': {
+        taskId: 'T-01',
+        status: 'completed',
+        branch: 'sdlc/run-1/T-01',
+        worktreePath: '/runs/run-1/worktrees/T-01',
+        recordedAt: 'x'
+      }
+    };
+    load.mockImplementation(() => ({
+      ...state,
+      mergedSha: 'disk-merge-sha',
+      taskResults: {
+        'T-01': {
+          ...state.taskResults['T-01'],
+          mergedSha: 'disk-merge-sha'
+        }
+      }
+    }));
+
+    const outcome = await service.unstick(input());
+
+    expect(load).toHaveBeenCalledWith('/runs', 'run-1');
+    expect(outcome.kind).toBe('cleared');
+    expect(state.taskResults['T-01'].mergedSha).toBe('disk-merge-sha');
+    expect(state.mergedSha).toBe('disk-merge-sha');
+    expect(suppressesBlockingEscalate(outcome.kind)).toBe(true);
   });
 
   it('records authority-bound and sets halted-escalated without clearing the wave', async () => {
@@ -355,7 +395,7 @@ describe('OperatorUnstickService (SPEC-PRD-0025-P1 T-03)', () => {
     expect(suppressesBlockingEscalate(outcome.kind)).toBe(false);
   });
 
-  it('classifies cleared marker + resume evidence without HEAD move as cleared', async () => {
+  it('does not clear from cleared marker + resume wording without durable state', async () => {
     headSha.mockReset().mockReturnValue('same-sha');
     agentRun.mockResolvedValue({
       ok: true,
@@ -364,7 +404,21 @@ describe('OperatorUnstickService (SPEC-PRD-0025-P1 T-03)', () => {
 
     const outcome = await service.unstick(input());
 
-    expect(outcome.kind).toBe('cleared');
+    expect(outcome.kind).toBe('abstained');
+    expect(suppressesBlockingEscalate(outcome.kind)).toBe(false);
+  });
+
+  it('does not treat "not yet cleared … resume later" as a cleared marker', async () => {
+    headSha.mockReset().mockReturnValue('same-sha');
+    agentRun.mockResolvedValue({
+      ok: true,
+      output: 'not yet cleared — will resume later'
+    });
+
+    const outcome = await service.unstick(input());
+
+    expect(outcome.kind).toBe('abstained');
+    expect(suppressesBlockingEscalate(outcome.kind)).toBe(false);
   });
 
   it('meters token spend even when the agent dispatch throws', async () => {
@@ -444,7 +498,7 @@ describe('OperatorUnstickService (SPEC-PRD-0025-P1 T-03)', () => {
     expect(outcome.detail).toContain('agent dispatch failed');
   });
 
-  it('ignores committed-range inspection errors without false policy hits', async () => {
+  it('fail-closes committed-range inspection errors to abstained (not cleared)', async () => {
     diffStat.mockImplementation(() => {
       throw new Error('git diff failed');
     });
@@ -455,11 +509,13 @@ describe('OperatorUnstickService (SPEC-PRD-0025-P1 T-03)', () => {
 
     const outcome = await service.unstick(input());
 
-    // HEAD moved + cleared marker, and policy detection failed closed → cleared.
-    expect(outcome.kind).toBe('cleared');
+    // HEAD moved but the committed range cannot be audited — must not
+    // suppress ACTION REQUIRED (a specs/** rewrite may be invisible).
+    expect(outcome.kind).toBe('abstained');
+    expect(suppressesBlockingEscalate(outcome.kind)).toBe(false);
   });
 
-  it('treats status() failures as no dirty policy rewrite', async () => {
+  it('fail-closes status() failures to abstained (not cleared)', async () => {
     status.mockImplementation(() => {
       throw new Error('status unavailable');
     });
@@ -470,7 +526,8 @@ describe('OperatorUnstickService (SPEC-PRD-0025-P1 T-03)', () => {
 
     const outcome = await service.unstick(input());
 
-    expect(outcome.kind).toBe('cleared');
+    expect(outcome.kind).toBe('abstained');
+    expect(suppressesBlockingEscalate(outcome.kind)).toBe(false);
   });
 });
 
@@ -604,11 +661,21 @@ describe('classifyOperatorUnstickOutcome', () => {
     ).toBe('abstained');
   });
 
-  it('does not treat cannot-resume language as resume evidence', () => {
+  it('does not clear from cleared marker + resume wording alone', () => {
     expect(
       classifyOperatorUnstickOutcome({
         ...base,
-        agentOutput: 'OUTCOME: cleared — cannot resume the run'
+        agentOutput: 'OUTCOME: cleared — resume path ready via launch.json'
+      })
+    ).toBe('abstained');
+  });
+
+  it('does not clear from "not yet cleared … resume later"', () => {
+    expect(
+      classifyOperatorUnstickOutcome({
+        ...base,
+        agentOutput: 'not yet cleared — will resume later',
+        headMoved: true
       })
     ).toBe('abstained');
   });
