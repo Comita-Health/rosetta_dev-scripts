@@ -28,10 +28,10 @@ Add a ContinuityService (new `sdlc-workflow/src/services/continuity.service.ts`,
 
 ### Acceptance criteria
 
-- [ ] test: when a fixture unfinished run has a dead supervise.pid and a valid launch.json, one continuity tick relaunches supervise, writes a relaunch line to the run monitor or supervise log, and commits exactly one supervisor-restarted wake via the shared inbox writer
-- [ ] test: a finished run (all tasks merged per engine run-completion predicates) or a run with unresolved needs-human blockers is never relaunched
-- [ ] test: continuity tick constructs no chat or conversation object and performs no deploy or Draft→Approved transition
-- [ ] agent: killing a detached run supervisor mid-wave against a live daemon produces an automatic relaunch within one daemon tick with the relaunch recorded in the run monitor log and a wake present in the workspace inbox
+- [x] test: when a fixture unfinished run has a dead supervise.pid and a valid launch.json, one continuity tick relaunches supervise, writes a relaunch line to the run monitor or supervise log, and commits exactly one supervisor-restarted wake via the shared inbox writer
+- [x] test: a finished run (all tasks merged per engine run-completion predicates) or a run with unresolved needs-human blockers is never relaunched
+- [x] test: continuity tick constructs no chat or conversation object and performs no deploy or Draft→Approved transition
+- [x] agent: killing a detached run supervisor mid-wave against a live daemon produces an automatic relaunch within one daemon tick with the relaunch recorded in the run monitor log and a wake present in the workspace inbox
 
 ## Task T-02: Per-run stale-agent kill continuity module
 
@@ -43,9 +43,9 @@ Implement stale-agent detection as a ContinuityService submodule or sibling `sdl
 
 ### Acceptance criteria
 
-- [ ] test: an implementation heartbeat older than the stall threshold for a given runId causes exactly one kill attempt scoped to that runId and exactly one agent-stalled wake
-- [ ] test: a healthy or non-implementation heartbeat does not kill any process and does not emit a wake
-- [ ] test: after a stall wake is emitted, repeated ticks do not re-kill or re-emit until the heartbeat recovers and a new stall occurs
+- [x] test: an implementation heartbeat older than the stall threshold for a given runId causes exactly one kill attempt scoped to that runId and exactly one agent-stalled wake
+- [x] test: a healthy or non-implementation heartbeat does not kill any process and does not emit a wake
+- [x] test: after a stall wake is emitted, repeated ticks do not re-kill or re-emit until the heartbeat recovers and a new stall occurs
 
 ## Task T-03: Abandoned-run flagging and blocker-close wake via engine readers
 
@@ -57,10 +57,10 @@ Port abandoned-run and blocker-clear detection out of bash into the continuity t
 
 ### Acceptance criteria
 
-- [ ] test: a dead-supervisor unfinished run idle beyond the abandoned threshold emits exactly one abandoned wake and is not relaunched
-- [ ] test: when engine blockers report resumable after needs-human issues close, a blocker-cleared or closed wake is committed on the shared inbox path used by GitHub watches
-- [ ] test: continuity abandoned/blocker modules call engine state readers / EngineResumeWakeAction rather than duplicating sdlc-continuity-daemon.sh shell logic, enforced by a module-boundary or source-contract test
-- [ ] test: continuity modules watch run/blocker outcomes only and expose no API that performs deploys or Draft→Approved
+- [x] test: a dead-supervisor unfinished run idle beyond the abandoned threshold emits exactly one abandoned wake and is not relaunched
+- [x] test: when engine blockers report resumable after needs-human issues close, a blocker-cleared or closed wake is committed on the shared inbox path used by GitHub watches
+- [x] test: continuity abandoned/blocker modules call engine state readers / EngineResumeWakeAction rather than duplicating sdlc-continuity-daemon.sh shell logic, enforced by a module-boundary or source-contract test
+- [x] test: continuity modules watch run/blocker outcomes only and expose no API that performs deploys or Draft→Approved
 
 ## Task T-04: Loud-failure semantics for poll errors and process exits
 
@@ -72,10 +72,10 @@ Extend PollSchedulerService / wake commit so a watch that exceeds the Phase-1 co
 
 ### Acceptance criteria
 
-- [ ] test: after the configured consecutive poll-failure cap, the scheduler commits an operator-visible poll-error wake for that watch and does not exit 0 from the failure path
-- [ ] test: re-failing the same degraded watch does not create duplicate poll-error wakes for the same watch and reason
-- [ ] test: simulated fatal daemon startup or unrecoverable tick failure returns a non-zero process exit code
-- [ ] agent: daemon status on a workspace with a force-failed adapter shows the watch as degraded and a corresponding poll-error wake in pending or consumed
+- [x] test: after the configured consecutive poll-failure cap, the scheduler commits an operator-visible poll-error wake for that watch and does not exit 0 from the failure path
+- [x] test: re-failing the same degraded watch does not create duplicate poll-error wakes for the same watch and reason
+- [x] test: simulated fatal daemon startup or unrecoverable tick failure returns a non-zero process exit code
+- [x] agent: daemon status on a workspace with a force-failed adapter shows the watch as degraded and a corresponding poll-error wake in pending or consumed
 
 ## Task T-05: Retire bash continuity daemon and cut over launchd
 
@@ -87,7 +87,7 @@ Retire `team-setup/templates/root/scripts/sdlc-continuity-daemon.sh` and `instal
 
 ### Acceptance criteria
 
-- [ ] test: the retired continuity install/daemon scripts no longer schedule a StartInterval relaunch loop (absent or exit non-zero with migration guidance; no live tick implementation remains)
-- [ ] test: daemon install for a workspace unloads or removes a fixture legacy com.rosetta.sdlc-daemon plist before loading the per-workspace KeepAlive agent
-- [ ] test: with the TypeScript continuity modules armed, a dead supervisor is relaunched by the per-workspace daemon path without invoking sdlc-continuity-daemon.sh
-- [ ] agent: after cutover on a scratch workspace, launchctl shows the per-workspace daemon label loaded with KeepAlive and no active com.rosetta.sdlc-daemon job
+- [x] test: the retired continuity install/daemon scripts no longer schedule a StartInterval relaunch loop (absent or exit non-zero with migration guidance; no live tick implementation remains)
+- [x] test: daemon install for a workspace unloads or removes a fixture legacy com.rosetta.sdlc-daemon plist before loading the per-workspace KeepAlive agent
+- [x] test: with the TypeScript continuity modules armed, a dead supervisor is relaunched by the per-workspace daemon path without invoking sdlc-continuity-daemon.sh
+- [x] agent: after cutover on a scratch workspace, launchctl shows the per-workspace daemon label loaded with KeepAlive and no active com.rosetta.sdlc-daemon job
