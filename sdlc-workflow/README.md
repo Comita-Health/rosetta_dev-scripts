@@ -385,14 +385,25 @@ is instructed to **reduce the diff**, never to raise `maxDiffLines` — a gate
 that negotiates its own threshold is not a gate. Each round is recorded in
 `state.remediations` and a `[remediate] <task> …` line in `monitor.log`.
 After remediable remediation exhausts, Phase 1 (PRD-0025) dispatches a
-separate operator-unstick turn whose prompt
+separate headless operator-unstick turn (`OperatorUnstickService`, wired
+from `run.handler` `remediationRound` — no chat/session) whose prompt
 (`utils/operator-unstick-prompt.ts`) mandates rebase/integration tip,
 out-of-band merge + `record-merge`, and resume via existing engine CLIs —
-not gate-remediation trim-the-diff. Authority-bound acts abstain rather
-than silently rewriting Approved policy. Budget lives in
-`operatorUnstickAttempts`, outcomes in `operatorUnstickOutcomes`, status
-tiers in `escalateTiers` — durable across resume so the unstick budget
-cannot refill.
+not gate-remediation trim-the-diff. Cleared / risky-proceed suppress
+blocking ACTION REQUIRED for that wave; abstain / exhaust /
+authority-bound keep the escalate + issue-state resume path. `cleared`
+requires durable blocker-clear evidence (disk-reloaded `mergedSha` /
+record-merge, or an explicit `OUTCOME: cleared` marker plus a successful
+tip HEAD move) — never agent text / resume wording alone, a bare
+`cleared` token, or HEAD move alone. The unstick prompt instructs that
+`OUTCOME: <kind>` syntax so a successful mandate #1 rebase is classifiable.
+Committed mid-run `specs/**` / envelope-limit rewrites — and fail-closed
+git status/diff inspection throws — always route to abstain (never
+`risky-proceed` from agent self-authorization). Dispatch preconditions on
+exhausted `gateFixAttempts` only — token-budget skips do not enter the
+unstick path. Budget lives in `operatorUnstickAttempts`, outcomes in
+`operatorUnstickOutcomes`, status tiers in `escalateTiers` — durable
+across resume so the unstick budget cannot refill.
 
 **Merge-blocked retry.** The supervisor exited on `merge-blocked` 28 times
 across 79 waves, each ending the process. It now retries up to
@@ -978,9 +989,16 @@ Handler / Service / Repository with InversifyJS (workspace rule):
   (`utils/gate-fix-prompt.ts`).
 - `utils/operator-unstick-prompt.ts` — SPEC-PRD-0025-P1 T-02: headless
   operator-unstick mandate (rebase/integration tip, out-of-band merge +
-  `record-merge`, resume) distinct from gate-fix; abstain on
-  Draft→Approved, live smoke/veto, PHI, envelope widening, and mid-run
-  `specs/**` closeout rather than silent policy rewrite.
+  `record-merge`, resume) distinct from gate-fix; instructs
+  `OUTCOME: cleared` / `abstained` / `authority-bound` markers the
+  classifier matches; abstain on Draft→Approved, live smoke/veto, PHI,
+  envelope widening, and mid-run `specs/**` closeout rather than silent
+  policy rewrite.
+- `services/operator-unstick.service.ts` — SPEC-PRD-0025-P1 T-03: headless
+  dispatch after remediable `gateFixAttempts` exhaust (not token-budget
+  skips); cleared/risky-proceed suppress blocking escalate; policy
+  rewrites and audit-blind turns always abstain; abstain/exhaust/
+  authority-bound keep the ACTION REQUIRED + issue-state resume path.
 - `services/escalation.service.ts` — P3 T-06 / fail-loud T-04: turns
   exception entries into interrupting `action-required` queue items,
   assigned needs-human GitHub issues (`--operator` / `SDLC_OPERATOR`), and

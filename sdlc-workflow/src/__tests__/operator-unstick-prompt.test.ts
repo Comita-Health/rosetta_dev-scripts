@@ -55,7 +55,17 @@ describe('buildOperatorUnstickPrompt (SPEC-PRD-0025-P1 T-02)', () => {
     expect(text).toContain('specs/**');
     expect(text).toMatch(/closeout/i);
     expect(text).toContain('never silent policy rewrite');
-    expect(text).toMatch(/risky-advisory/i);
+    expect(text).toMatch(/risky-proceed/i);
+    expect(text).toContain('will classify those turns as abstained');
+  });
+
+  it('instructs the OUTCOME: cleared marker the classifier requires for tip clears', () => {
+    const text = prompt();
+
+    expect(text).toContain('OUTCOME: cleared');
+    expect(text).toContain('OUTCOME: abstained');
+    expect(text).toContain('OUTCOME: authority-bound');
+    expect(text).toMatch(/Natural-language/);
   });
 
   it('enumerates exhausted gate findings as context without making them a trim brief', () => {
