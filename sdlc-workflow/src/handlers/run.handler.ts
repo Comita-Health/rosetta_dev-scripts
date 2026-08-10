@@ -16,7 +16,10 @@ import type { ICloseoutService } from '../services/closeout.service';
 import type { IDigestService } from '../services/digest.service';
 import type { IEnvelopeGateService } from '../services/envelope-gate.service';
 import type { IDaemonConfigRepository } from '../repositories/daemon-config.repository';
-import type { IAdvisoryIssueService } from '../services/advisory-issue.service';
+import type {
+  IAdvisoryIssueService,
+  RiskyClassificationSource
+} from '../services/advisory-issue.service';
 import type { IEscalationService } from '../services/escalation.service';
 import type { IGateRemediationService } from '../services/gate-remediation.service';
 import type { IOperatorUnstickService } from '../services/operator-unstick.service';
@@ -980,8 +983,15 @@ export class RunHandler implements IRunHandler {
       // can proceed without posting ACTION REQUIRED for this wave.
       // SPEC-PRD-0025-P1 T-04: risky proceeds also file a non-blocking
       // advisory issue (distinct from ACTION REQUIRED) and keep moving.
+      // Agent-labeled and engine-classified strategies both take this path.
       if (unstick.kind === 'risky-proceed') {
-        this.postAdvisoryIssue(input, state, task.id, unstick.detail);
+        this.postAdvisoryIssue(
+          input,
+          state,
+          task.id,
+          unstick.detail,
+          unstick.classifiedBy
+        );
       }
       return true;
     }
@@ -1360,12 +1370,20 @@ export class RunHandler implements IRunHandler {
    * SPEC-PRD-0025-P1 T-04: file a non-blocking advisory GitHub issue for a
    * risky unstick proceed. Does not post ACTION REQUIRED, does not emit
    * exception-ledger entries, and sets escalate tier `advisory-risky`.
+   *
+   * @remarks
+   * Production continue path for both agent-labeled (`risky-proceed`) and
+   * engine-classified (`risky-advisory` / risky-assumption strategy)
+   * outcomes from {@link IOperatorUnstickService}. `classifiedBy` is
+   * attributed from the unstick result — never hardcoded — so advisory
+   * bodies distinguish the two sources.
    */
   private postAdvisoryIssue(
     input: RunTaskInput,
     state: RunState,
     taskId: string,
-    decision: string
+    decision: string,
+    classifiedBy: RiskyClassificationSource
   ): void {
     const evidenceIds = state.verdicts
       .filter(verdict => verdict.taskId === taskId)
@@ -1384,14 +1402,11 @@ export class RunHandler implements IRunHandler {
       repoSlug,
       repoPath: input.repoPath
     });
-    // OperatorUnstickService classifies agent `risky-proceed` markers; the
-    // engine may also call AdvisoryIssueService directly with classifiedBy
-    // `engine`. The handler path is the agent-labeled continue.
     const outcome = this._advisoryIssue.file({
       runId: input.runId,
       taskId,
       decision,
-      classifiedBy: 'agent',
+      classifiedBy,
       evidenceIds,
       repoPath: input.repoPath,
       operator: input.operator,
@@ -2058,7 +2073,9 @@ export class RunHandler implements IRunHandler {
             : result.status === 'failed'
               ? 'failed'
               : 'completed-unmerged') as
-            'merged' | 'failed' | 'completed-unmerged',
+            | 'merged'
+            | 'failed'
+            | 'completed-unmerged',
           detail: result.mergedSha ?? result.detail
         }));
       }

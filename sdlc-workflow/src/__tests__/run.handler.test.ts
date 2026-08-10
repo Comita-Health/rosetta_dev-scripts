@@ -1606,7 +1606,8 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
         unstick.mockResolvedValue({
           kind: 'risky-proceed',
           attempt: 1,
-          detail: 'attempt 1/2 → risky-proceed: continuing with advisory'
+          detail: 'attempt 1/2 → risky-proceed: continuing with advisory',
+          classifiedBy: 'agent'
         });
         advisoryFile.mockReturnValue({
           title: 'ADVISORY: SDLC run-1 T-01 risky proceed',
@@ -1624,6 +1625,39 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
         expect(advisoryInput.decision).toContain('risky-proceed');
         expect(advisoryInput.taskId).toBe('T-01');
         expect(advisoryInput.runId).toBe('run-1');
+        expect(monitorLog()).toContain(
+          'ADVISORY: SDLC run-1 T-01 risky proceed'
+        );
+        expect(monitorLog()).not.toContain('ACTION REQUIRED: SDLC run-1 T-01');
+      });
+
+      // Engine-classified risky strategy: production continue+advisory path
+      // must skip EscalationService.post (not only AdvisoryIssueService.file
+      // unit coverage).
+      it('continues without ACTION REQUIRED and files advisory when engine classifies strategy as risky', async () => {
+        exhaustedRemediableReviewer();
+        unstick.mockResolvedValue({
+          kind: 'risky-proceed',
+          attempt: 1,
+          detail:
+            'attempt 1/2 → risky-proceed: engine classified chosen strategy as risky',
+          classifiedBy: 'engine'
+        });
+        advisoryFile.mockReturnValue({
+          title: 'ADVISORY: SDLC run-1 T-01 risky proceed',
+          created: true,
+          url: 'https://github.com/org/repo/issues/43'
+        });
+
+        await handler.runTask(unstickInput());
+
+        expect(unstick).toHaveBeenCalled();
+        expect(escalationPost).not.toHaveBeenCalled();
+        expect(advisoryFile).toHaveBeenCalledTimes(1);
+        const advisoryInput = advisoryFile.mock.calls[0][0];
+        expect(advisoryInput.classifiedBy).toBe('engine');
+        expect(advisoryInput.decision).toContain('risky-proceed');
+        expect(advisoryInput.taskId).toBe('T-01');
         expect(monitorLog()).toContain(
           'ADVISORY: SDLC run-1 T-01 risky proceed'
         );
