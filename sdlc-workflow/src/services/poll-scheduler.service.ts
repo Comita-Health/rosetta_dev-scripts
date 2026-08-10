@@ -2,7 +2,11 @@ import { inject, injectable } from 'inversify';
 import type { IDaemonStoreRepository } from '../repositories/daemon-store.repository';
 import { WORKFLOW_TOKENS } from '../tokens';
 import type { ActiveWatch, DurableWatchRecord, WatchKind } from '../types';
-import { commitWatchSignal } from '../utils/watch-wake-commit';
+import { exitDaemonFatal } from '../utils/daemon-exit';
+import {
+  commitPollErrorWake,
+  commitWatchSignal
+} from '../utils/watch-wake-commit';
 import type { IWatchRegistryService } from './watch-registry.service';
 import type {
   IWatchSourceAdapterRegistry,
@@ -57,6 +61,12 @@ export interface IPollSchedulerService {
  * adapter registry is empty the loop does no polling work at all — it says so
  * once and keeps its timer. Phase 1 registers the GitHub adapters
  * (SPEC-PRD-0020-P1 T-05) into this registry at process start.
+ *
+ * When a watch exceeds the consecutive-failure cap the scheduler commits an
+ * operator-visible `poll-error` wake (idempotent per watch+reason) before
+ * flipping `degradedAt` — not only the degraded flag (SPEC-PRD-0020-P2 T-04).
+ * Unrecoverable top-level tick errors exit non-zero so launchd KeepAlive
+ * restarts the process; per-watch poll failures never exit 0 as success.
  */
 @injectable()
 export class PollSchedulerService implements IPollSchedulerService {
@@ -147,6 +157,9 @@ export class PollSchedulerService implements IPollSchedulerService {
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       console.error(`[poll-scheduler] tick failed: ${detail}`);
+      // Unrecoverable: exit non-zero so launchd KeepAlive restarts.
+      // Per-watch adapter failures are caught in pollWatch and never reach here.
+      exitDaemonFatal('unrecoverable-tick', detail);
     }
   }
 
@@ -251,7 +264,7 @@ export class PollSchedulerService implements IPollSchedulerService {
         terminalState: result.terminalState
       });
     } catch (error) {
-      this._watches.recordPollFailure(
+      this.recordFailureAndMaybeWake(
         workspaceRoot,
         listed.id,
         error,
@@ -260,6 +273,27 @@ export class PollSchedulerService implements IPollSchedulerService {
     } finally {
       this._store.releasePollLease(workspaceRoot, lease);
     }
+  }
+
+  /**
+   * Record a bounded poll failure; when the cap is reached, commit a
+   * `poll-error` wake first (idempotent) so a crash between wake and
+   * degrade still rediscovers the same wake on the next attempt.
+   */
+  private recordFailureAndMaybeWake(
+    workspaceRoot: string,
+    watchId: string,
+    error: unknown,
+    failureCap: number
+  ): void {
+    const current = this._watches.get(workspaceRoot, watchId);
+    if (current !== null && current.degradedAt === undefined) {
+      const nextFailures = (current.consecutiveFailures ?? 0) + 1;
+      if (nextFailures >= failureCap) {
+        commitPollErrorWake(this._store, workspaceRoot, current, error);
+      }
+    }
+    this._watches.recordPollFailure(workspaceRoot, watchId, error, failureCap);
   }
 
   private isRecordDue(watch: DurableWatchRecord): boolean {
