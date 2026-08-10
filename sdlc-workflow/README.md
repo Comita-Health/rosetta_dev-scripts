@@ -198,12 +198,17 @@ on its own declared cadence: the interval between ticks is the shortest
 `.sdlc/daemon.json` is the _idle ceiling_ rather than the tick, and a watch that
 asks to be polled faster than the default gets it.
 
-`ContinuityService` (SPEC-PRD-0020-P2 T-01) starts on the same cadence and scans
-`DaemonConfig.runsDir` for unfinished runs whose `supervise.pid` is dead. When
-`launch.json` is usable, needs-human blockers are not unresolved, and the run
-is not abandoned, it relaunches under `RunLockRepository` via
+`ContinuityService` (SPEC-PRD-0020-P2 T-01 / T-03) starts on the same cadence and
+scans `DaemonConfig.runsDir` for unfinished runs whose `supervise.pid` is dead.
+When `launch.json` is usable, needs-human blockers are not unresolved, and the
+run is not abandoned, it relaunches under `RunLockRepository` via
 `ProcessDetachRepository`, appends a monitor/supervise log line, and commits a
-`supervisor-restarted` wake through `commitWatchSignal`.
+`supervisor-restarted` wake through `commitWatchSignal`. Abandoned idle runs
+(`RunStateRepository.idleSeconds` beyond `SDLC_ABANDONED_SECONDS`) emit one
+`abandoned` wake and are not relaunched. When `BlockerService` reports
+`resumable` after needs-human issues close, a `closed` wake is committed on the
+shared `issue-state` inbox path for `EngineResumeWakeAction` — continuity does
+not relaunch that path itself.
 
 `StaleAgentService` (SPEC-PRD-0020-P2 T-02) runs on the same continuity tick.
 It skips finished runs (`allTasksMerged`) and runs without usable `state.json`

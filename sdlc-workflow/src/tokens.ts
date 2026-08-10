@@ -87,5 +87,7 @@ export const WORKFLOW_TOKENS = {
   // SPEC-PRD-0020-P2 T-01
   ContinuityService: Symbol.for('ContinuityService'),
   // SPEC-PRD-0020-P2 T-02
-  StaleAgentService: Symbol.for('StaleAgentService')
+  StaleAgentService: Symbol.for('StaleAgentService'),
+  // SPEC-PRD-0020-P2 T-03
+  BlockerService: Symbol.for('BlockerService')
 } as const;

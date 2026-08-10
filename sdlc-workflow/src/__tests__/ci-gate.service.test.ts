@@ -132,6 +132,7 @@ describe('CiGateService (P3 T-03 live monitor + bounded fix cycle)', () => {
       .toConstantValue({
         recordCiFixAttempt,
         load: jest.fn(),
+        idleSeconds: jest.fn().mockReturnValue(null),
         save: jest.fn(),
         appendVerdict: jest.fn(),
         recordTaskResult: jest.fn(),

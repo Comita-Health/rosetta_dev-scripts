@@ -9,8 +9,10 @@ import {
 import { inject, injectable, optional } from 'inversify';
 import path from 'path';
 import type { IDaemonConfigRepository } from '../repositories/daemon-config.repository';
-import type { IDaemonStoreRepository } from '../repositories/daemon-store.repository';
-import type { IIssueRepository } from '../repositories/issue.repository';
+import type {
+  IDaemonStoreRepository,
+  WakeWriteResult
+} from '../repositories/daemon-store.repository';
 import type { IProcessDetachRepository } from '../repositories/process-detach.repository';
 import type { IRunLockRepository } from '../repositories/run-lock.repository';
 import type { IRunStateRepository } from '../repositories/run-state.repository';
@@ -24,7 +26,8 @@ import {
 import { appendMonitorLine } from '../utils/monitor';
 import { allTasksMerged } from '../utils/run-completion';
 import { commitWatchSignal } from '../utils/watch-wake-commit';
-import { escalationTitle } from './escalation.service';
+import type { BlockerReport, IBlockerService } from './blocker.service';
+import { ENGINE_RESUME_WAKE_ACTION_ID } from './engine-resume-wake.action';
 import type { IStaleAgentService } from './stale-agent.service';
 
 /** Default idle window before a dead-supervisor run is treated as abandoned. */
@@ -47,12 +50,14 @@ export interface ContinuityTickResult {
 }
 
 /**
- * Per-workspace continuity tick (SPEC-PRD-0020-P2 T-01).
+ * Per-workspace continuity tick (SPEC-PRD-0020-P2 T-01 / T-03).
  *
  * Scans DaemonConfig.runsDir for unfinished runs whose supervise.pid is dead,
- * and relaunches `--supervise` from launch.json under the run lock. Emits
- * relaunch evidence on the run monitor log and a `supervisor-restarted` wake
- * through the shared durable inbox writer — never a chat session, deploy, or
+ * and relaunches `--supervise` from launch.json under the run lock — except
+ * abandoned idle runs (one wake, never relaunch) and needs-human blocker
+ * outcomes (wake via the shared inbox; resume only through
+ * EngineResumeWakeAction). Emits relaunch / abandoned / blocker evidence
+ * through `commitWatchSignal` — never a chat session, deploy, or
  * spec-status authorization transition.
  */
 export interface IContinuityService {
@@ -104,16 +109,6 @@ const abandonedSeconds = (): number => {
   return parsed;
 };
 
-const idleSecondsForState = (runsDir: string, runId: string): number => {
-  const stateFile = path.join(runsDir, runId, 'state.json');
-  try {
-    const ageMs = Date.now() - statSync(stateFile).mtimeMs;
-    return Math.max(0, Math.floor(ageMs / 1_000));
-  } catch {
-    return 0;
-  }
-};
-
 const launchUsable = (launch: SuperviseLaunchRecord): boolean => {
   if (launch.argv.length === 0) {
     return false;
@@ -147,6 +142,27 @@ const continuityWatch = (
   resumeContext: { runId }
 });
 
+/**
+ * Issue-state shaped watch so blocker-cleared wakes share the GitHub watch
+ * inbox path and carry `closed` for EngineResumeWakeAction.
+ */
+const blockerWatch = (
+  runId: string,
+  pollSeconds: number
+): DurableWatchRecord => ({
+  id: `issue-state:blockers:${runId}`,
+  kind: 'issue-state',
+  target: { runId },
+  pollSeconds,
+  createdBy: 'continuity',
+  createdAt: new Date().toISOString(),
+  resumeContext: { runId }
+});
+
+/** One-shot inbox signal for needs-human clear → EngineResumeWakeAction. */
+const blockerClearedSignal = (runId: string): string =>
+  `closed:blockers-cleared:${runId}`;
+
 @injectable()
 export class ContinuityService implements IContinuityService {
   private _timer: ReturnType<typeof setTimeout> | null = null;
@@ -165,8 +181,8 @@ export class ContinuityService implements IContinuityService {
     private readonly _runLockRepo: IRunLockRepository,
     @inject(WORKFLOW_TOKENS.DaemonStoreRepository)
     private readonly _store: IDaemonStoreRepository,
-    @inject(WORKFLOW_TOKENS.IssueRepository)
-    private readonly _issueRepo: IIssueRepository,
+    @inject(WORKFLOW_TOKENS.BlockerService)
+    private readonly _blockers: IBlockerService,
     @inject(WORKFLOW_TOKENS.StaleAgentService)
     @optional()
     private readonly _staleAgent?: IStaleAgentService
@@ -260,10 +276,14 @@ export class ContinuityService implements IContinuityService {
       return { runId, reason: 'no-state' };
     }
 
-    if (this.isFinished(state, runsDir, runId)) {
+    if (this.isFinished(state, runsDir, runId) === true) {
       return { runId, reason: 'finished' };
     }
 
+    // Alive/dead before blocker wakes: committing `closed:blockers-cleared:*`
+    // while supervise is still up lets EngineResumeWakeAction no-op-consume
+    // the one-shot signal, after which a later supervisor death can neither
+    // re-pend the same wake nor fall through to relaunch/abandon.
     const pid = readSupervisePid(path.join(runsDir, runId));
     if (pid === null) {
       return { runId, reason: 'no-supervise-pid' };
@@ -277,16 +297,110 @@ export class ContinuityService implements IContinuityService {
       return { runId, reason: 'launch-unusable' };
     }
 
-    if (this.hasUnresolvedNeedsHuman(state, launch) === true) {
+    const blockerReport = this.queryBlockers(runsDir, runId, launch);
+    if (
+      blockerReport !== null &&
+      blockerReport.blockers.some(blocker => blocker.state === 'open') === true
+    ) {
       return { runId, reason: 'unresolved-blockers' };
     }
 
-    const idle = idleSecondsForState(runsDir, runId);
+    // Resume after needs-human close is EngineResumeWakeAction's job — skip
+    // relaunch only while the one-shot closed wake is still pending. Once it
+    // is ledgered/consumed, `resumable` stays true for historical exceptions
+    // and must not permanently suppress dead-supervisor relaunch or abandon.
+    if (blockerReport !== null && blockerReport.resumable === true) {
+      this.emitBlockerClearedWake(
+        workspaceRoot,
+        runId,
+        pollSeconds,
+        blockerReport
+      );
+      const signal = blockerClearedSignal(runId);
+      const awaitingResume = this._store
+        .listPendingWakes(workspaceRoot)
+        .some(wake => wake.signal === signal);
+      if (awaitingResume === true) {
+        return { runId, reason: 'blockers-cleared' };
+      }
+    }
+
+    const idle = this._runStateRepo.idleSeconds(runsDir, runId) ?? 0;
     if (idle > abandonedSeconds()) {
+      this.emitAbandonedWake(workspaceRoot, runId, pollSeconds, idle);
       return { runId, reason: 'abandoned' };
     }
 
     return this.relaunch(workspaceRoot, runsDir, runId, launch, pollSeconds);
+  }
+
+  private queryBlockers(
+    runsDir: string,
+    runId: string,
+    launch: SuperviseLaunchRecord | null
+  ): BlockerReport | null {
+    if (launch === null) {
+      return null;
+    }
+    const repoPath = launch.repoPath.trim();
+    if (repoPath.length === 0) {
+      return null;
+    }
+    try {
+      return this._blockers.query({ runsDir, runId, repoPath });
+    } catch {
+      return null;
+    }
+  }
+
+  private emitAbandonedWake(
+    workspaceRoot: string,
+    runId: string,
+    pollSeconds: number,
+    idleSeconds: number
+  ): void {
+    const idleHours = Math.max(1, Math.floor(idleSeconds / 3_600));
+    commitWatchSignal(
+      this._store,
+      workspaceRoot,
+      continuityWatch(runId, pollSeconds),
+      {
+        id: `abandoned:${runId}`,
+        observedAt: new Date().toISOString(),
+        prompt: `SDLC run ${runId} is unfinished with a dead supervisor and has been idle for ${idleHours}h. The continuity daemon did not relaunch it. Decide whether to resume it or close it out.`,
+        data: {
+          runId,
+          idleSeconds,
+          signal: 'abandoned'
+        }
+      }
+    );
+  }
+
+  private emitBlockerClearedWake(
+    workspaceRoot: string,
+    runId: string,
+    pollSeconds: number,
+    report: BlockerReport
+  ): WakeWriteResult {
+    // `closed` is the EngineResumeWakeAction resume signal; continuity only
+    // commits the wake — resume is owned by the registered wake action.
+    return commitWatchSignal(
+      this._store,
+      workspaceRoot,
+      blockerWatch(runId, pollSeconds),
+      {
+        id: blockerClearedSignal(runId),
+        observedAt: new Date().toISOString(),
+        prompt: `Every needs-human issue for SDLC run ${runId} has been closed. Resume proceeds through the registered ${ENGINE_RESUME_WAKE_ACTION_ID} wake action — continuity does not relaunch.`,
+        data: {
+          signal: 'closed',
+          runId,
+          blockersCleared: report.blockers.length,
+          resumeAction: ENGINE_RESUME_WAKE_ACTION_ID
+        }
+      }
+    );
   }
 
   private isFinished(state: RunState, runsDir: string, runId: string): boolean {
@@ -314,42 +428,6 @@ export class ContinuityService implements IContinuityService {
       }
     }
     return null;
-  }
-
-  /**
-   * True when the run has recorded exceptions and at least one matching
-   * needs-human GitHub issue is still open. A check failure fails open
-   * (returns false) so a transient `gh` outage cannot strand relaunches —
-   * matching the bash daemon's `|| return 1` probe.
-   */
-  private hasUnresolvedNeedsHuman(
-    state: RunState,
-    launch: SuperviseLaunchRecord
-  ): boolean {
-    if (state.exceptions.length === 0) {
-      return false;
-    }
-    const repoPath = launch.repoPath.trim();
-    if (repoPath.length === 0 || existsSync(repoPath) === false) {
-      return false;
-    }
-    const seen = new Set<string>();
-    try {
-      for (const entry of state.exceptions) {
-        const title = escalationTitle(state.runId, entry);
-        if (seen.has(title) === true) {
-          continue;
-        }
-        seen.add(title);
-        const open = this._issueRepo.findByTitle(repoPath, title);
-        if (open !== null) {
-          return true;
-        }
-      }
-    } catch {
-      return false;
-    }
-    return false;
   }
 
   private relaunch(
