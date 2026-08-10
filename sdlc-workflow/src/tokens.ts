@@ -50,6 +50,8 @@ export const WORKFLOW_TOKENS = {
   RunQueueRepository: Symbol.for('RunQueueRepository'),
   // SPEC-PRD-0022-P1 T-01
   DeployRecordRepository: Symbol.for('DeployRecordRepository'),
+  // SPEC-PRD-0022-P1 T-03 — observe push-triggered Actions deploys
+  DeployObservationRepository: Symbol.for('DeployObservationRepository'),
   // SPEC-PRD-0023-P1 T-01 / T-02
   CloseoutAggregateService: Symbol.for('CloseoutAggregateService'),
   CloseoutService: Symbol.for('CloseoutService'),

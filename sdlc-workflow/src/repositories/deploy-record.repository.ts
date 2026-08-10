@@ -71,6 +71,8 @@ export interface DeployBeginInput {
   commitSha: string;
   trigger: DeployTrigger;
   taskId?: string;
+  /** Known Actions run URL at start (e.g. an observed push deploy). */
+  workflowRef?: string;
 }
 
 export interface DeployReuseInput extends DeployBeginInput {
@@ -90,6 +92,7 @@ export class DeployRecordRepository implements IDeployRecordRepository {
       trigger: input.trigger,
       taskId: input.taskId,
       status: 'in-flight',
+      workflowRef: input.workflowRef,
       recordedAt: new Date().toISOString()
     });
   }

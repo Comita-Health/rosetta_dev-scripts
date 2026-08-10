@@ -212,6 +212,13 @@ export interface SandboxContract {
   deployCommand: string;
   healthCommand: string;
   timeoutMinutes: number;
+  /**
+   * Optional GitHub Actions workflow file or name (e.g.
+   * `deploy-organization.yml`) the engine observes for push-triggered
+   * deploys of the same commit SHA before dispatching its own
+   * (SPEC-PRD-0022-P1 T-03). Absent → ledger-only race avoidance.
+   */
+  deployWorkflow?: string;
 }
 
 /** The repo-owned verification contract: `.sdlc/verification.json`. */

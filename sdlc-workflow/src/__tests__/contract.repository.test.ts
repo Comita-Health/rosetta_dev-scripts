@@ -45,6 +45,19 @@ describe('ContractRepository', () => {
     expect(repo.loadSandbox(dir)?.timeoutMinutes).toBe(10);
   });
 
+  it('loads an optional deployWorkflow for push-deploy observation', () => {
+    writeEnvironments({
+      sandbox: {
+        deployCommand: 'd',
+        healthCommand: 'h',
+        deployWorkflow: '  deploy-organization.yml  '
+      }
+    });
+    expect(repo.loadSandbox(dir)?.deployWorkflow).toBe(
+      'deploy-organization.yml'
+    );
+  });
+
   it('exposes only the sandbox entry of a full environment configuration', () => {
     writeEnvironments({
       sandbox: { deployCommand: 'd', healthCommand: 'h' },

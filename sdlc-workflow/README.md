@@ -734,6 +734,30 @@ Three skips come out of it:
   only from run state — run state keeps just the latest deploy, so a later
   deploy overwriting the record used to force a redundant redeploy.
 
+**Push deploys are invisible to the ledger until observed.** A
+`push`-triggered Actions run is started by GitHub, not by the engine, so it
+never writes an in-flight marker on its own. Repos that ship via a named
+workflow (e.g. `deploy-organization.yml` on `build-env/*`) should declare it
+on the sandbox contract:
+
+```json
+{
+  "sandbox": {
+    "deployCommand": "bash scripts/sdlc/sandbox-deploy.sh",
+    "healthCommand": "bash scripts/sdlc/sandbox-health.sh",
+    "deployWorkflow": "deploy-organization.yml",
+    "timeoutMinutes": 30
+  }
+}
+```
+
+When `deployWorkflow` is set, the sandbox step queries Actions for runs of
+that workflow at the commit SHA before dispatching. An in-flight or successful
+external run is recorded under trigger `push` and the engine stands down
+(health only) — the same skip path the ledger already used for engine-owned
+in-flight markers. Observation fails open: a `gh` error is treated as
+"absent" so a flaky Actions query cannot strand delivery.
+
 Ledger records survive restart and are readable by run ID after the run ends.
 When git cannot resolve a tree SHA the ledger is skipped for that dispatch and
 the deploy proceeds as it did before: a missing content key costs at most one
@@ -876,8 +900,12 @@ Handler / Service / Repository with InversifyJS (workspace rule):
 - `services/pr-lifecycle.service.ts` — P3 T-02: push the task branch,
   find-or-create its PR with deterministic title/body (`utils/pr-content`).
 - `services/sandbox-deploy.service.ts` — task-branch build → sandbox via the
-  repo-owned contract; idempotent per SHA, health must report the deployed
-  SHA, structurally unable to reach any other environment (T-03).
+  repo-owned contract; idempotent per SHA / content, optional
+  `deployWorkflow` observation so phase-boundary stands down for a
+  push-triggered Actions deploy of the same commit; health must report the
+  deployed SHA; structurally unable to reach any other environment (T-03).
+- `repositories/deploy-observation.repository.ts` — query Actions for
+  in-flight / succeeded runs of the contract's `deployWorkflow` at a SHA.
 - `services/verification.service.ts` — tiered acceptance-criteria runner:
   test-tier via the repo's scripted check, agent-tier via an independent
   verifier agent driving the sandbox, manual-tier forces human-required;

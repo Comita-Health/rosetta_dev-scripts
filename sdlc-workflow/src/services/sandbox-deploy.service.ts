@@ -1,5 +1,6 @@
 import { inject, injectable } from 'inversify';
 import type { IContractRepository } from '../repositories/contract.repository';
+import type { IDeployObservationRepository } from '../repositories/deploy-observation.repository';
 import type { IDeployRecordRepository } from '../repositories/deploy-record.repository';
 import type { IShellCommandRepository } from '../repositories/shell-command.repository';
 import { WORKFLOW_TOKENS } from '../tokens';
@@ -79,6 +80,9 @@ const workflowRefFrom = (output: string): string | undefined =>
  * - Idempotent per *content* when a ledger is supplied (SPEC-PRD-0022-P1):
  *   content already live under another commit is reused, and content another
  *   trigger is already deploying is never dispatched a second time.
+ * - When the contract names `deployWorkflow`, Actions is queried for a
+ *   push-triggered (or otherwise external) run of that workflow on the same
+ *   commit SHA before dispatch — the ledger alone cannot see those runs.
  * - Health must report the deployed SHA: the health command's output has
  *   to contain `SDLC_SANDBOX_SHA` verbatim.
  * - No path beyond the sandbox: the contract repository exposes only the
@@ -96,7 +100,9 @@ export class SandboxDeployService implements ISandboxDeployService {
     @inject(WORKFLOW_TOKENS.ShellCommandRepository)
     private readonly _shellRepo: IShellCommandRepository,
     @inject(WORKFLOW_TOKENS.DeployRecordRepository)
-    private readonly _deployRecords: IDeployRecordRepository
+    private readonly _deployRecords: IDeployRecordRepository,
+    @inject(WORKFLOW_TOKENS.DeployObservationRepository)
+    private readonly _deployObservation: IDeployObservationRepository
   ) {}
 
   async deploy(input: SandboxDeployInput): Promise<SandboxDeployOutcome> {
@@ -116,7 +122,7 @@ export class SandboxDeployService implements ISandboxDeployService {
       };
     }
 
-    const known =
+    let known =
       input.ledger === undefined
         ? null
         : this._deployRecords.latestForContent(
@@ -160,6 +166,53 @@ export class SandboxDeployService implements ISandboxDeployService {
       };
     }
 
+    // T-03: fold an external (push) Actions deploy into the ledger when the
+    // contract names the workflow. Without this, phase-boundary only sees
+    // engine-recorded in-flight markers and double-dispatches against the
+    // push that just landed the same SHA on the build branch.
+    let externalWorkflowRef: string | undefined;
+    if (
+      input.ledger !== undefined &&
+      typeof contract.deployWorkflow === 'string' &&
+      contract.deployWorkflow.length > 0 &&
+      known?.status !== 'healthy' &&
+      known?.status !== 'in-flight'
+    ) {
+      const observed = this._deployObservation.observe(
+        input.worktreePath,
+        input.sha,
+        contract.deployWorkflow
+      );
+      externalWorkflowRef = observed.workflowRef;
+      if (observed.state === 'in-flight') {
+        known = this._deployRecords.begin({
+          runsDir: input.ledger.runsDir,
+          runId: input.ledger.runId,
+          contentSha: input.ledger.contentSha,
+          commitSha: input.sha,
+          trigger: 'push',
+          taskId: input.ledger.taskId,
+          workflowRef: externalWorkflowRef
+        });
+      } else if (observed.state === 'succeeded') {
+        const begun = this._deployRecords.begin({
+          runsDir: input.ledger.runsDir,
+          runId: input.ledger.runId,
+          contentSha: input.ledger.contentSha,
+          commitSha: input.sha,
+          trigger: 'push',
+          taskId: input.ledger.taskId,
+          workflowRef: externalWorkflowRef
+        });
+        known = this._deployRecords.finish(
+          input.ledger.runsDir,
+          input.ledger.runId,
+          begun,
+          { status: 'healthy', workflowRef: externalWorkflowRef }
+        );
+      }
+    }
+
     // T-03: someone else is already deploying this content — most often a
     // push-triggered workflow racing a phase boundary. Dispatching a second
     // job cannot make the target converge faster and can thrash it, so this
@@ -200,7 +253,8 @@ export class SandboxDeployService implements ISandboxDeployService {
         input.previous.status === 'healthy') ||
       (known?.status === 'healthy' && known.commitSha === input.sha);
     const alreadyDeployed = sameShaLive || inFlight;
-    let workflowRef: string | undefined;
+    let workflowRef: string | undefined =
+      externalWorkflowRef ?? known?.workflowRef;
 
     // Marked before dispatch, not after: the window a concurrent trigger has
     // to see is precisely the one where the deploy is running.
@@ -210,13 +264,31 @@ export class SandboxDeployService implements ISandboxDeployService {
         : this._deployRecords.begin({ ...input.ledger, commitSha: input.sha });
     const contentSha = input.ledger?.contentSha;
     const settle = (status: 'healthy' | 'failed'): void => {
-      if (begun === undefined || input.ledger === undefined) return;
-      this._deployRecords.finish(
-        input.ledger.runsDir,
-        input.ledger.runId,
-        begun,
-        { status, workflowRef }
-      );
+      if (input.ledger === undefined) return;
+      if (begun !== undefined) {
+        this._deployRecords.finish(
+          input.ledger.runsDir,
+          input.ledger.runId,
+          begun,
+          { status, workflowRef }
+        );
+        return;
+      }
+      // Observed push in-flight whose health just caught up — promote the
+      // ledger so later waves see healthy rather than forever-in-flight.
+      if (
+        status === 'healthy' &&
+        inFlight &&
+        known !== null &&
+        known.trigger === 'push'
+      ) {
+        this._deployRecords.finish(
+          input.ledger.runsDir,
+          input.ledger.runId,
+          known,
+          { status: 'healthy', workflowRef: workflowRef ?? known.workflowRef }
+        );
+      }
     };
 
     if (!alreadyDeployed) {

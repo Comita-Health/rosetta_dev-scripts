@@ -4,6 +4,7 @@ import os from 'os';
 import path from 'path';
 import { Container } from 'inversify';
 import type { IContractRepository } from '../repositories/contract.repository';
+import type { IDeployObservationRepository } from '../repositories/deploy-observation.repository';
 import {
   DeployRecordRepository,
   IDeployRecordRepository
@@ -28,6 +29,11 @@ const CONTRACT: SandboxContract = {
   timeoutMinutes: 5
 };
 
+const CONTRACT_WITH_WORKFLOW: SandboxContract = {
+  ...CONTRACT,
+  deployWorkflow: 'deploy-organization.yml'
+};
+
 // The full environment configuration a repo might declare. Only the
 // sandbox entry is reachable: the contract repository exposes nothing
 // else and the deployer takes no environment parameter (T-03 hard
@@ -38,6 +44,7 @@ describe('SandboxDeployService (T-03)', () => {
   let service: ISandboxDeployService;
   let loadSandbox: jest.Mock;
   let run: jest.Mock;
+  let observe: jest.Mock;
   // The real ledger on a temp dir, not a mock: "exactly one deploy was
   // dispatched" is a claim about what two calls agreed on through persisted
   // records, and a stubbed ledger would assert the stub instead.
@@ -57,6 +64,7 @@ describe('SandboxDeployService (T-03)', () => {
     ghEnvMock.mockReset().mockReturnValue({});
     loadSandbox = jest.fn().mockReturnValue(CONTRACT);
     run = jest.fn().mockReturnValue({ ok: true, output: 'sha=abc123 healthy' });
+    observe = jest.fn().mockReturnValue({ state: 'absent' });
     records = new DeployRecordRepository();
     runsDir = mkdtempSync(path.join(os.tmpdir(), 'sdlc-sandbox-'));
 
@@ -70,6 +78,11 @@ describe('SandboxDeployService (T-03)', () => {
     container
       .bind<IDeployRecordRepository>(WORKFLOW_TOKENS.DeployRecordRepository)
       .toConstantValue(records);
+    container
+      .bind<IDeployObservationRepository>(
+        WORKFLOW_TOKENS.DeployObservationRepository
+      )
+      .toConstantValue({ observe });
     container
       .bind<ISandboxDeployService>(WORKFLOW_TOKENS.SandboxDeployService)
       .to(SandboxDeployService);
@@ -593,6 +606,72 @@ describe('SandboxDeployService (T-03)', () => {
       expect(deployCalls()).toHaveLength(0);
       expect(outcome.verdict.outcome).toBe('pass');
       expect(outcome.alreadyDeployed).toBe(true);
+    });
+
+    it('observes a push Actions run and skips dispatch when the contract names the workflow', async () => {
+      loadSandbox.mockReturnValue(CONTRACT_WITH_WORKFLOW);
+      observe.mockReturnValue({
+        state: 'in-flight',
+        workflowRef: 'https://github.com/org/repo/actions/runs/99'
+      });
+      run.mockReturnValue({ ok: true, output: 'sha=abc123 healthy' });
+
+      const outcome = await service.deploy({
+        worktreePath: '/wt',
+        sha: 'abc123',
+        ledger: ledger({ trigger: 'phase-boundary' })
+      });
+
+      expect(observe).toHaveBeenCalledWith(
+        '/wt',
+        'abc123',
+        'deploy-organization.yml'
+      );
+      expect(deployCalls()).toHaveLength(0);
+      expect(outcome.verdict.outcome).toBe('pass');
+      expect(outcome.alreadyDeployed).toBe(true);
+      expect(outcome.workflowRef).toBe(
+        'https://github.com/org/repo/actions/runs/99'
+      );
+      expect(records.latestForContent(runsDir, runId, 'tree-1')?.status).toBe(
+        'healthy'
+      );
+      expect(records.latestForContent(runsDir, runId, 'tree-1')?.trigger).toBe(
+        'push'
+      );
+    });
+
+    it('records an observed successful push deploy and skips dispatch', async () => {
+      loadSandbox.mockReturnValue(CONTRACT_WITH_WORKFLOW);
+      observe.mockReturnValue({
+        state: 'succeeded',
+        workflowRef: 'https://github.com/org/repo/actions/runs/100'
+      });
+      run.mockReturnValue({ ok: true, output: 'sha=abc123 healthy' });
+
+      const outcome = await service.deploy({
+        worktreePath: '/wt',
+        sha: 'abc123',
+        ledger: ledger({ trigger: 'phase-boundary' })
+      });
+
+      expect(deployCalls()).toHaveLength(0);
+      expect(outcome.verdict.outcome).toBe('pass');
+      expect(outcome.alreadyDeployed).toBe(true);
+      expect(records.latestForContent(runsDir, runId, 'tree-1')).toMatchObject({
+        status: 'healthy',
+        trigger: 'push',
+        workflowRef: 'https://github.com/org/repo/actions/runs/100'
+      });
+    });
+
+    it('does not query Actions when the contract omits deployWorkflow', async () => {
+      await service.deploy({
+        worktreePath: '/wt',
+        sha: 'abc123',
+        ledger: ledger({ trigger: 'phase-boundary' })
+      });
+      expect(observe).not.toHaveBeenCalled();
     });
   });
 });
