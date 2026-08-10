@@ -210,7 +210,13 @@ successor's lease.
 Adapter signals are committed through the durable wake ledger before poll
 success is recorded, so a retry after interruption resolves to the original wake
 ID. Adapter failures are recorded per watch; after three consecutive failures
-the watch remains visible as degraded but is skipped by subsequent ticks.
+the watch remains visible as degraded, an operator-visible `poll-error` wake is
+committed (idempotent per watch+reason via `commitPollErrorWake`), and the
+watch is skipped by subsequent ticks. Unrecoverable top-level tick errors and
+fatal daemon bootstrap exit non-zero so launchd KeepAlive restarts the
+process; success (clean SIGTERM/SIGINT shutdown) is the only exit 0. KeepAlive
+itself stays launchd-owned — the daemon does not arm an in-process restart
+loop.
 
 A watch whose kind has no registered source adapter is _skipped, not failed_ — a
 missing adapter is a wiring gap, not a signal-source fault, so it neither
