@@ -59,26 +59,51 @@ export interface EscalateOutcome {
 /**
  * SPEC-PRD-0011-P3 T-06 + fail-loud T-04: turn exception-ledger entries into
  * interrupting action-required queue items, assigned needs-human GitHub
- * issues, and durable wake-inbox events. Idempotent by title: resume never
- * duplicates a queue item, issue, or wake.
+ * issues, and durable wake-inbox events.
  *
- * Rich {@link EscalationRefs} (PR, branch/head, spec, human-required criteria,
- * CI links, sandbox) are rendered into the issue body and wake payload so
- * operators can open the actionable surface without reconstructing run state.
+ * @remarks
+ * One ACTION REQUIRED GitHub issue (and wake) per escalate **wave** —
+ * same `runId` + `taskId` — even when the phase aggregator emits multiple
+ * triggers (e.g. `reviewer-disagreement` + `envelope-breach`). Pre-fix
+ * titles included the trigger and filed one issue per entry (#92/#93).
+ * Queue tags still list every trigger. Idempotent by wave title on resume;
+ * legacy per-trigger titles are reused when found open.
  */
 export interface IEscalationService {
   post(input: EscalateInput): EscalateOutcome;
 }
 
-export const escalationTitle = (runId: string, entry: ExceptionEntry): string =>
-  `ACTION REQUIRED: SDLC ${runId} ${entry.taskId} — ${entry.trigger}`;
+/** Stable wave title — no trigger suffix (one issue per task escalate wave). */
+export const escalationWaveTitle = (runId: string, taskId: string): string =>
+  `ACTION REQUIRED: SDLC ${runId} ${taskId}`;
+
+/**
+ * Title for a single exception entry. Task-scoped entries share the wave
+ * title; run-level entries (no taskId) keep the trigger in the title.
+ */
+export const escalationTitle = (
+  runId: string,
+  entry: ExceptionEntry
+): string => {
+  if (entry.taskId !== undefined && entry.taskId.length > 0) {
+    return escalationWaveTitle(runId, entry.taskId);
+  }
+  return `ACTION REQUIRED: SDLC ${runId} — ${entry.trigger}`;
+};
+
+/** Pre-wave-coalesce titles that still may be open in the wild. */
+export const legacyEscalationTitle = (
+  runId: string,
+  taskId: string,
+  trigger: ExceptionEntry['trigger']
+): string => `ACTION REQUIRED: SDLC ${runId} ${taskId} — ${trigger}`;
 
 const nonEmpty = (value: string | undefined): value is string =>
   value !== undefined && value.length > 0;
 
 export const escalationBody = (
   runId: string,
-  entry: ExceptionEntry,
+  entries: ExceptionEntry[],
   evidenceIds: string[] | undefined,
   refs: EscalationRefs | undefined
 ): string => {
@@ -89,16 +114,28 @@ export const escalationBody = (
   const refLines =
     refs === undefined ? [] : formatEscalationRefLines(runId, refs);
   const afterMeta = refLines.length > 0 ? [...refLines, ''] : ([] as string[]);
+  const triggers = entries.map(entry => entry.trigger);
+  const uniqueTriggers = [...new Set(triggers)];
+  const taskId = entries[0]?.taskId ?? '(run-level)';
+  const contextBlocks: string[] = [];
+  for (const entry of entries) {
+    if (entries.length > 1) {
+      contextBlocks.push(`#### ${entry.trigger}`);
+    }
+    if (entry.context.length === 0) {
+      contextBlocks.push('- _(empty)_');
+    } else {
+      contextBlocks.push(...entry.context.map(line => `- ${line}`));
+    }
+  }
   return [
     `SDLC run \`${runId}\` needs human attention.`,
     '',
-    `- **Task:** ${entry.taskId ?? '(run-level)'}`,
-    `- **Trigger:** ${entry.trigger}`,
+    `- **Task:** ${taskId}`,
+    `- **Trigger:** ${uniqueTriggers.join(', ')}`,
     ...afterMeta,
     '### Context',
-    ...(entry.context.length > 0
-      ? entry.context.map(line => `- ${line}`)
-      : ['- _(empty)_']),
+    ...contextBlocks,
     '',
     '### Evidence',
     evidence,
@@ -157,6 +194,20 @@ const appendMonitor = (monitorPath: string | undefined, line: string): void => {
   appendFileSync(monitorPath, `${line}\n`);
 };
 
+const groupEntriesByWave = (
+  runId: string,
+  entries: ExceptionEntry[]
+): Map<string, ExceptionEntry[]> => {
+  const groups = new Map<string, ExceptionEntry[]>();
+  for (const entry of entries) {
+    const title = escalationTitle(runId, entry);
+    const group = groups.get(title) ?? [];
+    group.push(entry);
+    groups.set(title, group);
+  }
+  return groups;
+};
+
 @injectable()
 export class EscalationService implements IEscalationService {
   constructor(
@@ -178,17 +229,21 @@ export class EscalationService implements IEscalationService {
     const issues: Record<string, string> = {};
     let warnedMissingOperator = false;
     const refs = input.refs;
+    const waves = groupEntriesByWave(input.runId, input.entries);
 
-    for (const entry of input.entries) {
-      const title = escalationTitle(input.runId, entry);
+    for (const [title, group] of waves) {
       let newlyDelivered = false;
+      const triggers = [...new Set(group.map(entry => entry.trigger))];
+      const taskId = group[0]?.taskId;
 
       if (input.chronicleRepo !== undefined) {
         const tags = [
           'action-required',
-          `trigger:${entry.trigger}`,
-          `task:${entry.taskId}`,
-          ...entry.context.slice(0, 2).map(c => `ctx:${c.slice(0, 80)}`),
+          ...triggers.map(trigger => `trigger:${trigger}`),
+          `task:${taskId ?? 'run'}`,
+          ...group.flatMap(entry =>
+            entry.context.slice(0, 2).map(c => `ctx:${c.slice(0, 80)}`)
+          ),
           ...(input.evidenceIds ?? []).map(
             id => `evidence:${evidenceLink(input.runId, id)}`
           ),
@@ -200,7 +255,7 @@ export class EscalationService implements IEscalationService {
       }
 
       if (input.repoPath !== undefined) {
-        const issueResult = this.postIssue(input, entry, title, refs);
+        const issueResult = this.postIssue(input, group, title, refs);
         if (issueResult.url !== undefined) {
           issues[title] = issueResult.url;
         }
@@ -227,8 +282,8 @@ export class EscalationService implements IEscalationService {
         prompt: wakePromptFor(title, refs),
         data: {
           runId: input.runId,
-          taskId: entry.taskId,
-          trigger: entry.trigger,
+          taskId,
+          trigger: triggers.join(','),
           issueUrl: issues[title],
           ...(refs !== undefined ? { refs } : {})
         },
@@ -253,7 +308,7 @@ export class EscalationService implements IEscalationService {
    */
   private postIssue(
     input: EscalateInput,
-    entry: ExceptionEntry,
+    entries: ExceptionEntry[],
     title: string,
     refs: EscalationRefs | undefined
   ): { created: boolean; url?: string } {
@@ -263,7 +318,7 @@ export class EscalationService implements IEscalationService {
     }
 
     try {
-      const existing = this._issueRepo.findByTitle(repoPath, title);
+      const existing = this.findExistingIssue(repoPath, input.runId, entries);
       if (existing !== null) {
         return { created: false, url: existing.url };
       }
@@ -274,7 +329,7 @@ export class EscalationService implements IEscalationService {
           : undefined;
       const ref = this._issueRepo.create(repoPath, {
         title,
-        body: escalationBody(input.runId, entry, input.evidenceIds, refs),
+        body: escalationBody(input.runId, entries, input.evidenceIds, refs),
         assignee
       });
       return { created: true, url: ref.url };
@@ -293,5 +348,35 @@ export class EscalationService implements IEscalationService {
       );
       return { created: false };
     }
+  }
+
+  /**
+   * Prefer the wave title; fall back to legacy per-trigger titles so resume
+   * after this fix does not open a third issue next to #92/#93-style dupes.
+   */
+  private findExistingIssue(
+    repoPath: string,
+    runId: string,
+    entries: ExceptionEntry[]
+  ): { url: string; number: number } | null {
+    const title = escalationTitle(runId, entries[0]!);
+    const wave = this._issueRepo.findByTitle(repoPath, title);
+    if (wave !== null) {
+      return wave;
+    }
+    const taskId = entries[0]?.taskId;
+    if (taskId === undefined || taskId.length === 0) {
+      return null;
+    }
+    for (const entry of entries) {
+      const legacy = this._issueRepo.findByTitle(
+        repoPath,
+        legacyEscalationTitle(runId, taskId, entry.trigger)
+      );
+      if (legacy !== null) {
+        return legacy;
+      }
+    }
+    return null;
   }
 }

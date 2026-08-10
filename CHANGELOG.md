@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **sdlc-workflow (bug):** One ACTION REQUIRED GitHub issue per escalate
+  wave (`runId` + `taskId`) — coalesce aggregator triggers such as
+  `reviewer-disagreement` + `envelope-breach` into a single issue/wake
+  instead of one issue per trigger (repro #92/#93). Resume reuses legacy
+  per-trigger open titles when present.
 - **sdlc-workflow (SPEC-PRD-0020-P2 T-03):** Continuity abandoned-run flagging
   and blocker-close wake use `RunStateRepository.idleSeconds`,
   `BlockerService` resumable reporting, and the shared

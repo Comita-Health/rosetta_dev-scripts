@@ -5,7 +5,7 @@ import type { IRunStateRepository } from '../repositories/run-state.repository';
 import { WORKFLOW_TOKENS } from '../tokens';
 import type { ExceptionTrigger } from '../types';
 import { WorkflowError } from '../types';
-import { escalationTitle } from './escalation.service';
+import { escalationTitle, legacyEscalationTitle } from './escalation.service';
 
 export interface BlockerStatus {
   taskId: string;
@@ -100,7 +100,30 @@ export class BlockerService implements IBlockerService {
           continue;
         }
         seen.add(title);
-        const open = this._issueRepo.findByTitle(repoPath, title);
+        // Wave title first; then any legacy per-trigger title for this task
+        // still open from before wave coalescing (#92/#93).
+        let open = this._issueRepo.findByTitle(repoPath, title);
+        if (open === null && entry.taskId !== undefined) {
+          const legacySeen = new Set<string>();
+          for (const candidate of state.exceptions) {
+            if (candidate.taskId !== entry.taskId) {
+              continue;
+            }
+            const legacy = legacyEscalationTitle(
+              input.runId,
+              entry.taskId,
+              candidate.trigger
+            );
+            if (legacySeen.has(legacy) === true) {
+              continue;
+            }
+            legacySeen.add(legacy);
+            open = this._issueRepo.findByTitle(repoPath, legacy);
+            if (open !== null) {
+              break;
+            }
+          }
+        }
         blockers.push({
           taskId: entry.taskId ?? 'run',
           trigger: entry.trigger,

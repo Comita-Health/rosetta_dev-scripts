@@ -323,11 +323,15 @@ P3 T-04 the gates enforce by default: green across the board merges the
 task PR automatically; any red gate blocks and escalates (`--shadow`
 disables enforcement for calibration).
 
-**One ACTION REQUIRED issue per escalate wave.** When the phase aggregator
-already posts a specific exception (`sandbox-failed`, `envelope-breach`,
-`reviewer-disagreement`, …), enforcement still records `merge-blocked` in
-the run ledger but does **not** open a second GitHub issue with that
-title for the same head. `merge-blocked` issues remain when the
+**One ACTION REQUIRED issue per escalate wave.** The phase aggregator may
+emit several exception triggers for the same task head (e.g.
+`reviewer-disagreement` + `envelope-breach`). Escalation posts **one**
+GitHub issue and wake titled
+`ACTION REQUIRED: SDLC <runId> <taskId>` with every trigger listed in the
+body — not one issue per trigger (Comita-Health/rosetta_dev-scripts#92 /
+#93). When the aggregator already filed that wave, enforcement still
+records `merge-blocked` in the run ledger but does **not** open a second
+GitHub issue for the same head. `merge-blocked` issues remain when the
 aggregator has nothing to file (for example CI/verification-only red, or
 green gates with no recorded PR).
 
