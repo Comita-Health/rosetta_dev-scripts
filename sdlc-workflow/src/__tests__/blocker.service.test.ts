@@ -123,7 +123,27 @@ describe('BlockerService (SPEC-PRD-0020-P2 T-03)', () => {
 
     const report = query();
     expect(report.blockers).toHaveLength(1);
-    expect(findByTitle).toHaveBeenCalledTimes(1);
+    // Wave title + one unique legacy per-trigger title (deduped).
+    expect(findByTitle).toHaveBeenCalledTimes(2);
+  });
+
+  it('treats any open legacy per-trigger issue as blocking the wave', () => {
+    load.mockReturnValue(
+      stateWith([
+        exception('reviewer-disagreement'),
+        exception('envelope-breach')
+      ])
+    );
+    findByTitle.mockImplementation((_repo: string, title: string) =>
+      title.includes('envelope-breach')
+        ? { url: 'https://github.com/o/r/issues/93', number: 93 }
+        : null
+    );
+
+    const report = query();
+    expect(report.blockers).toHaveLength(1);
+    expect(report.blockers[0]?.state).toBe('open');
+    expect(report.resumable).toBe(false);
   });
 
   it('fails open when the issue probe throws', () => {

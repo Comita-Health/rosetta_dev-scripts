@@ -90,7 +90,7 @@ describe('EscalationService (P3 T-06 + fail-loud T-04)', () => {
       expect(outcome.posted[0]).toBe(escalationTitle('run-1', entry(trigger)));
       const [, title, tags] = appendItem.mock.calls[0];
       expect(title).toContain('T-01');
-      expect(title).toContain(trigger);
+      expect(title).not.toContain(trigger); // wave title — trigger is a tag
       expect(tags).toEqual(
         expect.arrayContaining([
           'action-required',
@@ -322,6 +322,74 @@ describe('EscalationService (P3 T-06 + fail-loud T-04)', () => {
     const pending = path.join(wakeDir, 'pending');
     const files = readdirSync(pending).filter(f => f.endsWith('.json'));
     expect(files).toHaveLength(2);
+  });
+
+  it('coalesces multiple triggers for the same task into one GitHub issue and wake (#92/#93)', () => {
+    // Repro: phase aggregator emits reviewer-disagreement + envelope-breach
+    // for the same T-04 head — must not open two ACTION REQUIRED issues.
+    const entries = [
+      entry('reviewer-disagreement', 'T-04'),
+      entry('envelope-breach', 'T-04')
+    ];
+    const outcome = service.post({
+      chronicleRepo: '/chronicle',
+      runId: 'prd-0020-p2-continuity-20260810',
+      repoPath: '/repo',
+      operator: 'ops',
+      entries,
+      wakeDir
+    });
+
+    expect(createIssue).toHaveBeenCalledTimes(1);
+    expect(outcome.wakes).toHaveLength(1);
+    expect(outcome.posted).toHaveLength(1);
+    expect(outcome.posted[0]).toBe(
+      'ACTION REQUIRED: SDLC prd-0020-p2-continuity-20260810 T-04'
+    );
+    const [, issueInput] = createIssue.mock.calls[0];
+    expect(issueInput.title).toBe(
+      'ACTION REQUIRED: SDLC prd-0020-p2-continuity-20260810 T-04'
+    );
+    expect(issueInput.body).toContain(
+      '**Trigger:** reviewer-disagreement, envelope-breach'
+    );
+    expect(issueInput.body).toContain('#### reviewer-disagreement');
+    expect(issueInput.body).toContain('#### envelope-breach');
+    const [, , tags] = appendItem.mock.calls[0];
+    expect(tags).toEqual(
+      expect.arrayContaining([
+        'trigger:reviewer-disagreement',
+        'trigger:envelope-breach',
+        'task:T-04'
+      ])
+    );
+  });
+
+  it('reuses a legacy per-trigger open issue instead of filing a wave-title duplicate', () => {
+    findByTitle.mockImplementation((_repo: string, title: string) => {
+      if (
+        title === 'ACTION REQUIRED: SDLC run-1 T-04 — reviewer-disagreement'
+      ) {
+        return { url: 'https://github.com/org/repo/issues/92', number: 92 };
+      }
+      return null;
+    });
+
+    const outcome = service.post({
+      runId: 'run-1',
+      repoPath: '/repo',
+      operator: 'ops',
+      entries: [
+        entry('reviewer-disagreement', 'T-04'),
+        entry('envelope-breach', 'T-04')
+      ],
+      wakeDir
+    });
+
+    expect(createIssue).not.toHaveBeenCalled();
+    expect(outcome.issues['ACTION REQUIRED: SDLC run-1 T-04']).toBe(
+      'https://github.com/org/repo/issues/92'
+    );
   });
 
   it('a failed GitHub issue post appends a visible monitor.log warning while the run continues', () => {
