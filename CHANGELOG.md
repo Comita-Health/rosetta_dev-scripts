@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **sdlc-workflow (SPEC-PRD-0025-P1 T-03):** Dispatch headless operator-unstick
+  after remediable gate remediation exhausts, before ACTION REQUIRED.
+  `OperatorUnstickService` runs on the local supervise/daemon path via
+  `AgentRunnerRepository` (no chat/session). Cleared / risky-proceed
+  suppress `EscalationService.post` for that wave; abstain / exhaust /
+  authority-bound keep the existing escalate + issue-state watch path.
+  Escalate tier is `unstick-in-flight` while the agent turn runs.
+  Wired from `run.handler` `remediationRound` only when
+  `GateRemediationService` returns skipped/failed for exhausted remediable
+  reviewer|envelope findings.
+
 - **sdlc-workflow (SPEC-PRD-0025-P1 T-02):** Author `buildOperatorUnstickPrompt`
   with an explicit operator mandate (rebase/integration tip, out-of-band
   merge + `record-merge`, resume via existing engine CLIs) distinct from

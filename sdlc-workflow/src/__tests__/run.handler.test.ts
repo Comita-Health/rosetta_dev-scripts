@@ -16,6 +16,7 @@ import type { IRunStateRepository } from '../repositories/run-state.repository';
 import type { ISpecDocRepository } from '../repositories/spec-doc.repository';
 import type { IEscalationService } from '../services/escalation.service';
 import type { IGateRemediationService } from '../services/gate-remediation.service';
+import type { IOperatorUnstickService } from '../services/operator-unstick.service';
 import {
   RetryExecutorService,
   type IRetryExecutorService
@@ -167,6 +168,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
   let watchRegister: jest.Mock;
   let daemonConfigLoad: jest.Mock;
   let remediate: jest.Mock;
+  let unstick: jest.Mock;
   let closeoutAggregate: jest.Mock;
   let closeoutGenerate: jest.Mock;
 
@@ -338,6 +340,13 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
       attempt: 0,
       detail: 'no remediable gate findings'
     });
+    // Default: unstick not applicable / skipped — escalate path unchanged
+    // unless a case exhausts remediable remediation and stubs an outcome.
+    unstick = jest.fn().mockResolvedValue({
+      kind: 'skipped',
+      attempt: 0,
+      detail: 'no remediable gate findings for unstick'
+    });
 
     const container = new Container();
     container
@@ -494,6 +503,9 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
     container
       .bind<IGateRemediationService>(WORKFLOW_TOKENS.GateRemediationService)
       .toConstantValue({ remediate });
+    container
+      .bind<IOperatorUnstickService>(WORKFLOW_TOKENS.OperatorUnstickService)
+      .toConstantValue({ unstick });
     container
       .bind<ICloseoutAggregateService>(WORKFLOW_TOKENS.CloseoutAggregateService)
       .toConstantValue({ aggregate: closeoutAggregate });
@@ -1429,9 +1441,12 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
           attempt: 2,
           detail: 'gate-fix attempts exhausted (2/2)'
         });
+        // Exhausted remediable → unstick runs; default skip still escalates.
+        state.gateFixAttempts = { 'T-01': 2 };
 
         await handler.runTask(INPUT);
 
+        expect(unstick).toHaveBeenCalled();
         // An exhausted budget must be loud, not silently absorbed.
         expect(escalationPost).toHaveBeenCalled();
         expect(state.exceptions).toContainEqual(
@@ -1470,6 +1485,242 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
         await handler.runTask(remediationInput());
         expect(remediate).toHaveBeenCalledTimes(1);
         expect(deploy).not.toHaveBeenCalled();
+      });
+    });
+
+    // SPEC-PRD-0025-P1 T-03: after remediable gate remediation exhausts,
+    // dispatch headless operator-unstick before ACTION REQUIRED.
+    describe('operator-unstick after remediation exhausts (SPEC-PRD-0025-P1 T-03)', () => {
+      let monitorDir: string;
+      let monitorPath: string;
+      const unstickInput = () => ({ ...INPUT, monitorPath });
+      const monitorLog = (): string =>
+        existsSync(monitorPath) ? readFileSync(monitorPath, 'utf-8') : '';
+
+      beforeEach(() => {
+        monitorDir = mkdtempSync(path.join(os.tmpdir(), 'sdlc-unstick-'));
+        monitorPath = path.join(monitorDir, 'monitor.log');
+      });
+
+      afterEach(() => rmSync(monitorDir, { recursive: true, force: true }));
+
+      const exhaustedRemediableReviewer = () => {
+        greenGates();
+        review.mockResolvedValue(
+          verdictOf('reviewer', 'breach', ['unsafe migration'])
+        );
+        aggregate.mockReturnValue({
+          verdict: verdictOf('phase', 'breach', ['failing gates: reviewer']),
+          exceptions: [
+            {
+              trigger: 'reviewer-disagreement' as const,
+              taskId: 'T-01',
+              context: ['unsafe migration'],
+              recordedAt: 'x'
+            }
+          ]
+        });
+        state.gateFixAttempts = { 'T-01': 2 };
+        remediate.mockResolvedValue({
+          kind: 'skipped',
+          attempt: 2,
+          detail: 'gate-fix attempts exhausted (2/2)'
+        });
+      };
+
+      it('dispatches operator-unstick with no chat/session before ACTION REQUIRED when remediation exhausts', async () => {
+        exhaustedRemediableReviewer();
+        const order: string[] = [];
+        unstick.mockImplementation(async () => {
+          order.push('unstick');
+          return {
+            kind: 'abstained',
+            attempt: 1,
+            detail: 'cannot clear'
+          };
+        });
+        escalationPost.mockImplementation(() => {
+          order.push('escalate');
+          return {
+            posted: ['ACTION REQUIRED: SDLC run-1 T-01 — reviewer-disagreement'],
+            wakes: [],
+            issues: {}
+          };
+        });
+
+        await handler.runTask(unstickInput());
+
+        expect(remediate).toHaveBeenCalled();
+        expect(unstick).toHaveBeenCalledTimes(1);
+        const call = unstick.mock.calls[0][0];
+        expect(call.worktreePath).toBe('/runs/run-1/worktrees/T-01');
+        expect(call.branch).toBe('sdlc/run-1/T-01');
+        expect(call.verdicts.map((v: GateVerdict) => v.gate)).toEqual([
+          'reviewer',
+          'envelope'
+        ]);
+        // Headless: service input has no chat/session fields.
+        expect(call).not.toHaveProperty('session');
+        expect(call).not.toHaveProperty('chat');
+        expect(order).toEqual(['unstick', 'escalate']);
+        expect(monitorLog()).toContain(
+          '[unstick] T-01 dispatching operator-unstick (no chat/session)'
+        );
+        expect(monitorLog().indexOf('[unstick]')).toBeLessThan(
+          monitorLog().indexOf('[unstick] T-01 abstained')
+        );
+      });
+
+      it('suppresses ACTION REQUIRED escalate when unstick clears the blocker', async () => {
+        exhaustedRemediableReviewer();
+        unstick.mockResolvedValue({
+          kind: 'cleared',
+          attempt: 1,
+          detail: 'attempt 1/2 → cleared: rebased + record-merge'
+        });
+
+        await handler.runTask(unstickInput());
+
+        expect(unstick).toHaveBeenCalled();
+        expect(escalationPost).not.toHaveBeenCalled();
+        expect(prMerge).not.toHaveBeenCalled();
+        expect(monitorLog()).toContain('[unstick] T-01 cleared');
+      });
+
+      it('escalates ACTION REQUIRED and registers issue-state watches when unstick abstains', async () => {
+        const workspace = mkdtempSync(path.join(os.tmpdir(), 'unstick-watch-'));
+        const { mkdirSync, writeFileSync } = await import('fs');
+        mkdirSync(path.join(workspace, '.sdlc'), { recursive: true });
+        writeFileSync(
+          path.join(workspace, '.sdlc', 'daemon.json'),
+          JSON.stringify({
+            activateScript: '/a',
+            runsDir: '/runs',
+            defaultPollSeconds: 45,
+            headlessRunner: 'test'
+          })
+        );
+        exhaustedRemediableReviewer();
+        unstick.mockResolvedValue({
+          kind: 'abstained',
+          attempt: 1,
+          detail: 'attempt 1/2 → abstained'
+        });
+        escalationPost.mockReturnValue({
+          posted: ['ACTION REQUIRED: SDLC run-1 T-01 — reviewer-disagreement'],
+          wakes: [],
+          issues: {
+            'ACTION REQUIRED: SDLC run-1 T-01 — reviewer-disagreement':
+              'https://github.com/Acme/widgets/issues/99'
+          }
+        });
+
+        try {
+          await handler.runTask({
+            ...unstickInput(),
+            repoPath: workspace,
+            chronicleRepo: '/chronicle'
+          });
+
+          expect(escalationPost).toHaveBeenCalled();
+          expect(watchRegister).toHaveBeenCalledWith(
+            workspace,
+            expect.objectContaining({
+              kind: 'issue-state',
+              target: { repo: 'Acme/widgets', number: 99 },
+              resumeContext: expect.objectContaining({
+                runId: 'run-1',
+                taskId: 'T-01'
+              })
+            })
+          );
+        } finally {
+          rmSync(workspace, { recursive: true, force: true });
+        }
+      });
+
+      it('escalates ACTION REQUIRED when unstick budget is exhausted without a clear', async () => {
+        exhaustedRemediableReviewer();
+        unstick.mockResolvedValue({
+          kind: 'exhausted',
+          attempt: 2,
+          detail: 'operator-unstick attempts exhausted (2/2)'
+        });
+
+        await handler.runTask(unstickInput());
+
+        expect(escalationPost).toHaveBeenCalled();
+        expect(monitorLog()).toContain('[unstick] T-01 exhausted');
+      });
+
+      it('files ACTION REQUIRED on authority-bound and does not auto-clear the wave', async () => {
+        exhaustedRemediableReviewer();
+        unstick.mockResolvedValue({
+          kind: 'authority-bound',
+          attempt: 1,
+          detail: 'attempt 1/2 → authority-bound: Draft→Approved / PHI'
+        });
+
+        await handler.runTask(unstickInput());
+
+        expect(escalationPost).toHaveBeenCalled();
+        expect(prMerge).not.toHaveBeenCalled();
+        expect(state.taskResults['T-01']?.mergedSha).toBeUndefined();
+        expect(monitorLog()).toContain('[unstick] T-01 authority-bound');
+      });
+
+      it('does not dispatch unstick while gate remediation still has attempts', async () => {
+        greenGates();
+        review.mockResolvedValue(
+          verdictOf('reviewer', 'breach', ['unsafe migration'])
+        );
+        state.gateFixAttempts = { 'T-01': 1 };
+        remediate.mockResolvedValue({
+          kind: 'failed',
+          attempt: 1,
+          detail: 'remediation agent produced no commit'
+        });
+        aggregate.mockReturnValue({
+          verdict: verdictOf('phase', 'breach', ['failing gates: reviewer']),
+          exceptions: [
+            {
+              trigger: 'reviewer-disagreement' as const,
+              taskId: 'T-01',
+              context: ['unsafe migration'],
+              recordedAt: 'x'
+            }
+          ]
+        });
+
+        await handler.runTask(unstickInput());
+
+        expect(remediate).toHaveBeenCalled();
+        expect(unstick).not.toHaveBeenCalled();
+        expect(escalationPost).toHaveBeenCalled();
+      });
+
+      it('does not dispatch unstick when remediation skips for non-remediable findings', async () => {
+        greenGates();
+        // Default remediate = no remediable; force a red phase via CI instead.
+        ciEvaluate.mockResolvedValue(
+          verdictOf('ci', 'breach', ['checks failed'])
+        );
+        aggregate.mockReturnValue({
+          verdict: verdictOf('phase', 'breach', ['failing gates: ci']),
+          exceptions: [
+            {
+              trigger: 'ci-fix-attempts-exhausted' as const,
+              taskId: 'T-01',
+              context: ['checks failed'],
+              recordedAt: 'x'
+            }
+          ]
+        });
+
+        await handler.runTask(unstickInput());
+
+        expect(remediate).toHaveBeenCalled();
+        expect(unstick).not.toHaveBeenCalled();
       });
     });
 

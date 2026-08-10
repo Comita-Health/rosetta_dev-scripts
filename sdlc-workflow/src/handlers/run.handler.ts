@@ -18,6 +18,11 @@ import type { IEnvelopeGateService } from '../services/envelope-gate.service';
 import type { IDaemonConfigRepository } from '../repositories/daemon-config.repository';
 import type { IEscalationService } from '../services/escalation.service';
 import type { IGateRemediationService } from '../services/gate-remediation.service';
+import type { IOperatorUnstickService } from '../services/operator-unstick.service';
+import {
+  shouldDispatchOperatorUnstick,
+  suppressesBlockingEscalate
+} from '../services/operator-unstick.service';
 import type { IWatchRegistryService } from '../services/watch-registry.service';
 import type {
   ExecutorOutcome,
@@ -299,6 +304,8 @@ export class RunHandler implements IRunHandler {
     private readonly _heartbeat: IHeartbeatService,
     @inject(WORKFLOW_TOKENS.GateRemediationService)
     private readonly _remediation: IGateRemediationService,
+    @inject(WORKFLOW_TOKENS.OperatorUnstickService)
+    private readonly _operatorUnstick: IOperatorUnstickService,
     @inject(WORKFLOW_TOKENS.RetryExecutorService)
     private readonly _retry: IRetryExecutorService,
     @inject(WORKFLOW_TOKENS.CloseoutAggregateService)
@@ -863,17 +870,21 @@ export class RunHandler implements IRunHandler {
   }
 
   /**
-   * Wave 0: dispatch one bounded gate remediation round. Returns true when
-   * a fix landed and the caller must abandon this pass — the verdicts it
-   * holds now describe a superseded head SHA, and re-selection will bring
-   * the task back for a clean re-gate.
+   * Wave 0 / SPEC-PRD-0025-P1 T-03: dispatch one bounded gate remediation
+   * round, then (only when remediable remediation is exhausted) a headless
+   * operator-unstick turn before the caller posts ACTION REQUIRED.
+   *
+   * Returns true when a fix/clear landed and the caller must abandon this
+   * pass — the verdicts it holds now describe a superseded head SHA (or the
+   * blocker was cleared via record-merge/resume), and re-selection will
+   * bring the task back for a clean re-gate.
    *
    * @remarks
-   * Escalation is deliberately suppressed on a successful remediation:
-   * filing a needs-human issue for a finding the engine is actively fixing
-   * is exactly the noise that trained the operator to ignore escalations.
-   * A skip or a failure falls through to the normal escalation path, so an
-   * exhausted budget is still loud.
+   * Escalation is deliberately suppressed on a successful remediation or a
+   * cleared/risky-proceed unstick: filing a needs-human issue for a finding
+   * the engine is actively fixing is exactly the noise that trained the
+   * operator to ignore escalations. Abstain / exhaust / authority-bound
+   * fall through to the normal escalation + issue-state watch path.
    */
   private async remediationRound(
     input: RunTaskInput,
@@ -922,6 +933,49 @@ export class RunHandler implements IRunHandler {
         input,
         `[remediate] ${task.id} failed: ${outcome.detail}`
       );
+    }
+
+    // SPEC-PRD-0025-P1 T-03: remediable remediation exhausted → headless
+    // operator-unstick on the local supervise/daemon path (no chat/session)
+    // before any human-blocking ACTION REQUIRED escalate for this wave.
+    if (!shouldDispatchOperatorUnstick(outcome, verdicts, state, task.id)) {
+      return false;
+    }
+
+    this._heartbeat.setContext({
+      taskId: task.id,
+      step: 'operator-unstick',
+      worktreePath,
+      lastLine: 'dispatching operator-unstick agent'
+    });
+    this.noteMonitor(
+      input,
+      `[unstick] ${task.id} dispatching operator-unstick (no chat/session)`
+    );
+
+    const unstick = await this._operatorUnstick.unstick({
+      worktreePath,
+      branch,
+      task,
+      envelope: spec.envelope,
+      runsDir: input.runsDir,
+      state,
+      verdicts,
+      budgetK: spec.envelope.budgetK
+    });
+
+    const unstickLine = `[unstick] ${task.id} ${unstick.kind}: ${unstick.detail}`;
+    console.log(
+      suppressesBlockingEscalate(unstick.kind)
+        ? chalk.yellow(`  ${unstickLine}`)
+        : chalk.gray(`  ${unstickLine}`)
+    );
+    this.noteMonitor(input, unstickLine);
+
+    if (suppressesBlockingEscalate(unstick.kind)) {
+      // cleared / risky-proceed: abandon the pass so re-selection / resume
+      // can proceed without posting ACTION REQUIRED for this wave.
+      return true;
     }
     return false;
   }
