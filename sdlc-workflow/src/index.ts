@@ -207,6 +207,10 @@ import {
   IContinuityService
 } from './services/continuity.service';
 import {
+  StaleAgentService,
+  IStaleAgentService
+} from './services/stale-agent.service';
+import {
   DaemonLifecycleService,
   IDaemonLifecycleService
 } from './services/daemon-lifecycle.service';
@@ -473,6 +477,10 @@ container
 container
   .bind<ILegacyWakeMigrateService>(WORKFLOW_TOKENS.LegacyWakeMigrateService)
   .to(LegacyWakeMigrateService);
+container
+  .bind<IStaleAgentService>(WORKFLOW_TOKENS.StaleAgentService)
+  .to(StaleAgentService)
+  .inSingletonScope();
 container
   .bind<IContinuityService>(WORKFLOW_TOKENS.ContinuityService)
   .to(ContinuityService)

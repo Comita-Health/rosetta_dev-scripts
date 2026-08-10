@@ -6,7 +6,7 @@ import {
   statSync,
   writeFileSync
 } from 'fs';
-import { inject, injectable } from 'inversify';
+import { inject, injectable, optional } from 'inversify';
 import path from 'path';
 import type { IDaemonConfigRepository } from '../repositories/daemon-config.repository';
 import type { IDaemonStoreRepository } from '../repositories/daemon-store.repository';
@@ -25,6 +25,7 @@ import { appendMonitorLine } from '../utils/monitor';
 import { allTasksMerged } from '../utils/run-completion';
 import { commitWatchSignal } from '../utils/watch-wake-commit';
 import { escalationTitle } from './escalation.service';
+import type { IStaleAgentService } from './stale-agent.service';
 
 /** Default idle window before a dead-supervisor run is treated as abandoned. */
 export const DEFAULT_ABANDONED_SECONDS = 7_200;
@@ -165,7 +166,10 @@ export class ContinuityService implements IContinuityService {
     @inject(WORKFLOW_TOKENS.DaemonStoreRepository)
     private readonly _store: IDaemonStoreRepository,
     @inject(WORKFLOW_TOKENS.IssueRepository)
-    private readonly _issueRepo: IIssueRepository
+    private readonly _issueRepo: IIssueRepository,
+    @inject(WORKFLOW_TOKENS.StaleAgentService)
+    @optional()
+    private readonly _staleAgent?: IStaleAgentService
   ) {}
 
   start(workspaceRoot: string, tickSeconds: number): void {
@@ -202,6 +206,10 @@ export class ContinuityService implements IContinuityService {
       ) {
         result.skipped.push(skip);
       }
+    }
+    // T-02: per-run stale-agent kill shares this continuity tick.
+    if (this._staleAgent !== undefined) {
+      await this._staleAgent.tick(workspaceRoot);
     }
     return result;
   }
