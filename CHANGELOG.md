@@ -7,8 +7,11 @@
   implementation heartbeat is quieter than `SDLC_AGENT_STALL_SECONDS`
   (default 2400), performs one kill attempt scoped to that `runId` and
   commits one idempotent `agent-stalled` wake via `commitWatchSignal`.
-  Episode-keyed wake ids re-arm after the heartbeat recovers so a later
-  stall notifies again — no machine-global kill of unrelated agents.
+  Skips finished runs (`allTasksMerged`) and runs without usable
+  `state.json` before kill/wake — matching bash continuity and
+  ContinuityService finish gates. Episode-keyed wake ids re-arm after the
+  heartbeat recovers so a later stall notifies again — no machine-global
+  kill of unrelated agents.
 
 - **sdlc-workflow (SPEC-PRD-0020-P2 T-01):** `ContinuityService` scans the
   workspace `runsDir` each daemon tick and relaunches unfinished runs whose

@@ -11,9 +11,13 @@ import { inject, injectable } from 'inversify';
 import path from 'path';
 import type { IDaemonConfigRepository } from '../repositories/daemon-config.repository';
 import type { IDaemonStoreRepository } from '../repositories/daemon-store.repository';
+import type { IRunStateRepository } from '../repositories/run-state.repository';
+import type { ISpecDocRepository } from '../repositories/spec-doc.repository';
 import { WORKFLOW_TOKENS } from '../tokens';
-import type { DurableWatchRecord } from '../types';
+import type { DurableWatchRecord, RunState, SpecDocument } from '../types';
+import { readSuperviseLaunchRecord } from '../utils/launch-record';
 import { appendMonitorLine } from '../utils/monitor';
+import { allTasksMerged } from '../utils/run-completion';
 import { commitWatchSignal } from '../utils/watch-wake-commit';
 
 /**
@@ -168,7 +172,9 @@ const continuityWatch = (
  * heartbeat quieter than the stall threshold triggers exactly one kill attempt
  * scoped to that runId and one `agent-stalled` wake on the shared inbox.
  * Episode-keyed wake ids re-arm when the heartbeat recovers so a later stall
- * can notify again.
+ * can notify again. Finished / unusable-state runs are skipped — matching
+ * bash `check_hung_agent` (gated by `state.json` + `run_is_finished`) and
+ * ContinuityService's `isFinished` / `allTasksMerged` checks.
  */
 @injectable()
 export class StaleAgentService implements IStaleAgentService {
@@ -182,7 +188,11 @@ export class StaleAgentService implements IStaleAgentService {
     @inject(WORKFLOW_TOKENS.DaemonConfigRepository)
     private readonly _configRepo: IDaemonConfigRepository,
     @inject(WORKFLOW_TOKENS.DaemonStoreRepository)
-    private readonly _store: IDaemonStoreRepository
+    private readonly _store: IDaemonStoreRepository,
+    @inject(WORKFLOW_TOKENS.RunStateRepository)
+    private readonly _runStateRepo: IRunStateRepository,
+    @inject(WORKFLOW_TOKENS.SpecDocRepository)
+    private readonly _specDocRepo: ISpecDocRepository
   ) {}
 
   async tick(workspaceRoot: string): Promise<StaleAgentTickResult> {
@@ -225,6 +235,17 @@ export class StaleAgentService implements IStaleAgentService {
     pollSeconds: number,
     threshold: number
   ): StaleAgentSkip | null {
+    // Bash continuity only calls check_hung_agent when state.json is present
+    // and the run is unfinished. Mirror ContinuityService here so a completed
+    // run whose last heartbeat still looks "in-flight" never gets a kill/wake.
+    const state = this._runStateRepo.load(runsDir, runId);
+    if (state === null) {
+      return { runId, reason: 'no-state' };
+    }
+    if (this.isFinished(state, runsDir, runId)) {
+      return { runId, reason: 'finished' };
+    }
+
     const runDir = path.join(runsDir, runId);
     const heartbeatPath = path.join(runDir, 'heartbeat.jsonl');
     if (existsSync(heartbeatPath) === false) {
@@ -281,6 +302,33 @@ export class StaleAgentService implements IStaleAgentService {
       path.join(runDir, 'monitor.log'),
       `[continuity] implementation agent stalled ${ageSeconds}s — killing`
     );
+    return null;
+  }
+
+  private isFinished(state: RunState, runsDir: string, runId: string): boolean {
+    const launch = readSuperviseLaunchRecord(runsDir, runId);
+    const spec = this.loadSpec(state, launch?.specPath ?? null);
+    if (spec === null) {
+      return false;
+    }
+    return allTasksMerged(spec, state);
+  }
+
+  private loadSpec(
+    state: RunState,
+    launchSpecPath: string | null
+  ): SpecDocument | null {
+    const candidates = [launchSpecPath, state.specPath].filter(
+      (value): value is string =>
+        typeof value === 'string' && value.trim().length > 0
+    );
+    for (const specPath of candidates) {
+      try {
+        return this._specDocRepo.read(specPath);
+      } catch {
+        // Try the next candidate; absence must not abort the tick.
+      }
+    }
     return null;
   }
 }

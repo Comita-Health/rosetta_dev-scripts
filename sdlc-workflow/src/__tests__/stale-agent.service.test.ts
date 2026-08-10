@@ -1,4 +1,5 @@
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -15,6 +16,8 @@ import {
   killAgentsForRun
 } from '../services/stale-agent.service';
 import { RunLockRepository } from '../repositories/run-lock.repository';
+import type { RunState, SpecDocument, TaskRunResult } from '../types';
+import { writeSuperviseLaunchRecord } from '../utils/launch-record';
 
 const STALE_SOURCE = path.join(
   __dirname,
@@ -36,6 +39,97 @@ const writeDaemonConfig = (root: string, runsDir: string): void => {
     'utf-8'
   );
 };
+
+const baseSpec = (taskIds: string[]): SpecDocument =>
+  ({
+    id: 'SPEC-PRD-0020-P2',
+    prdId: 'PRD-0020',
+    phase: 2,
+    status: 'Approved',
+    envelope: {
+      allowedPaths: ['sdlc-workflow/**'],
+      forbiddenSurfaces: [],
+      maxDiffLines: 2500,
+      budgetK: 250
+    },
+    tasks: taskIds.map(id => ({
+      id,
+      storyId: 'S-03',
+      phase: 2,
+      title: id,
+      engineeringNotes: '',
+      complexity: 'M',
+      dependsOn: [],
+      acceptanceCriteria: ['test: x']
+    }))
+  }) as SpecDocument;
+
+const taskResult = (
+  partial: Omit<TaskRunResult, 'recordedAt'> & { recordedAt?: string }
+): TaskRunResult => ({
+  recordedAt: partial.recordedAt ?? '2026-08-10T00:00:00.000Z',
+  ...partial
+});
+
+const baseState = (
+  runId: string,
+  taskResults: RunState['taskResults']
+): RunState =>
+  ({
+    runId,
+    specId: 'SPEC-PRD-0020-P2',
+    specPath: '/repo/specs/PRD-0020/phase-2-spec.md',
+    baseSha: 'base',
+    taskResults,
+    verdicts: [],
+    exceptions: [],
+    criterionVerdicts: [],
+    steps: {},
+    ciFixAttempts: {},
+    gateFixAttempts: {},
+    remediations: {},
+    mergeBlockedRetries: 0,
+    tokenSpendK: 0,
+    updatedAt: new Date().toISOString()
+  }) as RunState;
+
+const writeRunState = (
+  runsDir: string,
+  runId: string,
+  state: RunState
+): void => {
+  const runDir = path.join(runsDir, runId);
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(
+    path.join(runDir, 'state.json'),
+    `${JSON.stringify(state, null, 2)}\n`,
+    'utf-8'
+  );
+  writeSuperviseLaunchRecord({
+    runsDir,
+    runId,
+    argv: ['entry.js', 'run', '--supervise', '--detach'],
+    execArgv: [],
+    execPath: process.execPath,
+    cwd: runsDir,
+    repoPath: path.join(runsDir, 'repo'),
+    specPath: state.specPath
+  });
+};
+
+const unfinishedState = (runId: string): RunState =>
+  baseState(runId, {
+    'T-01': taskResult({ taskId: 'T-01', status: 'completed' })
+  });
+
+const finishedState = (runId: string): RunState =>
+  baseState(runId, {
+    'T-01': taskResult({
+      taskId: 'T-01',
+      status: 'completed',
+      mergedSha: 'abc123'
+    })
+  });
 
 const writeHeartbeat = (
   runsDir: string,
@@ -73,7 +167,10 @@ describe('StaleAgentService (SPEC-PRD-0020-P2 T-02)', () => {
 
   const build = (
     workspace: string,
-    runsDir: string
+    runsDir: string,
+    options?: {
+      spec?: SpecDocument | null;
+    }
   ): {
     service: StaleAgentService;
     store: DaemonStoreRepository;
@@ -99,7 +196,25 @@ describe('StaleAgentService (SPEC-PRD-0020-P2 T-02)', () => {
         }),
         derivePaths: jest.fn()
       },
-      store
+      store,
+      {
+        load: (_runsDir: string, runId: string) => {
+          const file = path.join(runsDir, runId, 'state.json');
+          if (existsSync(file) === false) {
+            return null;
+          }
+          return JSON.parse(readFileSync(file, 'utf-8')) as RunState;
+        }
+      } as never,
+      {
+        read: () => {
+          if (options?.spec === null) {
+            throw new Error('no spec');
+          }
+          return options?.spec ?? baseSpec(['T-01']);
+        },
+        readAtRef: jest.fn()
+      }
     );
     const killForRun = jest.fn();
     service.killForRun = killForRun;
@@ -112,6 +227,7 @@ describe('StaleAgentService (SPEC-PRD-0020-P2 T-02)', () => {
     writeDaemonConfig(workspace, runsDir);
     process.env.SDLC_AGENT_STALL_SECONDS = '60';
 
+    writeRunState(runsDir, 'run-stale', unfinishedState('run-stale'));
     writeHeartbeat(
       runsDir,
       'run-stale',
@@ -164,6 +280,7 @@ describe('StaleAgentService (SPEC-PRD-0020-P2 T-02)', () => {
     writeDaemonConfig(workspace, runsDir);
     process.env.SDLC_AGENT_STALL_SECONDS = '60';
 
+    writeRunState(runsDir, 'run-fresh', unfinishedState('run-fresh'));
     writeHeartbeat(
       runsDir,
       'run-fresh',
@@ -175,6 +292,7 @@ describe('StaleAgentService (SPEC-PRD-0020-P2 T-02)', () => {
       },
       10
     );
+    writeRunState(runsDir, 'run-review', unfinishedState('run-review'));
     writeHeartbeat(
       runsDir,
       'run-review',
@@ -186,6 +304,7 @@ describe('StaleAgentService (SPEC-PRD-0020-P2 T-02)', () => {
       },
       120
     );
+    writeRunState(runsDir, 'run-idle-agent', unfinishedState('run-idle-agent'));
     writeHeartbeat(
       runsDir,
       'run-idle-agent',
@@ -216,6 +335,7 @@ describe('StaleAgentService (SPEC-PRD-0020-P2 T-02)', () => {
     writeDaemonConfig(workspace, runsDir);
     process.env.SDLC_AGENT_STALL_SECONDS = '60';
 
+    writeRunState(runsDir, 'run-loop', unfinishedState('run-loop'));
     writeHeartbeat(
       runsDir,
       'run-loop',
@@ -281,12 +401,64 @@ describe('StaleAgentService (SPEC-PRD-0020-P2 T-02)', () => {
     ).toHaveLength(2);
   });
 
+  it('skips finished runs and runs without usable state before kill/wake', async () => {
+    const workspace = mkdtempSync(path.join(os.tmpdir(), 'stale-finished-'));
+    const runsDir = path.join(workspace, 'runs');
+    writeDaemonConfig(workspace, runsDir);
+    process.env.SDLC_AGENT_STALL_SECONDS = '60';
+
+    // Completed run whose last heartbeat still looks in-flight + stalled.
+    writeRunState(runsDir, 'run-done', finishedState('run-done'));
+    writeHeartbeat(
+      runsDir,
+      'run-done',
+      {
+        ts: '2026-08-10T00:00:00.000Z',
+        runId: 'run-done',
+        step: 'implementation',
+        agentAlive: true
+      },
+      120
+    );
+
+    // Heartbeat present but no state.json — bash continuity skips entirely.
+    writeHeartbeat(
+      runsDir,
+      'run-no-state',
+      {
+        ts: '2026-08-10T00:00:00.000Z',
+        runId: 'run-no-state',
+        step: 'implementation',
+        agentAlive: true
+      },
+      120
+    );
+
+    const { service, store, killForRun } = build(workspace, runsDir);
+    const result = await service.tick(workspace);
+
+    expect(killForRun).not.toHaveBeenCalled();
+    expect(result.killed).toEqual([]);
+    expect(result.skipped).toEqual(
+      expect.arrayContaining([
+        { runId: 'run-done', reason: 'finished' },
+        { runId: 'run-no-state', reason: 'no-state' }
+      ])
+    );
+    expect(
+      store
+        .listPendingWakes(workspace)
+        .filter(wake => wake.signal.startsWith('agent-stalled:'))
+    ).toHaveLength(0);
+  });
+
   it('uses DEFAULT_AGENT_STALL_SECONDS when the env override is invalid', async () => {
     const workspace = mkdtempSync(path.join(os.tmpdir(), 'stale-default-'));
     const runsDir = path.join(workspace, 'runs');
     writeDaemonConfig(workspace, runsDir);
     process.env.SDLC_AGENT_STALL_SECONDS = 'not-a-number';
 
+    writeRunState(runsDir, 'run-default', unfinishedState('run-default'));
     writeHeartbeat(
       runsDir,
       'run-default',
@@ -312,6 +484,7 @@ describe('StaleAgentService (SPEC-PRD-0020-P2 T-02)', () => {
     expect(source).toMatch(/escapeRegExp\(runId\)/);
     expect(source).not.toMatch(/pgrep\s+-lf\s+cursor-agent/);
     expect(source).toMatch(/commitWatchSignal/);
+    expect(source).toMatch(/allTasksMerged/);
     expect(typeof killAgentsForRun).toBe('function');
   });
 
@@ -331,7 +504,7 @@ describe('StaleAgentService (SPEC-PRD-0020-P2 T-02)', () => {
     expect(emptyKill).not.toHaveBeenCalled();
 
     const presentRuns = path.join(workspace, 'runs');
-    mkdirSync(path.join(presentRuns, 'run-bad'), { recursive: true });
+    writeRunState(presentRuns, 'run-bad', unfinishedState('run-bad'));
     writeFileSync(
       path.join(presentRuns, 'run-bad', 'heartbeat.jsonl'),
       'not-json\n',
@@ -344,21 +517,21 @@ describe('StaleAgentService (SPEC-PRD-0020-P2 T-02)', () => {
       past
     );
 
-    mkdirSync(path.join(presentRuns, 'run-empty'), { recursive: true });
+    writeRunState(presentRuns, 'run-empty', unfinishedState('run-empty'));
     writeFileSync(
       path.join(presentRuns, 'run-empty', 'heartbeat.jsonl'),
       '',
       'utf-8'
     );
 
-    mkdirSync(path.join(presentRuns, 'run-blank'), { recursive: true });
+    writeRunState(presentRuns, 'run-blank', unfinishedState('run-blank'));
     writeFileSync(
       path.join(presentRuns, 'run-blank', 'heartbeat.jsonl'),
       '\n\n',
       'utf-8'
     );
 
-    mkdirSync(path.join(presentRuns, 'run-no-hb'), { recursive: true });
+    writeRunState(presentRuns, 'run-no-hb', unfinishedState('run-no-hb'));
 
     const { service, killForRun, store } = build(workspace, presentRuns);
     const result = await service.tick(workspace);
@@ -382,6 +555,7 @@ describe('StaleAgentService (SPEC-PRD-0020-P2 T-02)', () => {
     process.env.SDLC_AGENT_STALL_SECONDS = '';
     process.env.CURSOR_AGENT_BIN = 'my-agent';
 
+    writeRunState(runsDir, 'run-no-ts', unfinishedState('run-no-ts'));
     writeHeartbeat(
       runsDir,
       'run-no-ts',
@@ -454,6 +628,7 @@ describe('StaleAgentService (SPEC-PRD-0020-P2 T-02)', () => {
     writeDaemonConfig(workspace, runsDir);
     process.env.CURSOR_AGENT_BIN = '   ';
 
+    writeRunState(runsDir, 'run-dir-hb', unfinishedState('run-dir-hb'));
     mkdirSync(path.join(runsDir, 'run-dir-hb', 'heartbeat.jsonl'), {
       recursive: true
     });
