@@ -40,6 +40,13 @@ export interface BlockerQueryInput {
  * bash continuity daemon used to scrape through `blockers --json` + gh/python.
  */
 export interface IBlockerService {
+  /**
+   * Report recorded exceptions vs open needs-human issues for one run.
+   *
+   * @throws {WorkflowError} `RUN_NOT_FOUND` when `state.json` is missing —
+   * callers that already loaded run state (e.g. ContinuityService) should not
+   * hit this; probe-style callers must catch.
+   */
   query(input: BlockerQueryInput): BlockerReport;
 }
 
@@ -52,6 +59,23 @@ export class BlockerService implements IBlockerService {
     private readonly _issueRepo: IIssueRepository
   ) {}
 
+  /**
+   * Report recorded exceptions vs open needs-human issues for one run.
+   *
+   * Invariants:
+   * - Missing run state throws {@link WorkflowError} with code `RUN_NOT_FOUND`
+   *   (not a soft empty report). Continuity catches and treats that as "no
+   *   blocker probe" so a missing-state race does not strand relaunch.
+   * - Empty / non-existent `repoPath` returns `{ blockers: [], resumable: false }`
+   *   without probing issues — same shape as "nothing blocking".
+   * - Transient {@link IIssueRepository.findByTitle} failures fail open to
+   *   `{ blockers: [], resumable: false }` so continuity may still relaunch
+   *   rather than strand the run on a flaky gh probe.
+   * - `resumable` is true only when there is at least one recorded exception
+   *   and every matching needs-human issue is closed (or absent). Historical
+   *   cleared exceptions keep `resumable` true; callers must not treat that
+   *   flag as a permanent skip of dead-supervisor relaunch / abandon.
+   */
   query(input: BlockerQueryInput): BlockerReport {
     const state = this._runStateRepo.load(input.runsDir, input.runId);
     if (state === null) {

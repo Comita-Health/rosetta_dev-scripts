@@ -527,6 +527,210 @@ describe('ContinuityService (SPEC-PRD-0020-P2 T-01)', () => {
     });
   });
 
+  it('does not commit a blocker-cleared wake while supervise is still alive', async () => {
+    const workspace = mkdtempSync(path.join(os.tmpdir(), 'cont-alive-clear-'));
+    const runsDir = path.join(workspace, 'runs');
+    const repoPath = path.join(workspace, 'repo');
+    mkdirSync(repoPath, { recursive: true });
+    writeDaemonConfig(workspace, runsDir);
+
+    const cleared: ExceptionEntry = {
+      trigger: 'merge-blocked',
+      taskId: 'T-01',
+      context: ['was blocked'],
+      recordedAt: '2026-08-10T00:00:00.000Z'
+    };
+    writeRunFixture({
+      runsDir,
+      runId: 'run-alive-clear',
+      cwd: workspace,
+      pid: 9_081,
+      state: baseState(
+        'run-alive-clear',
+        {
+          'T-01': taskResult({ taskId: 'T-01', status: 'completed' })
+        },
+        [cleared]
+      )
+    });
+    writeSuperviseLaunchRecord({
+      runsDir,
+      runId: 'run-alive-clear',
+      argv: ['entry.js', 'run', '--supervise'],
+      execArgv: [],
+      execPath: process.execPath,
+      cwd: workspace,
+      repoPath,
+      specPath: '/repo/specs/PRD-0020/phase-2-spec.md'
+    });
+
+    const { service, spawnDetached, store } = build({
+      workspace,
+      runsDir,
+      spec: baseSpec(['T-01']),
+      findByTitle: jest.fn().mockReturnValue(null),
+      isAlive: jest.fn().mockReturnValue(true)
+    });
+
+    const result = await service.tick(workspace);
+    expect(spawnDetached).not.toHaveBeenCalled();
+    expect(result.relaunched).toEqual([]);
+    expect(result.skipped).toEqual([]);
+    expect(
+      store
+        .listPendingWakes(workspace)
+        .filter(wake => wake.signal.startsWith('closed:blockers-cleared:'))
+    ).toHaveLength(0);
+  });
+
+  it('after a consumed blocker-cleared wake, dead-supervisor relaunch is not permanently skipped', async () => {
+    const workspace = mkdtempSync(path.join(os.tmpdir(), 'cont-clear-resume-'));
+    const runsDir = path.join(workspace, 'runs');
+    const repoPath = path.join(workspace, 'repo');
+    mkdirSync(repoPath, { recursive: true });
+    writeDaemonConfig(workspace, runsDir);
+
+    const cleared: ExceptionEntry = {
+      trigger: 'merge-blocked',
+      taskId: 'T-01',
+      context: ['was blocked'],
+      recordedAt: '2026-08-10T00:00:00.000Z'
+    };
+    writeRunFixture({
+      runsDir,
+      runId: 'run-after-clear',
+      cwd: workspace,
+      pid: 9_082,
+      state: baseState(
+        'run-after-clear',
+        {
+          'T-01': taskResult({ taskId: 'T-01', status: 'completed' })
+        },
+        [cleared]
+      )
+    });
+    writeSuperviseLaunchRecord({
+      runsDir,
+      runId: 'run-after-clear',
+      argv: ['entry.js', 'run', '--supervise', '--detach'],
+      execArgv: [],
+      execPath: process.execPath,
+      cwd: workspace,
+      repoPath,
+      specPath: '/repo/specs/PRD-0020/phase-2-spec.md'
+    });
+
+    const { service, spawnDetached, store } = build({
+      workspace,
+      runsDir,
+      spec: baseSpec(['T-01']),
+      findByTitle: jest.fn().mockReturnValue(null)
+    });
+
+    const first = await service.tick(workspace);
+    expect(spawnDetached).not.toHaveBeenCalled();
+    expect(first.skipped).toContainEqual({
+      runId: 'run-after-clear',
+      reason: 'blockers-cleared'
+    });
+    const pending = store
+      .listPendingWakes(workspace)
+      .filter(
+        wake => wake.signal === 'closed:blockers-cleared:run-after-clear'
+      );
+    expect(pending).toHaveLength(1);
+    const claimed = await store.claimWake(workspace, pending[0]!.id);
+    expect(claimed).not.toBeNull();
+
+    // Historical exceptions keep resumable=true, but the wake is consumed —
+    // dead-supervisor relaunch must proceed.
+    const second = await service.tick(workspace);
+    expect(second.relaunched).toEqual(['run-after-clear']);
+    expect(spawnDetached).toHaveBeenCalledTimes(1);
+    expect(
+      second.skipped.some(
+        skip =>
+          skip.runId === 'run-after-clear' && skip.reason === 'blockers-cleared'
+      )
+    ).toBe(false);
+  });
+
+  it('after a consumed blocker-cleared wake, abandoned idle still applies', async () => {
+    const workspace = mkdtempSync(
+      path.join(os.tmpdir(), 'cont-clear-abandon-')
+    );
+    const runsDir = path.join(workspace, 'runs');
+    const repoPath = path.join(workspace, 'repo');
+    mkdirSync(repoPath, { recursive: true });
+    writeDaemonConfig(workspace, runsDir);
+    process.env.SDLC_ABANDONED_SECONDS = '60';
+
+    const cleared: ExceptionEntry = {
+      trigger: 'merge-blocked',
+      taskId: 'T-01',
+      context: ['was blocked'],
+      recordedAt: '2026-08-10T00:00:00.000Z'
+    };
+    writeRunFixture({
+      runsDir,
+      runId: 'run-clear-old',
+      cwd: workspace,
+      pid: 9_083,
+      state: baseState(
+        'run-clear-old',
+        {
+          'T-01': taskResult({ taskId: 'T-01', status: 'completed' })
+        },
+        [cleared]
+      )
+    });
+    writeSuperviseLaunchRecord({
+      runsDir,
+      runId: 'run-clear-old',
+      argv: ['entry.js', 'run', '--supervise'],
+      execArgv: [],
+      execPath: process.execPath,
+      cwd: workspace,
+      repoPath,
+      specPath: '/repo/specs/PRD-0020/phase-2-spec.md'
+    });
+    const stateFile = path.join(runsDir, 'run-clear-old', 'state.json');
+    const stale = new Date(
+      Date.now() - (DEFAULT_ABANDONED_SECONDS + 120) * 1_000
+    );
+    utimesSync(stateFile, stale, stale);
+
+    const { service, spawnDetached, store } = build({
+      workspace,
+      runsDir,
+      spec: baseSpec(['T-01']),
+      findByTitle: jest.fn().mockReturnValue(null)
+    });
+
+    const first = await service.tick(workspace);
+    expect(first.skipped).toContainEqual({
+      runId: 'run-clear-old',
+      reason: 'blockers-cleared'
+    });
+    const pending = store
+      .listPendingWakes(workspace)
+      .filter(wake => wake.signal === 'closed:blockers-cleared:run-clear-old');
+    expect(pending).toHaveLength(1);
+    await store.claimWake(workspace, pending[0]!.id);
+
+    const second = await service.tick(workspace);
+    expect(spawnDetached).not.toHaveBeenCalled();
+    expect(second.skipped).toContainEqual({
+      runId: 'run-clear-old',
+      reason: 'abandoned'
+    });
+    expect(
+      store
+        .listPendingWakes(workspace)
+        .filter(wake => wake.signal === 'abandoned:run-clear-old')
+    ).toHaveLength(1);
+  });
+
   it('continuity abandoned/blocker modules call engine readers / EngineResumeWakeAction rather than bash daemon shell logic', () => {
     const continuity = readFileSync(CONTINUITY_SOURCE, 'utf-8');
     const blocker = readFileSync(BLOCKER_SOURCE, 'utf-8');

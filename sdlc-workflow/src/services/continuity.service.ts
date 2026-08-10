@@ -9,7 +9,10 @@ import {
 import { inject, injectable, optional } from 'inversify';
 import path from 'path';
 import type { IDaemonConfigRepository } from '../repositories/daemon-config.repository';
-import type { IDaemonStoreRepository } from '../repositories/daemon-store.repository';
+import type {
+  IDaemonStoreRepository,
+  WakeWriteResult
+} from '../repositories/daemon-store.repository';
 import type { IProcessDetachRepository } from '../repositories/process-detach.repository';
 import type { IRunLockRepository } from '../repositories/run-lock.repository';
 import type { IRunStateRepository } from '../repositories/run-state.repository';
@@ -156,6 +159,10 @@ const blockerWatch = (
   resumeContext: { runId }
 });
 
+/** One-shot inbox signal for needs-human clear → EngineResumeWakeAction. */
+const blockerClearedSignal = (runId: string): string =>
+  `closed:blockers-cleared:${runId}`;
+
 @injectable()
 export class ContinuityService implements IContinuityService {
   private _timer: ReturnType<typeof setTimeout> | null = null;
@@ -273,17 +280,10 @@ export class ContinuityService implements IContinuityService {
       return { runId, reason: 'finished' };
     }
 
-    const launch = readSuperviseLaunchRecord(runsDir, runId);
-    const blockerReport = this.queryBlockers(runsDir, runId, launch);
-    if (blockerReport !== null && blockerReport.resumable === true) {
-      this.emitBlockerClearedWake(
-        workspaceRoot,
-        runId,
-        pollSeconds,
-        blockerReport
-      );
-    }
-
+    // Alive/dead before blocker wakes: committing `closed:blockers-cleared:*`
+    // while supervise is still up lets EngineResumeWakeAction no-op-consume
+    // the one-shot signal, after which a later supervisor death can neither
+    // re-pend the same wake nor fall through to relaunch/abandon.
     const pid = readSupervisePid(path.join(runsDir, runId));
     if (pid === null) {
       return { runId, reason: 'no-supervise-pid' };
@@ -292,10 +292,12 @@ export class ContinuityService implements IContinuityService {
       return { runId, reason: 'alive' };
     }
 
+    const launch = readSuperviseLaunchRecord(runsDir, runId);
     if (launch === null || launchUsable(launch) === false) {
       return { runId, reason: 'launch-unusable' };
     }
 
+    const blockerReport = this.queryBlockers(runsDir, runId, launch);
     if (
       blockerReport !== null &&
       blockerReport.blockers.some(blocker => blocker.state === 'open') === true
@@ -303,10 +305,24 @@ export class ContinuityService implements IContinuityService {
       return { runId, reason: 'unresolved-blockers' };
     }
 
-    // Resume after needs-human close is EngineResumeWakeAction's job — do not
-    // become a second resume engine by also spawning here.
+    // Resume after needs-human close is EngineResumeWakeAction's job — skip
+    // relaunch only while the one-shot closed wake is still pending. Once it
+    // is ledgered/consumed, `resumable` stays true for historical exceptions
+    // and must not permanently suppress dead-supervisor relaunch or abandon.
     if (blockerReport !== null && blockerReport.resumable === true) {
-      return { runId, reason: 'blockers-cleared' };
+      this.emitBlockerClearedWake(
+        workspaceRoot,
+        runId,
+        pollSeconds,
+        blockerReport
+      );
+      const signal = blockerClearedSignal(runId);
+      const awaitingResume = this._store
+        .listPendingWakes(workspaceRoot)
+        .some(wake => wake.signal === signal);
+      if (awaitingResume === true) {
+        return { runId, reason: 'blockers-cleared' };
+      }
     }
 
     const idle = this._runStateRepo.idleSeconds(runsDir, runId) ?? 0;
@@ -366,15 +382,15 @@ export class ContinuityService implements IContinuityService {
     runId: string,
     pollSeconds: number,
     report: BlockerReport
-  ): void {
+  ): WakeWriteResult {
     // `closed` is the EngineResumeWakeAction resume signal; continuity only
     // commits the wake — resume is owned by the registered wake action.
-    commitWatchSignal(
+    return commitWatchSignal(
       this._store,
       workspaceRoot,
       blockerWatch(runId, pollSeconds),
       {
-        id: `closed:blockers-cleared:${runId}`,
+        id: blockerClearedSignal(runId),
         observedAt: new Date().toISOString(),
         prompt: `Every needs-human issue for SDLC run ${runId} has been closed. Resume proceeds through the registered ${ENGINE_RESUME_WAKE_ACTION_ID} wake action — continuity does not relaunch.`,
         data: {
