@@ -73,13 +73,10 @@ export const shouldDispatchOperatorUnstick = (
 ): boolean => {
   if (remediation.kind === 'remediated') return false;
   if (remediableVerdicts(verdicts).length === 0) return false;
+  // Only remediable gate-fix exhaustion — not token-budget skips that
+  // happen to include "budget exhausted" while attempts remain.
   const spent = state.gateFixAttempts?.[taskId] ?? 0;
-  if (spent >= GATE_FIX_ATTEMPT_LIMIT) return true;
-  const detail = remediation.detail.toLowerCase();
-  return (
-    detail.includes('gate-fix attempts exhausted') ||
-    detail.includes('budget exhausted')
-  );
+  return spent >= GATE_FIX_ATTEMPT_LIMIT;
 };
 
 /** Outcomes that suppress human-blocking ACTION REQUIRED for the wave. */
@@ -113,10 +110,13 @@ const hasClearedMarker = (text: string): boolean => {
  * @remarks
  * `cleared` requires durable blocker-clear evidence — `mergedSha` /
  * record-merge on run state (reloaded from disk after the agent turn), or
- * an explicit cleared outcome marker plus a successful HEAD move (rebase /
- * integration tip). Agent text alone (cleared marker + resume wording) is
- * never enough; a bare `cleared` token or HEAD movement alone is not
- * enough (committed policy rewrites also move HEAD).
+ * an explicit `OUTCOME: cleared` marker plus a successful HEAD move
+ * (rebase / integration tip). Agent text alone (cleared marker + resume
+ * wording) is never enough; a bare `cleared` token or HEAD movement alone
+ * is not enough (committed policy rewrites also move HEAD). When
+ * `policyRewriteAttempt` is true (including fail-closed audit blindness),
+ * the outcome is always `abstained` — agent `risky-proceed` text cannot
+ * suppress ACTION REQUIRED.
  */
 export const classifyOperatorUnstickOutcome = (args: {
   agentOutput: string;
@@ -129,15 +129,10 @@ export const classifyOperatorUnstickOutcome = (args: {
   const text = args.agentOutput;
   const lower = text.toLowerCase();
 
-  // Mid-run specs/** / envelope edits are never a silent clear (T-06).
+  // Mid-run specs/** / envelope edits (and fail-closed audit blindness)
+  // always abstain — never let agent risky-proceed / risky-advisory text
+  // self-authorize and suppress ACTION REQUIRED (T-02 / T-03).
   if (args.policyRewriteAttempt) {
-    if (
-      /\brisky-proceed\b/i.test(text) ||
-      /\brisky-advisory\b/i.test(text) ||
-      /\boutcome\s*[:=]\s*risky-proceed\b/i.test(text)
-    ) {
-      return 'risky-proceed';
-    }
     return 'abstained';
   }
 
@@ -218,10 +213,11 @@ export class OperatorUnstickService implements IOperatorUnstickService {
    * - When HEAD moves, the tip is pushed so re-selection / resume sees it
    *   (mirrors gate-remediation); a push failure is not treated as a clear.
    * - Mid-run `specs/**` or envelope-limit rewrites — dirty **or** committed
-   *   during the turn — route to abstain / risky-proceed, never `cleared`.
+   *   during the turn — always route to `abstained`, never `cleared` or
+   *   `risky-proceed` (agent text cannot self-authorize advisory proceed).
    *   Policy detection is fail-closed: when `status` / `diffStat` /
    *   `diffText` throws, the turn is treated as a policy-rewrite attempt
-   *   rather than a silent clear.
+   *   rather than a silent clear or risky-proceed.
    * - After the agent turn, `mergedSha` is reloaded from disk onto the
    *   in-memory {@link RunState} so a subprocess `record-merge` is visible
    *   even when HEAD did not move.

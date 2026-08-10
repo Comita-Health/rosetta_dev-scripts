@@ -460,7 +460,7 @@ describe('OperatorUnstickService (SPEC-PRD-0025-P1 T-03)', () => {
     expect(suppressesBlockingEscalate(outcome.kind)).toBe(true);
   });
 
-  it('routes policy-rewrite + risky-proceed marker to risky-proceed', async () => {
+  it('routes policy-rewrite + risky-proceed marker to abstained (no self-authorize)', async () => {
     status.mockReturnValue(' M specs/PRD-0025/phase-1-spec.md\n');
     headSha.mockReset().mockReturnValue('same-sha');
     agentRun.mockResolvedValue({
@@ -470,7 +470,24 @@ describe('OperatorUnstickService (SPEC-PRD-0025-P1 T-03)', () => {
 
     const outcome = await service.unstick(input());
 
-    expect(outcome.kind).toBe('risky-proceed');
+    // Agent text must not self-authorize advisory proceed after a policy rewrite.
+    expect(outcome.kind).toBe('abstained');
+    expect(suppressesBlockingEscalate(outcome.kind)).toBe(false);
+  });
+
+  it('fail-closes audit-blind turns with risky-proceed text to abstained', async () => {
+    status.mockImplementation(() => {
+      throw new Error('status unavailable');
+    });
+    agentRun.mockResolvedValue({
+      ok: true,
+      output: 'OUTCOME: risky-proceed — continuing with advisory'
+    });
+
+    const outcome = await service.unstick(input());
+
+    expect(outcome.kind).toBe('abstained');
+    expect(suppressesBlockingEscalate(outcome.kind)).toBe(false);
   });
 
   it('does not treat HEAD move as clear evidence when push fails', async () => {
@@ -591,6 +608,22 @@ describe('shouldDispatchOperatorUnstick', () => {
       )
     ).toBe(false);
   });
+
+  it('does not dispatch on token-budget skips while gate-fix attempts remain', () => {
+    const remediation: GateRemediationOutcome = {
+      kind: 'skipped',
+      attempt: 0,
+      detail: 'budget exhausted: spend 250k exceeds budget 200k'
+    };
+    expect(
+      shouldDispatchOperatorUnstick(
+        remediation,
+        remediable,
+        makeState({ gateFixAttempts: { 'T-01': 1 } }),
+        'T-01'
+      )
+    ).toBe(false);
+  });
 });
 
 describe('classifyOperatorUnstickOutcome', () => {
@@ -655,6 +688,17 @@ describe('classifyOperatorUnstickOutcome', () => {
       classifyOperatorUnstickOutcome({
         ...base,
         agentOutput: 'OUTCOME: cleared — edited specs',
+        headMoved: true,
+        policyRewriteAttempt: true
+      })
+    ).toBe('abstained');
+  });
+
+  it('routes policy-rewrite attempts to abstained even with risky-proceed claims', () => {
+    expect(
+      classifyOperatorUnstickOutcome({
+        ...base,
+        agentOutput: 'OUTCOME: risky-proceed — advisory after specs edit',
         headMoved: true,
         policyRewriteAttempt: true
       })

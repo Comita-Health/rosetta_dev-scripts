@@ -9,14 +9,16 @@
   suppress `EscalationService.post` for that wave; abstain / exhaust /
   authority-bound keep the existing escalate + issue-state watch path.
   Escalate tier is `unstick-in-flight` while the agent turn runs.
-  Wired from `run.handler` `remediationRound` only when
-  `GateRemediationService` returns skipped/failed for exhausted remediable
-  reviewer|envelope findings. Policy-rewrite detection covers committed
-  mid-run `specs/**` / envelope-limit edits (not only a dirty tree; fail-closed
-  when git status/diff throws), and `cleared` requires durable blocker-clear
-  evidence (disk-reloaded `mergedSha` / record-merge, or cleared outcome
-  marker + HEAD move) — never agent text / resume wording alone, a bare
-  marker, or HEAD move alone.
+  Wired from `run.handler` `remediationRound` only when remediable
+  `gateFixAttempts` are exhausted (token-budget skips do not dispatch).
+  Policy-rewrite detection covers committed mid-run `specs/**` /
+  envelope-limit edits (not only a dirty tree; fail-closed when git
+  status/diff throws) and always classifies those turns as abstained —
+  agent `risky-proceed` / `risky-advisory` text cannot self-authorize.
+  `cleared` requires durable blocker-clear evidence (disk-reloaded
+  `mergedSha` / record-merge, or `OUTCOME: cleared` marker + HEAD move) —
+  never agent text / resume wording alone, a bare marker, or HEAD move
+  alone; the unstick prompt instructs that marker syntax.
 
 - **sdlc-workflow (SPEC-PRD-0025-P1 T-02):** Author `buildOperatorUnstickPrompt`
   with an explicit operator mandate (rebase/integration tip, out-of-band
