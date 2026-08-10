@@ -4,6 +4,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  unlinkSync,
   utimesSync,
   writeFileSync
 } from 'fs';
@@ -14,7 +15,8 @@ import { DaemonStoreRepository } from '../repositories/daemon-store.repository';
 import { RunLockRepository } from '../repositories/run-lock.repository';
 import {
   ContinuityService,
-  DEFAULT_ABANDONED_SECONDS
+  DEFAULT_ABANDONED_SECONDS,
+  MINIMUM_CONTINUITY_TICK_MILLISECONDS
 } from '../services/continuity.service';
 import { DaemonLifecycleService } from '../services/daemon-lifecycle.service';
 import { escalationTitle } from '../services/escalation.service';
@@ -139,6 +141,7 @@ describe('ContinuityService (SPEC-PRD-0020-P2 T-01)', () => {
     } else {
       process.env.SDLC_ABANDONED_SECONDS = previousAbandoned;
     }
+    jest.useRealTimers();
   });
 
   const build = (input: {
@@ -148,6 +151,7 @@ describe('ContinuityService (SPEC-PRD-0020-P2 T-01)', () => {
     findByTitle?: jest.Mock;
     spawnDetached?: jest.Mock;
     isAlive?: jest.Mock;
+    loadState?: (runsDir: string, runId: string) => RunState | null;
   }): {
     service: ContinuityService;
     store: DaemonStoreRepository;
@@ -160,6 +164,15 @@ describe('ContinuityService (SPEC-PRD-0020-P2 T-01)', () => {
       input.spawnDetached ?? jest.fn().mockReturnValue({ pid: 4242 });
     const isAlive = input.isAlive ?? jest.fn().mockReturnValue(false);
     const findByTitle = input.findByTitle ?? jest.fn().mockReturnValue(null);
+    const loadState =
+      input.loadState ??
+      ((_runsDir: string, runId: string) => {
+        const file = path.join(input.runsDir, runId, 'state.json');
+        if (existsSync(file) === false) {
+          return null;
+        }
+        return JSON.parse(readFileSync(file, 'utf-8')) as RunState;
+      });
     const service = new ContinuityService(
       {
         load: () => ({
@@ -179,15 +192,7 @@ describe('ContinuityService (SPEC-PRD-0020-P2 T-01)', () => {
         }),
         derivePaths: jest.fn()
       },
-      {
-        load: (_runsDir: string, runId: string) => {
-          const file = path.join(input.runsDir, runId, 'state.json');
-          if (existsSync(file) === false) {
-            return null;
-          }
-          return JSON.parse(readFileSync(file, 'utf-8')) as RunState;
-        }
-      } as never,
+      { load: loadState } as never,
       {
         read: () => {
           if (input.spec === null) {
@@ -492,5 +497,449 @@ describe('ContinuityService (SPEC-PRD-0020-P2 T-01)', () => {
     const services = readdirSync(path.join(__dirname, '..', 'services'));
     expect(services).toContain('continuity.service.ts');
     expect(services).not.toContain('continuity-chat.service.ts');
+  });
+
+  it('skips no-state / missing-pid / unusable-launch runs without spawning', async () => {
+    const workspace = mkdtempSync(path.join(os.tmpdir(), 'cont-skip-edge-'));
+    const runsDir = path.join(workspace, 'runs');
+    mkdirSync(path.join(workspace, 'repo'), { recursive: true });
+    writeDaemonConfig(workspace, runsDir);
+
+    mkdirSync(path.join(runsDir, 'run-empty'), { recursive: true });
+
+    writeRunFixture({
+      runsDir,
+      runId: 'run-no-pid',
+      cwd: workspace,
+      pid: 9_010,
+      state: baseState('run-no-pid', {
+        'T-01': taskResult({ taskId: 'T-01', status: 'completed' })
+      })
+    });
+    // Invalid / missing pid → quiet no-supervise-pid skip.
+    writeFileSync(path.join(runsDir, 'run-no-pid', 'supervise.pid'), '0\n');
+
+    writeRunFixture({
+      runsDir,
+      runId: 'run-bad-launch',
+      cwd: workspace,
+      pid: 9_011,
+      state: baseState('run-bad-launch', {
+        'T-01': taskResult({ taskId: 'T-01', status: 'completed' })
+      })
+    });
+    writeSuperviseLaunchRecord({
+      runsDir,
+      runId: 'run-bad-launch',
+      argv: [],
+      execArgv: [],
+      execPath: process.execPath,
+      cwd: workspace,
+      repoPath: path.join(workspace, 'repo'),
+      specPath: '/repo/specs/PRD-0020/phase-2-spec.md'
+    });
+
+    const { service, spawnDetached } = build({
+      workspace,
+      runsDir,
+      spec: baseSpec(['T-01'])
+    });
+    const result = await service.tick(workspace);
+
+    expect(spawnDetached).not.toHaveBeenCalled();
+    expect(result.relaunched).toEqual([]);
+    expect(result.skipped).toEqual(
+      expect.arrayContaining([
+        { runId: 'run-empty', reason: 'no-state' },
+        { runId: 'run-bad-launch', reason: 'launch-unusable' }
+      ])
+    );
+    expect(result.skipped.some(s => s.runId === 'run-no-pid')).toBe(false);
+  });
+
+  it('treats missing execPath/cwd and a file cwd as launch-unusable', async () => {
+    const workspace = mkdtempSync(path.join(os.tmpdir(), 'cont-launch-'));
+    const runsDir = path.join(workspace, 'runs');
+    mkdirSync(path.join(workspace, 'repo'), { recursive: true });
+    writeDaemonConfig(workspace, runsDir);
+    const fileCwd = path.join(workspace, 'not-a-dir');
+    writeFileSync(fileCwd, 'x\n');
+
+    for (const [runId, launch] of [
+      [
+        'run-missing-exec',
+        {
+          argv: ['entry.js', 'run', '--supervise'],
+          execPath: path.join(workspace, 'missing-node'),
+          cwd: workspace
+        }
+      ],
+      [
+        'run-missing-cwd',
+        {
+          argv: ['entry.js', 'run', '--supervise'],
+          execPath: process.execPath,
+          cwd: path.join(workspace, 'gone')
+        }
+      ],
+      [
+        'run-file-cwd',
+        {
+          argv: ['entry.js', 'run', '--supervise'],
+          execPath: process.execPath,
+          cwd: fileCwd
+        }
+      ]
+    ] as const) {
+      writeRunFixture({
+        runsDir,
+        runId,
+        cwd: workspace,
+        pid: 9_020,
+        state: baseState(runId, {
+          'T-01': taskResult({ taskId: 'T-01', status: 'completed' })
+        })
+      });
+      writeSuperviseLaunchRecord({
+        runsDir,
+        runId,
+        argv: [...launch.argv],
+        execArgv: [],
+        execPath: launch.execPath,
+        cwd: launch.cwd,
+        repoPath: path.join(workspace, 'repo'),
+        specPath: '/repo/specs/PRD-0020/phase-2-spec.md'
+      });
+    }
+
+    const { service, spawnDetached } = build({
+      workspace,
+      runsDir,
+      spec: baseSpec(['T-01'])
+    });
+    const result = await service.tick(workspace);
+    expect(spawnDetached).not.toHaveBeenCalled();
+    expect(result.skipped).toEqual(
+      expect.arrayContaining([
+        { runId: 'run-missing-exec', reason: 'launch-unusable' },
+        { runId: 'run-missing-cwd', reason: 'launch-unusable' },
+        { runId: 'run-file-cwd', reason: 'launch-unusable' }
+      ])
+    );
+  });
+
+  it('falls back when SDLC_ABANDONED_SECONDS is invalid and still abandons stale runs', async () => {
+    const workspace = mkdtempSync(path.join(os.tmpdir(), 'cont-abandon-env-'));
+    const runsDir = path.join(workspace, 'runs');
+    mkdirSync(path.join(workspace, 'repo'), { recursive: true });
+    writeDaemonConfig(workspace, runsDir);
+    process.env.SDLC_ABANDONED_SECONDS = 'not-a-number';
+
+    writeRunFixture({
+      runsDir,
+      runId: 'run-stale',
+      cwd: workspace,
+      pid: 9_030,
+      state: baseState('run-stale', {
+        'T-01': taskResult({ taskId: 'T-01', status: 'completed' })
+      })
+    });
+    const stateFile = path.join(runsDir, 'run-stale', 'state.json');
+    const stale = new Date(
+      Date.now() - (DEFAULT_ABANDONED_SECONDS + 120) * 1_000
+    );
+    utimesSync(stateFile, stale, stale);
+
+    const { service, spawnDetached } = build({
+      workspace,
+      runsDir,
+      spec: baseSpec(['T-01'])
+    });
+    const result = await service.tick(workspace);
+    expect(spawnDetached).not.toHaveBeenCalled();
+    expect(result.skipped).toContainEqual({
+      runId: 'run-stale',
+      reason: 'abandoned'
+    });
+  });
+
+  it('fails open on issue probe errors and duplicate titles, and relaunches when repoPath is missing', async () => {
+    const workspace = mkdtempSync(path.join(os.tmpdir(), 'cont-failopen-'));
+    const runsDir = path.join(workspace, 'runs');
+    mkdirSync(path.join(workspace, 'repo'), { recursive: true });
+    writeDaemonConfig(workspace, runsDir);
+
+    const dup: ExceptionEntry = {
+      trigger: 'merge-blocked',
+      taskId: 'T-01',
+      context: ['needs human'],
+      recordedAt: '2026-08-10T00:00:00.000Z'
+    };
+    writeRunFixture({
+      runsDir,
+      runId: 'run-probe',
+      cwd: workspace,
+      pid: 9_040,
+      state: baseState(
+        'run-probe',
+        {
+          'T-01': taskResult({ taskId: 'T-01', status: 'completed' })
+        },
+        [dup, { ...dup }]
+      )
+    });
+    writeSuperviseLaunchRecord({
+      runsDir,
+      runId: 'run-probe',
+      argv: ['entry.js', 'run', '--supervise'],
+      execArgv: [],
+      execPath: process.execPath,
+      cwd: workspace,
+      repoPath: '',
+      specPath: '/repo/specs/PRD-0020/phase-2-spec.md'
+    });
+
+    writeRunFixture({
+      runsDir,
+      runId: 'run-throw',
+      cwd: workspace,
+      pid: 9_041,
+      state: baseState(
+        'run-throw',
+        {
+          'T-01': taskResult({ taskId: 'T-01', status: 'completed' })
+        },
+        [dup]
+      )
+    });
+    writeSuperviseLaunchRecord({
+      runsDir,
+      runId: 'run-throw',
+      argv: ['entry.js', 'run', '--supervise'],
+      execArgv: [],
+      execPath: process.execPath,
+      cwd: workspace,
+      repoPath: path.join(workspace, 'repo'),
+      specPath: '/repo/specs/PRD-0020/phase-2-spec.md'
+    });
+
+    const findByTitle = jest.fn().mockImplementation(() => {
+      throw new Error('gh down');
+    });
+    const { service, spawnDetached } = build({
+      workspace,
+      runsDir,
+      spec: baseSpec(['T-01']),
+      findByTitle
+    });
+
+    const result = await service.tick(workspace);
+    expect(result.relaunched.sort()).toEqual(['run-probe', 'run-throw']);
+    expect(spawnDetached).toHaveBeenCalledTimes(2);
+  });
+
+  it('relaunches when the spec is unreadable and records relaunch-failed on spawn errors', async () => {
+    const workspace = mkdtempSync(path.join(os.tmpdir(), 'cont-nospec-'));
+    const runsDir = path.join(workspace, 'runs');
+    mkdirSync(path.join(workspace, 'repo'), { recursive: true });
+    writeDaemonConfig(workspace, runsDir);
+    writeRunFixture({
+      runsDir,
+      runId: 'run-nospec',
+      cwd: workspace,
+      pid: 9_050,
+      state: baseState('run-nospec', {
+        'T-01': taskResult({ taskId: 'T-01', status: 'completed' })
+      })
+    });
+
+    const { service: okService, spawnDetached: okSpawn } = build({
+      workspace,
+      runsDir,
+      spec: null
+    });
+    const ok = await okService.tick(workspace);
+    expect(ok.relaunched).toEqual(['run-nospec']);
+    expect(okSpawn).toHaveBeenCalledTimes(1);
+
+    writeRunFixture({
+      runsDir,
+      runId: 'run-fail',
+      cwd: workspace,
+      pid: 9_051,
+      state: baseState('run-fail', {
+        'T-01': taskResult({ taskId: 'T-01', status: 'completed' })
+      })
+    });
+    const spawnDetached = jest.fn().mockImplementation(() => {
+      throw new Error('spawn boom');
+    });
+    const { service } = build({
+      workspace,
+      runsDir,
+      spec: baseSpec(['T-01']),
+      spawnDetached,
+      isAlive: jest.fn().mockImplementation((pid: number) => pid === 4242)
+    });
+    const failed = await service.tick(workspace);
+    expect(failed.skipped).toContainEqual({
+      runId: 'run-fail',
+      reason: 'relaunch-failed:spawn boom'
+    });
+  });
+
+  it('re-checks liveness under the lock and skips a racing resume without spawning', async () => {
+    const workspace = mkdtempSync(path.join(os.tmpdir(), 'cont-race-'));
+    const runsDir = path.join(workspace, 'runs');
+    mkdirSync(path.join(workspace, 'repo'), { recursive: true });
+    writeDaemonConfig(workspace, runsDir);
+    writeRunFixture({
+      runsDir,
+      runId: 'run-race',
+      cwd: workspace,
+      pid: 9_060,
+      state: baseState('run-race', {
+        'T-01': taskResult({ taskId: 'T-01', status: 'completed' })
+      })
+    });
+
+    let checks = 0;
+    const isAlive = jest.fn().mockImplementation(() => {
+      checks += 1;
+      // First considerRun probe: dead. Under-lock re-check: alive.
+      return checks > 1;
+    });
+    const { service, spawnDetached } = build({
+      workspace,
+      runsDir,
+      spec: baseSpec(['T-01']),
+      isAlive
+    });
+    const result = await service.tick(workspace);
+    expect(spawnDetached).not.toHaveBeenCalled();
+    expect(result.relaunched).toEqual([]);
+    expect(result.skipped).toEqual([]);
+  });
+
+  it('uses idle=0 when state mtime cannot be read and still relaunches', async () => {
+    const workspace = mkdtempSync(path.join(os.tmpdir(), 'cont-mtime-'));
+    const runsDir = path.join(workspace, 'runs');
+    mkdirSync(path.join(workspace, 'repo'), { recursive: true });
+    writeDaemonConfig(workspace, runsDir);
+    writeRunFixture({
+      runsDir,
+      runId: 'run-mtime',
+      cwd: workspace,
+      pid: 9_070,
+      state: baseState('run-mtime', {
+        'T-01': taskResult({ taskId: 'T-01', status: 'completed' })
+      })
+    });
+    const state = baseState('run-mtime', {
+      'T-01': taskResult({ taskId: 'T-01', status: 'completed' })
+    });
+    unlinkSync(path.join(runsDir, 'run-mtime', 'state.json'));
+
+    const { service, spawnDetached } = build({
+      workspace,
+      runsDir,
+      spec: baseSpec(['T-01']),
+      loadState: (_runsDir, runId) => (runId === 'run-mtime' ? state : null)
+    });
+
+    const result = await service.tick(workspace);
+    expect(result.relaunched).toEqual(['run-mtime']);
+    expect(spawnDetached).toHaveBeenCalledTimes(1);
+  });
+
+  it('scans zero runs when runsDir is missing', async () => {
+    const workspace = mkdtempSync(path.join(os.tmpdir(), 'cont-noruns-'));
+    const runsDir = path.join(workspace, 'runs-missing');
+    writeDaemonConfig(workspace, runsDir);
+    const { service } = build({
+      workspace,
+      runsDir,
+      spec: baseSpec(['T-01'])
+    });
+    const result = await service.tick(workspace);
+    expect(result).toEqual({ scanned: 0, relaunched: [], skipped: [] });
+  });
+
+  it.each([0, -1, 1.5, Number.NaN])(
+    'refuses to arm continuity on tickSeconds %p',
+    tickSeconds => {
+      const workspace = mkdtempSync(path.join(os.tmpdir(), 'cont-badtick-'));
+      const { service } = build({
+        workspace,
+        runsDir: path.join(workspace, 'runs'),
+        spec: baseSpec(['T-01'])
+      });
+      expect(() => service.start(workspace, tickSeconds)).toThrow(TypeError);
+    }
+  );
+
+  it('ticks on the poll cadence until stopped and logs tick failures', async () => {
+    jest.useFakeTimers();
+    const workspace = mkdtempSync(path.join(os.tmpdir(), 'cont-loop-'));
+    const runsDir = path.join(workspace, 'runs');
+    writeDaemonConfig(workspace, runsDir);
+    let loads = 0;
+    const load = jest.fn().mockImplementation(() => {
+      loads += 1;
+      if (loads === 1) {
+        throw new Error('tick boom');
+      }
+      return {
+        config: {
+          workspaceRoot: workspace,
+          activateScript: '/a',
+          runsDir,
+          defaultPollSeconds: 30,
+          headlessRunner: 'test'
+        },
+        paths: {
+          stateDir: '',
+          pidFile: '',
+          logPath: '',
+          launchdLabel: ''
+        }
+      };
+    });
+    const service = new ContinuityService(
+      { load, derivePaths: jest.fn() },
+      { load: () => null } as never,
+      { read: jest.fn(), readAtRef: jest.fn() },
+      { spawnDetached: jest.fn(), isAlive: jest.fn() },
+      new RunLockRepository(),
+      new DaemonStoreRepository(),
+      { findByTitle: jest.fn(), create: jest.fn() }
+    );
+    const error = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    service.start(workspace, 1);
+    await jest.advanceTimersByTimeAsync(0);
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(error.mock.calls.map(call => String(call[0]))).toEqual([
+      '[continuity] tick failed: tick boom'
+    ]);
+
+    await jest.advanceTimersByTimeAsync(MINIMUM_CONTINUITY_TICK_MILLISECONDS);
+    expect(load).toHaveBeenCalledTimes(2);
+
+    service.stop();
+    await jest.advanceTimersByTimeAsync(20_000);
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(jest.getTimerCount()).toBe(0);
+    error.mockRestore();
+  });
+
+  it('is safe to stop a continuity loop that was never started', () => {
+    const workspace = mkdtempSync(path.join(os.tmpdir(), 'cont-stop-'));
+    const { service } = build({
+      workspace,
+      runsDir: path.join(workspace, 'runs'),
+      spec: baseSpec(['T-01'])
+    });
+    expect(() => service.stop()).not.toThrow();
   });
 });
