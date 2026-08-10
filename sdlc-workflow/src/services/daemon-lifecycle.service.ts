@@ -9,6 +9,12 @@ import type { IContinuityService } from './continuity.service';
 import type { IPollSchedulerService } from './poll-scheduler.service';
 import type { IWakeConsumptionService } from './wake-consumption.service';
 
+/**
+ * Re-export for callers/tests that need the retired StartInterval label
+ * without importing the launchd repository.
+ */
+export { LEGACY_CONTINUITY_DAEMON_LABEL } from '../repositories/launchd.repository';
+
 export interface DaemonInstallOptions {
   /** Override LaunchAgents directory (tests). */
   plistDir?: string;
@@ -113,6 +119,10 @@ export class DaemonLifecycleService implements IDaemonLifecycleService {
       pidFile: paths.pidFile,
       logPath: paths.logPath
     });
+    // Cut over first: unload/remove the retired StartInterval agent so it
+    // cannot double-relaunch alongside the KeepAlive process (T-05).
+    this._launchdRepo.uninstallLegacyContinuityDaemon(options.plistDir);
+
     const program = options.program ?? process.execPath;
     const cliEntry =
       options.cliEntry ?? path.resolve(__dirname, '..', 'index.js');
@@ -164,6 +174,9 @@ export class DaemonLifecycleService implements IDaemonLifecycleService {
     // Label/plist path are derived from the workspace root alone so a
     // missing or malformed `.sdlc/daemon.json` cannot strand a launchd agent.
     const paths = this._configRepo.derivePaths(workspaceRoot);
+    // Always clear the retired StartInterval agent on uninstall too — a
+    // workspace may have cut over incompletely and left the legacy job.
+    this._launchdRepo.uninstallLegacyContinuityDaemon(options.plistDir);
     this._launchdRepo.uninstall(paths.launchdLabel, options.plistDir);
     return { label: paths.launchdLabel };
   }

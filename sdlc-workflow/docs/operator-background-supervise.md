@@ -65,13 +65,29 @@ the operator working tree. A stale local checkout of the spec file no longer
 blocks the next supervise wave after a merge updates the blob on origin.
 
 Continuity lives in the per-workspace TypeScript daemon (`sdlc-workflow daemon`
-/ `ContinuityService`), not in `scripts/sdlc-continuity-daemon.sh`. That bash
-StartInterval job is being retired (SPEC-PRD-0020-P2): do **not** treat it as
-the safety net for dead supervisors, abandoned runs, or blocker-close. The
-daemon tick relaunches unfinished runs with a dead `supervise.pid` when
-`launch.json` is usable; abandoned idle runs get one wake and are not
-relaunched; needs-human blocker-close commits a `closed` wake on the shared
-inbox and resumes only through the registered `engine-resume` wake action.
+/ `ContinuityService`). The bash StartInterval job
+(`scripts/sdlc-continuity-daemon.sh` + `install-continuity-daemon.sh` →
+`com.rosetta.sdlc-daemon`) is **retired** (SPEC-PRD-0020-P2 T-05): those
+scripts are fail-loud stubs that exit non-zero with migration guidance.
+Do **not** schedule them. Cut over with:
+
+```bash
+cd sdlc-workflow
+bun run build
+node dist/index.js daemon install --workspace <workspace-root>
+# install unloads/removes com.rosetta.sdlc-daemon before loading KeepAlive
+
+# Expect the per-workspace label (sdlc.workflow.daemon.<id>) with KeepAlive,
+# and no active com.rosetta.sdlc-daemon job:
+launchctl print "gui/$(id -u)" | grep -E 'sdlc.workflow.daemon|com.rosetta.sdlc-daemon'
+```
+
+The KeepAlive daemon tick relaunches unfinished runs with a dead
+`supervise.pid` when `launch.json` is usable; abandoned idle runs get one
+wake and are not relaunched; needs-human blocker-close commits a `closed`
+wake on the shared inbox and resumes only through the registered
+`engine-resume` wake action. Session-mortal `deploy-verify-watch` and
+`issue-resolve-watch` bash loops remain until Phase 3.
 
 Enforce intake already reads the Approved spec from `origin/<defaultBranch>`,
 so operators should not rely on a relaunch-time working-tree spec sync.

@@ -8,10 +8,13 @@ jest.mock('child_process', () => ({
   spawnSync: (...args: unknown[]) => spawnSync(...args)
 }));
 
-import { existsSync, mkdtempSync } from 'fs';
+import { existsSync, mkdtempSync, writeFileSync } from 'fs';
 import os from 'os';
 import path from 'path';
-import { LaunchdRepository } from '../repositories/launchd.repository';
+import {
+  LEGACY_CONTINUITY_DAEMON_LABEL,
+  LaunchdRepository
+} from '../repositories/launchd.repository';
 import { WorkflowError } from '../types';
 
 describe('LaunchdRepository launchctl load', () => {
@@ -174,5 +177,27 @@ describe('LaunchdRepository launchctl load', () => {
 
     expect(thrown).toBeInstanceOf(WorkflowError);
     expect(thrown?.details).toEqual([]);
+  });
+
+  it('uninstallLegacyContinuityDaemon bootouts and removes the StartInterval plist', () => {
+    const repo = new LaunchdRepository();
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'daemon-launchd-legacy-'));
+    const legacyPath = path.join(
+      dir,
+      `${LEGACY_CONTINUITY_DAEMON_LABEL}.plist`
+    );
+    writeFileSync(legacyPath, '<plist/>StartInterval</plist>\n', 'utf-8');
+
+    repo.uninstallLegacyContinuityDaemon(dir);
+
+    expect(existsSync(legacyPath)).toBe(false);
+    expect(
+      spawnSync.mock.calls.some(
+        c =>
+          Array.isArray(c[1]) &&
+          c[1][0] === 'bootout' &&
+          String(c[1][1]).endsWith(`/${LEGACY_CONTINUITY_DAEMON_LABEL}`)
+      )
+    ).toBe(true);
   });
 });

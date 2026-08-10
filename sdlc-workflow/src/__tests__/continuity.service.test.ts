@@ -290,6 +290,11 @@ describe('ContinuityService (SPEC-PRD-0020-P2 T-01)', () => {
     expect(spawnDetached.mock.calls[0][0].args).toEqual(
       expect.arrayContaining(['run', '--supervise', '--detach'])
     );
+    // Per-workspace ContinuityService path only — never the retired bash tick.
+    const spawnSurface = JSON.stringify(spawnDetached.mock.calls);
+    expect(spawnSurface).not.toMatch(/sdlc-continuity-daemon\.sh/);
+    expect(spawnSurface).not.toMatch(/install-continuity-daemon\.sh/);
+    expect(spawnDetached.mock.calls[0][0].command).not.toMatch(/bash$/);
 
     const monitor = readFileSync(
       path.join(runsDir, 'run-live', 'monitor.log'),
@@ -750,8 +755,12 @@ describe('ContinuityService (SPEC-PRD-0020-P2 T-01)', () => {
       );
       expect(source).not.toMatch(/\bgh issue list\b/);
     }
-    // Bash still exists until T-05; TypeScript modules must not import it.
+    // T-05: bash path is a fail-loud stub only — no live tick remains.
     expect(existsSync(BASH_CONTINUITY)).toBe(true);
+    const bashBody = readFileSync(BASH_CONTINUITY, 'utf-8');
+    expect(bashBody).toMatch(/retired|daemon install/i);
+    expect(bashBody).not.toMatch(/\brelaunch_supervisor\b/);
+    expect(bashBody).not.toMatch(/\btick\(\)/);
   });
 
   it('continuity modules watch run/blocker outcomes only and expose no API that performs deploys or Draft→Approved', () => {

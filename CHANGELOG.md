@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **sdlc-workflow (SPEC-PRD-0020-P2 T-05):** Retire the bash continuity
+  StartInterval LaunchAgent. `team-setup` template scripts
+  `sdlc-continuity-daemon.sh` and `install-continuity-daemon.sh` are
+  fail-loud stubs that print migration to `sdlc-workflow daemon install`
+  and exit non-zero (no tick / no plist write). `daemon install` /
+  `daemon uninstall` unload and remove legacy `com.rosetta.sdlc-daemon`
+  before loading or clearing the per-workspace KeepAlive agent so dual
+  relaunch cannot happen during cutover. Session-mortal
+  deploy-verify-watch and issue-resolve-watch scripts remain until
+  Phase 3.
+
 - **sdlc-workflow (SPEC-PRD-0020-P2 T-04):** Loud-failure semantics for the
   per-workspace daemon — when a watch exceeds the consecutive poll-failure
   cap, `PollSchedulerService` commits an operator-visible `poll-error` wake

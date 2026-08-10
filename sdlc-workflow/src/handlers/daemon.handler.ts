@@ -141,15 +141,18 @@ export interface IDaemonHandler {
   /**
    * Generate and load a KeepAlive=true launchd agent for the workspace.
    * Creates `.sdlc/daemon/` + log before bootstrap so launchd can open
-   * StandardOutPath/StandardErrorPath. Load is transactional: a failed
-   * `launchctl enable` after bootstrap boots out and removes the plist.
+   * StandardOutPath/StandardErrorPath. Unloads/removes the retired
+   * `com.rosetta.sdlc-daemon` StartInterval agent first (T-05). Load is
+   * transactional: a failed `launchctl enable` after bootstrap boots out
+   * and removes the plist.
    *
    * @throws {WorkflowError} `DAEMON_CONFIG_INVALID` when `--workspace` is
    *   missing/empty, config is invalid, or launchctl bootstrap/enable fails.
    */
   install(input: DaemonCommandInput): DaemonInstallResult;
   /**
-   * Unload and remove the workspace launchd agent. Label/plist path are
+   * Unload and remove the workspace launchd agent (and any leftover legacy
+   * `com.rosetta.sdlc-daemon` StartInterval agent). Label/plist path are
    * derived from the workspace root alone so a missing or malformed
    * `.sdlc/daemon.json` cannot strand an orphaned agent.
    *
@@ -227,8 +230,10 @@ export class DaemonHandler implements IDaemonHandler {
   /**
    * Generate and load a KeepAlive=true launchd agent for the workspace.
    * Creates `.sdlc/daemon/` + log before bootstrap so launchd can open
-   * StandardOutPath/StandardErrorPath. Load is transactional: a failed
-   * `launchctl enable` after bootstrap boots out and removes the plist.
+   * StandardOutPath/StandardErrorPath. Unloads/removes the retired
+   * `com.rosetta.sdlc-daemon` StartInterval agent first (T-05). Load is
+   * transactional: a failed `launchctl enable` after bootstrap boots out
+   * and removes the plist.
    *
    * @throws {WorkflowError} `DAEMON_CONFIG_INVALID` when `--workspace` is
    *   missing/empty, config is invalid, or launchctl bootstrap/enable fails.
@@ -256,7 +261,8 @@ export class DaemonHandler implements IDaemonHandler {
   }
 
   /**
-   * Unload and remove the workspace launchd agent. Label/plist path are
+   * Unload and remove the workspace launchd agent (and any leftover legacy
+   * `com.rosetta.sdlc-daemon` StartInterval agent). Label/plist path are
    * derived from the workspace root alone so a missing or malformed
    * `.sdlc/daemon.json` cannot strand an orphaned agent.
    *
