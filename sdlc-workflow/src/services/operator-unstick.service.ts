@@ -13,6 +13,7 @@ import {
 import { agentSpendK } from '../utils/agent-spend';
 import { buildOperatorUnstickPrompt } from '../utils/operator-unstick-prompt';
 import { isSpecTreePath } from '../utils/spec-path';
+import type { RiskyClassificationSource } from './advisory-issue.service';
 import {
   GATE_FIX_ATTEMPT_LIMIT,
   remediableVerdicts,
@@ -35,12 +36,24 @@ export interface OperatorUnstickInput {
 }
 
 /**
- * SPEC-PRD-0025-P1 T-01 / T-03: result of one operator-unstick turn.
+ * SPEC-PRD-0025-P1 T-01 / T-03 / T-04: result of one operator-unstick turn.
  * Outcome kinds mirror {@link OperatorUnstickOutcome}; `skipped` means the
  * service did not spend an attempt (budget / not applicable).
+ * `risky-proceed` always names who classified (agent label vs engine
+ * strategy classification) so the advisory path can attribute correctly.
  */
 export type OperatorUnstickResult =
-  | { kind: OperatorUnstickOutcome; attempt: number; detail: string }
+  | {
+      kind: 'risky-proceed';
+      attempt: number;
+      detail: string;
+      classifiedBy: RiskyClassificationSource;
+    }
+  | {
+      kind: Exclude<OperatorUnstickOutcome, 'risky-proceed'>;
+      attempt: number;
+      detail: string;
+    }
   | { kind: 'skipped'; attempt: number; detail: string };
 
 /**
@@ -83,6 +96,50 @@ export const shouldDispatchOperatorUnstick = (
 export const suppressesBlockingEscalate = (
   kind: OperatorUnstickResult['kind']
 ): boolean => kind === 'cleared' || kind === 'risky-proceed';
+
+/**
+ * True when the engine classifies the agent's chosen strategy as risky even
+ * without an agent `risky-proceed` self-label (SPEC-PRD-0025-P1 T-04).
+ *
+ * @remarks
+ * Agents may write `risky-advisory` (or describe a proceed under a named
+ * risky assumption). Only the engine turns that into `risky-proceed` —
+ * policy-rewrite turns are already fail-closed to `abstained` before this
+ * runs, so Approved-artifact edits cannot self-authorize via this path.
+ */
+export const engineClassifiesStrategyAsRisky = (
+  agentOutput: string
+): boolean => {
+  const text = agentOutput;
+  if (
+    /\boutcome\s*[:=]\s*risky-advisory\b/i.test(text) ||
+    /\brisky-advisory\b/i.test(text)
+  ) {
+    return true;
+  }
+  // Named risky-assumption proceed without a blocking abstain/authority marker.
+  if (
+    /\brisky\s+assumption\b/i.test(text) &&
+    (/\bproceed/i.test(text) || /\bcontinu/i.test(text)) &&
+    !/\babstain/i.test(text) &&
+    !/\bauthority-bound\b/i.test(text)
+  ) {
+    return true;
+  }
+  return false;
+};
+
+/**
+ * Who classified a `risky-proceed` outcome — agent self-label vs engine
+ * strategy classification. Used by the advisory continue path.
+ */
+export const classifyRiskyProceedSource = (
+  agentOutput: string
+): RiskyClassificationSource =>
+  /\boutcome\s*[:=]\s*risky-proceed\b/i.test(agentOutput) ||
+  /\brisky-proceed\b/i.test(agentOutput)
+    ? 'agent'
+    : 'engine';
 
 /**
  * True when agent output carries an explicit cleared outcome marker, not
@@ -159,6 +216,14 @@ export const classifyOperatorUnstickOutcome = (args: {
     /\boutcome\s*[:=]\s*risky-proceed\b/i.test(text) ||
     /\brisky-proceed\b/i.test(text)
   ) {
+    return 'risky-proceed';
+  }
+
+  // Engine classifies the chosen strategy as risky (e.g. agent wrote
+  // risky-advisory without self-labeling risky-proceed). Distinct from the
+  // agent-labeled branch above; production continue+advisory uses
+  // classifiedBy: 'engine' (SPEC-PRD-0025-P1 T-04).
+  if (engineClassifiesStrategyAsRisky(text)) {
     return 'risky-proceed';
   }
 
@@ -363,6 +428,14 @@ export class OperatorUnstickService implements IOperatorUnstickService {
     );
     this.applyTerminalTier(input, taskId, kind);
 
+    if (kind === 'risky-proceed') {
+      return {
+        kind,
+        attempt,
+        detail,
+        classifiedBy: classifyRiskyProceedSource(agentOutput)
+      };
+    }
     return { kind, attempt, detail };
   }
 

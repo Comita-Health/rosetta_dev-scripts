@@ -16,6 +16,8 @@ import {
 import { escalationWaveTitle } from '../services/escalation.service';
 import {
   classifyOperatorUnstickOutcome,
+  classifyRiskyProceedSource,
+  engineClassifiesStrategyAsRisky,
   suppressesBlockingEscalate
 } from '../services/operator-unstick.service';
 import { WORKFLOW_TOKENS } from '../tokens';
@@ -189,8 +191,31 @@ describe('AdvisoryIssueService (SPEC-PRD-0025-P1 T-04)', () => {
     });
 
     it('engine-classified risky proceed uses the same continue semantics', () => {
-      // Engine classification is modeled as a direct AdvisoryIssueService.file
-      // call (handler/operator-unstick continue path) — never ACTION REQUIRED.
+      // Engine strategy classification (risky-advisory → risky-proceed) is
+      // produced by OperatorUnstickService and continues via RunHandler —
+      // same suppress + advisory semantics as agent labeling.
+      const kind = classifyOperatorUnstickOutcome({
+        agentOutput:
+          'OUTCOME: risky-advisory — proceeded under contested tip assumption',
+        attempt: 1,
+        attemptLimit: 2,
+        taskMerged: false,
+        headMoved: false,
+        policyRewriteAttempt: false
+      });
+      expect(kind).toBe('risky-proceed');
+      expect(
+        engineClassifiesStrategyAsRisky(
+          'OUTCOME: risky-advisory — proceeded under contested tip assumption'
+        )
+      ).toBe(true);
+      expect(
+        classifyRiskyProceedSource(
+          'OUTCOME: risky-advisory — proceeded under contested tip assumption'
+        )
+      ).toBe('engine');
+      expect(suppressesBlockingEscalate(kind)).toBe(true);
+
       const outcome = service.file({
         runId: 'run-1',
         taskId: 'T-04',
@@ -202,7 +227,6 @@ describe('AdvisoryIssueService (SPEC-PRD-0025-P1 T-04)', () => {
       });
       expect(isAdvisoryIssueTitle(outcome.title)).toBe(true);
       expect(isActionRequiredEscalationTitle(outcome.title)).toBe(false);
-      expect(suppressesBlockingEscalate('risky-proceed')).toBe(true);
       expect(recordExceptions).not.toHaveBeenCalled();
     });
   });

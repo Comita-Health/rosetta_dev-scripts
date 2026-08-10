@@ -412,7 +412,9 @@ blocking ACTION REQUIRED for that wave; a risky proceed also files a
 non-blocking `ADVISORY: SDLC <runId> <taskId> risky proceed` issue via
 `AdvisoryIssueService` (decision + evidence + course-correct; escalate
 tier `advisory-risky`) that Continuity/`BlockerService` must not treat
-as a resume gate. Abstain / exhaust / authority-bound keep the escalate
+as a resume gate. Both agent-labeled `risky-proceed` and engine-classified
+strategies (`risky-advisory` / risky-assumption → `classifiedBy: engine`)
+take that continue+advisory path — never a hardcoded agent attribution. Abstain / exhaust / authority-bound keep the escalate
 + issue-state resume path. `cleared`
 requires durable blocker-clear evidence (disk-reloaded `mergedSha` /
 record-merge, or an explicit `OUTCOME: cleared` marker plus a successful
