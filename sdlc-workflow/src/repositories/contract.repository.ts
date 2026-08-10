@@ -55,13 +55,20 @@ export class ContractRepository implements IContractRepository {
         'CONTRACT_MALFORMED'
       );
     }
+    const deployWorkflow =
+      typeof sandbox.deployWorkflow === 'string' &&
+      sandbox.deployWorkflow.trim().length > 0
+        ? sandbox.deployWorkflow.trim()
+        : undefined;
+
     return {
       deployCommand: sandbox.deployCommand,
       healthCommand: sandbox.healthCommand,
       timeoutMinutes:
         typeof sandbox.timeoutMinutes === 'number'
           ? sandbox.timeoutMinutes
-          : DEFAULT_TIMEOUT_MINUTES
+          : DEFAULT_TIMEOUT_MINUTES,
+      ...(deployWorkflow === undefined ? {} : { deployWorkflow })
     };
   }
 

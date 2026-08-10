@@ -145,6 +145,10 @@ import {
   IDeployRecordRepository
 } from './repositories/deploy-record.repository';
 import {
+  DeployObservationRepository,
+  IDeployObservationRepository
+} from './repositories/deploy-observation.repository';
+import {
   CloseoutAggregateService,
   ICloseoutAggregateService
 } from './services/closeout-aggregate.service';
@@ -372,6 +376,11 @@ container
 container
   .bind<IDeployRecordRepository>(WORKFLOW_TOKENS.DeployRecordRepository)
   .to(DeployRecordRepository);
+container
+  .bind<IDeployObservationRepository>(
+    WORKFLOW_TOKENS.DeployObservationRepository
+  )
+  .to(DeployObservationRepository);
 container
   .bind<ICloseoutAggregateService>(WORKFLOW_TOKENS.CloseoutAggregateService)
   .to(CloseoutAggregateService);

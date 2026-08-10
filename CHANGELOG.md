@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **sdlc-workflow:** sandbox deploy observes push-triggered GitHub Actions
+  runs when the sandbox contract names `deployWorkflow` (e.g.
+  `deploy-organization.yml`). Phase-boundary no longer double-dispatches
+  against an in-flight or successful push deploy of the same commit SHA —
+  the external run is recorded under trigger `push` and the engine stands
+  down to health-only (SPEC-PRD-0022-P1 T-03 gap: ledger previously saw only
+  engine-owned dispatches). Observation fails open on `gh` errors.
+
 - **sdlc-workflow (PRD-0020 remote-resume):** `--supervise` / `--detach` persist
   `launch.json`; watches carry `resumeContext` into wake data; `issue-state`
   adapter + CLI kind; `pr-review` emits `merged` (with merge OID) before
