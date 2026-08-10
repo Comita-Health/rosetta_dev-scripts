@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **sdlc-workflow (SPEC-PRD-0020-P2 T-04):** Loud-failure semantics for the
+  per-workspace daemon — when a watch exceeds the consecutive poll-failure
+  cap, `PollSchedulerService` commits an operator-visible `poll-error` wake
+  (idempotent per watch+reason via `commitPollErrorWake`) before marking
+  `degradedAt`. Fatal bootstrap and unrecoverable tick errors exit non-zero
+  (`daemonExitCode` / `exitDaemonFatal`) so launchd KeepAlive restarts the
+  process; success paths remain the only exit 0. KeepAlive stays
+  launchd-owned (no in-process restart loop).
+
 - **sdlc-workflow:** sandbox deploy observes push-triggered GitHub Actions
   runs when the sandbox contract names `deployWorkflow` (e.g.
   `deploy-organization.yml`). Phase-boundary no longer double-dispatches

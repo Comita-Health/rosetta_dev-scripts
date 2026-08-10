@@ -8,6 +8,7 @@ import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
 import os from 'os';
 import { resolveDaemonCliEntry } from './utils/daemon-cli-entry';
+import { exitDaemonFatal } from './utils/daemon-exit';
 import { RunHandler, IRunHandler } from './handlers/run.handler';
 import { WorkflowHandler, IWorkflowHandler } from './handlers/workflow.handler';
 import {
@@ -1044,7 +1045,12 @@ yargs(hideBin(process.argv))
               } else {
                 console.error(chalk.red(`\n✗ ${err}`));
               }
-              process.exit(1);
+              // Non-zero so launchd KeepAlive restarts (SPEC-PRD-0020-P2 T-04).
+              const detail =
+                err instanceof WorkflowError
+                  ? `${err.code}: ${err.message}`
+                  : String(err);
+              exitDaemonFatal('fatal-bootstrap', detail);
             }
           }
         )

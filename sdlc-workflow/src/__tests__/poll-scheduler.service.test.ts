@@ -15,6 +15,10 @@ import {
   WatchSourcePollResult
 } from '../services/watch-source-adapter';
 import { WatchRegistryService } from '../services/watch-registry.service';
+import {
+  commitPollErrorWake,
+  pollErrorSignalId
+} from '../utils/watch-wake-commit';
 
 const signalResult: WatchSourcePollResult = {
   signals: [
@@ -148,11 +152,14 @@ describe('PollSchedulerService', () => {
     });
   });
 
-  it('marks a watch degraded at the failure cap and stops polling it', async () => {
+  it('marks a watch degraded at the failure cap, commits a poll-error wake, and does not exit 0', async () => {
     const adapter: IWatchSourceAdapter = {
       poll: jest.fn().mockRejectedValue(new Error('source unavailable'))
     };
-    const { workspace, watches, scheduler } = setup(adapter);
+    const { workspace, store, watches, scheduler } = setup(adapter);
+    const exitSpy = jest
+      .spyOn(process, 'exit')
+      .mockImplementation((() => undefined) as never);
 
     for (let attempt = 0; attempt < DEFAULT_POLL_FAILURE_CAP; attempt += 1) {
       await scheduler.tick(workspace);
@@ -166,10 +173,88 @@ describe('PollSchedulerService', () => {
       degradedAt: '2026-08-07T10:01:00.000Z'
     });
 
+    const watchId = watches.list(workspace)[0]?.id;
+    expect(watchId).toEqual(expect.any(String));
+    const pollErrorWakes = store
+      .listPendingWakes(workspace)
+      .filter(
+        wake =>
+          wake.target === watchId &&
+          wake.signal === pollErrorSignalId('source unavailable')
+      );
+    expect(pollErrorWakes).toHaveLength(1);
+    expect(pollErrorWakes[0]).toMatchObject({
+      kind: 'pr-review',
+      data: {
+        signal: 'poll-error',
+        reason: 'source unavailable',
+        watchId
+      }
+    });
+    // Per-watch degrade is operator-visible via wake — not a success exit.
+    expect(exitSpy).not.toHaveBeenCalledWith(0);
+
     await scheduler.tick(workspace);
     jest.advanceTimersByTime(30_000);
     await scheduler.tick(workspace);
     expect(adapter.poll).toHaveBeenCalledTimes(DEFAULT_POLL_FAILURE_CAP);
+    exitSpy.mockRestore();
+  });
+
+  it('re-failing the same degraded watch does not duplicate poll-error wakes', async () => {
+    const adapter: IWatchSourceAdapter = {
+      poll: jest.fn().mockRejectedValue(new Error('source unavailable'))
+    };
+    const { workspace, store, watches, scheduler } = setup(adapter);
+
+    for (let attempt = 0; attempt < DEFAULT_POLL_FAILURE_CAP; attempt += 1) {
+      await scheduler.tick(workspace);
+      jest.advanceTimersByTime(30_000);
+    }
+
+    const listed = watches.list(workspace)[0];
+    expect(listed).toBeDefined();
+    if (listed === undefined) {
+      throw new Error('expected a degraded watch after the failure cap');
+    }
+    const watch = watches.get(workspace, listed.id);
+    expect(watch).not.toBeNull();
+    if (watch === null) {
+      throw new Error('expected durable watch record');
+    }
+    expect(watch.degradedAt).toEqual(expect.any(String));
+
+    // Simulate re-emitting the same watch+reason (crash-retry / re-fail).
+    const first = commitPollErrorWake(
+      store,
+      workspace,
+      watch,
+      new Error('source unavailable')
+    );
+    const second = commitPollErrorWake(
+      store,
+      workspace,
+      watch,
+      new Error('source unavailable')
+    );
+    expect(first.created).toBe(false);
+    expect(second.created).toBe(false);
+    expect(second.record.id).toBe(first.record.id);
+
+    const pollErrorWakes = store
+      .listPendingWakes(workspace)
+      .filter(wake => wake.signal.startsWith('poll-error:'));
+    expect(pollErrorWakes).toHaveLength(1);
+
+    // Further ticks skip the degraded watch — still one wake.
+    await scheduler.tick(workspace);
+    jest.advanceTimersByTime(30_000);
+    await scheduler.tick(workspace);
+    expect(
+      store
+        .listPendingWakes(workspace)
+        .filter(wake => wake.signal.startsWith('poll-error:'))
+    ).toHaveLength(1);
   });
 
   it('starts immediately, honors cadence, and stops its timer', async () => {
@@ -426,7 +511,7 @@ describe('PollSchedulerService', () => {
     expect(store.listPendingWakes(configured.workspace)).toEqual([]);
   });
 
-  it('logs top-level timer errors without creating an unhandled rejection', async () => {
+  it('exits non-zero on unrecoverable top-level tick failures', async () => {
     const adapter: IWatchSourceAdapter = {
       poll: jest.fn().mockResolvedValue({ signals: [] })
     };
@@ -437,6 +522,9 @@ describe('PollSchedulerService', () => {
     const consoleError = jest
       .spyOn(console, 'error')
       .mockImplementation(() => undefined);
+    const exitSpy = jest
+      .spyOn(process, 'exit')
+      .mockImplementation((() => undefined) as never);
 
     configured.scheduler.start(configured.workspace, 30);
     await jest.advanceTimersByTimeAsync(0);
@@ -445,10 +533,16 @@ describe('PollSchedulerService', () => {
     expect(consoleError).toHaveBeenCalledWith(
       '[poll-scheduler] tick failed: registry unreadable'
     );
+    expect(consoleError).toHaveBeenCalledWith(
+      '[daemon] unrecoverable-tick: registry unreadable'
+    );
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(exitSpy).not.toHaveBeenCalledWith(0);
+    exitSpy.mockRestore();
     consoleError.mockRestore();
   });
 
-  it('logs non-Error timer failures', async () => {
+  it('exits non-zero on non-Error unrecoverable tick failures', async () => {
     const adapter: IWatchSourceAdapter = {
       poll: jest.fn().mockResolvedValue({ signals: [] })
     };
@@ -459,6 +553,9 @@ describe('PollSchedulerService', () => {
     const consoleError = jest
       .spyOn(console, 'error')
       .mockImplementation(() => undefined);
+    const exitSpy = jest
+      .spyOn(process, 'exit')
+      .mockImplementation((() => undefined) as never);
 
     configured.scheduler.start(configured.workspace, 30);
     await jest.advanceTimersByTimeAsync(0);
@@ -467,6 +564,8 @@ describe('PollSchedulerService', () => {
     expect(consoleError).toHaveBeenCalledWith(
       '[poll-scheduler] tick failed: registry unavailable'
     );
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    exitSpy.mockRestore();
     consoleError.mockRestore();
   });
 });
