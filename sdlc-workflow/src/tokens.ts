@@ -83,5 +83,7 @@ export const WORKFLOW_TOKENS = {
   DaemonStatusService: Symbol.for('DaemonStatusService'),
   // Operator cutover: ~/.rosetta/wake → .sdlc/daemon/wake
   LegacyWakeInboxRepository: Symbol.for('LegacyWakeInboxRepository'),
-  LegacyWakeMigrateService: Symbol.for('LegacyWakeMigrateService')
+  LegacyWakeMigrateService: Symbol.for('LegacyWakeMigrateService'),
+  // SPEC-PRD-0020-P2 T-01
+  ContinuityService: Symbol.for('ContinuityService')
 } as const;

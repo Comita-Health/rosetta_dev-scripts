@@ -203,6 +203,10 @@ import {
   ILaunchdRepository
 } from './repositories/launchd.repository';
 import {
+  ContinuityService,
+  IContinuityService
+} from './services/continuity.service';
+import {
   DaemonLifecycleService,
   IDaemonLifecycleService
 } from './services/daemon-lifecycle.service';
@@ -469,6 +473,10 @@ container
 container
   .bind<ILegacyWakeMigrateService>(WORKFLOW_TOKENS.LegacyWakeMigrateService)
   .to(LegacyWakeMigrateService);
+container
+  .bind<IContinuityService>(WORKFLOW_TOKENS.ContinuityService)
+  .to(ContinuityService)
+  .inSingletonScope();
 
 {
   // pr-review / pr-checks (Phase 1) + issue-state (remote-resume slice).
