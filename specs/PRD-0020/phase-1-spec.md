@@ -2,7 +2,7 @@
 id: SPEC-PRD-0020-P1
 prd: PRD-0020
 phase: 1
-status: Approved # Draft | Approved | Done | Superseded
+status: Done # Draft | Approved | Done | Superseded
 date: 2026-08-04
 owner: Russ Watson
 envelope:
@@ -137,3 +137,7 @@ Convert the `pr-approve-watch` skill's bash poll loop into a thin client: the sk
 - [x] test: the updated skill script contains no long-lived polling loop; it registers a watch via the daemon and exits.
 - [x] test: the `.cursor` and `.claude` template copies of the skill are content-identical after the change, enforced by a comparison test or sync check.
 - [x] agent: arming the updated skill against a test PR and approving that PR produces a consumed wake through the daemon path, with no watcher process surviving the arming session.
+
+## Operator closeout (2026-08-10)
+
+- Closeout #53 recorded **32/32** criteria. `status: Done` flipped after phase-gate CI “no check runs” on T-01/T-04 treated as non-blocking (criteria evidence complete). Tracked on issue #86.
