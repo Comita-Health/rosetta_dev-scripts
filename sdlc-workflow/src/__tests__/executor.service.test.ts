@@ -98,6 +98,7 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
     agentRun = jest.fn().mockResolvedValue({ ok: true, output: 'done' });
     stateMock = {
       load: jest.fn().mockReturnValue(null),
+      idleSeconds: jest.fn().mockReturnValue(null),
       save: jest.fn(),
       appendVerdict: jest.fn(),
       recordTaskResult: jest

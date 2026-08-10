@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **sdlc-workflow (SPEC-PRD-0020-P2 T-03):** Continuity abandoned-run flagging
+  and blocker-close wake use `RunStateRepository.idleSeconds`,
+  `BlockerService` resumable reporting, and the shared
+  `commitWatchSignal` / `issue-state` inbox path. A dead-supervisor run idle
+  beyond `SDLC_ABANDONED_SECONDS` emits exactly one `abandoned` wake and is
+  not relaunched. When needs-human blockers report resumable, a `closed`
+  wake is committed for `EngineResumeWakeAction` — continuity does not become
+  a second resume engine. Operator docs no longer treat
+  `sdlc-continuity-daemon.sh` as the safety net.
+
 - **sdlc-workflow (SPEC-PRD-0020-P2 T-02):** `StaleAgentService` reads each
   run's `heartbeat.jsonl` on the continuity tick and, when an in-flight
   implementation heartbeat is quieter than `SDLC_AGENT_STALL_SECONDS`

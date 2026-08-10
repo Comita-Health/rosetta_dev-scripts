@@ -481,6 +481,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
         recordMergeBlockedRetry: jest.fn(),
         invalidateSteps: jest.fn().mockReturnValue([]),
         load: stateLoad,
+        idleSeconds: jest.fn().mockReturnValue(null),
         save: jest.fn(),
         recordTaskResult: jest.fn()
       });

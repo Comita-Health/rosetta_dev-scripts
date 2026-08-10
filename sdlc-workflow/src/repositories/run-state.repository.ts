@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, statSync } from 'fs';
 import { inject, injectable } from 'inversify';
 import path from 'path';
 import { WORKFLOW_TOKENS } from '../tokens';
@@ -22,6 +22,11 @@ import type { IRunLockRepository } from './run-lock.repository';
  */
 export interface IRunStateRepository {
   load(runsDir: string, runId: string): RunState | null;
+  /**
+   * Seconds since `state.json` mtime (SPEC-PRD-0020-P2 T-03 abandoned idle).
+   * `null` when the file is missing or unreadable.
+   */
+  idleSeconds(runsDir: string, runId: string): number | null;
   save(runsDir: string, state: RunState): string;
   appendVerdict(runsDir: string, state: RunState, verdict: GateVerdict): void;
   recordTaskResult(
@@ -144,6 +149,19 @@ export class RunStateRepository implements IRunStateRepository {
     state.specDigest = state.specDigest ?? '';
     state.launchArgv = state.launchArgv ?? [];
     return state;
+  }
+
+  idleSeconds(runsDir: string, runId: string): number | null {
+    const file = stateFile(runsDir, runId);
+    try {
+      if (existsSync(file) === false) {
+        return null;
+      }
+      const ageMs = Date.now() - statSync(file).mtimeMs;
+      return Math.max(0, Math.floor(ageMs / 1_000));
+    } catch {
+      return null;
+    }
   }
 
   /**

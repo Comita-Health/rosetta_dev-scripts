@@ -610,12 +610,12 @@ describe('StaleAgentService (SPEC-PRD-0020-P2 T-02)', () => {
         }),
         derivePaths: jest.fn()
       },
-      { load: () => null } as never,
+      { load: () => null, idleSeconds: () => null } as never,
       { read: jest.fn(), readAtRef: jest.fn() },
       { spawnDetached: jest.fn(), isAlive: jest.fn() },
       new RunLockRepository(),
       new DaemonStoreRepository(),
-      { findByTitle: jest.fn(), create: jest.fn() },
+      { query: jest.fn() },
       { tick: staleTick }
     );
     await continuity.tick(workspace);

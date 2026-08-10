@@ -5,6 +5,7 @@ import fs, {
   readFileSync,
   readdirSync,
   rmSync,
+  utimesSync,
   writeFileSync
 } from 'fs';
 import os from 'os';
@@ -42,6 +43,17 @@ describe('RunStateRepository', () => {
 
   it('returns null for an unknown run', () => {
     expect(repo.load(dir, 'nope')).toBeNull();
+  });
+
+  it('reports idleSeconds from state.json mtime and null when absent', () => {
+    expect(repo.idleSeconds(dir, 'nope')).toBeNull();
+    repo.save(dir, makeState());
+    const stateFile = path.join(dir, 'run-1', 'state.json');
+    const stale = new Date(Date.now() - 125_000);
+    utimesSync(stateFile, stale, stale);
+    const idle = repo.idleSeconds(dir, 'run-1');
+    expect(idle).not.toBeNull();
+    expect(idle!).toBeGreaterThanOrEqual(120);
   });
 
   it('round-trips run state and refreshes updatedAt', () => {

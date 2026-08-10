@@ -64,12 +64,17 @@ Enforce intake loads the Approved spec from `origin/<defaultBranch>`, not from
 the operator working tree. A stale local checkout of the spec file no longer
 blocks the next supervise wave after a merge updates the blob on origin.
 
-The launchd continuity daemon (`scripts/sdlc-continuity-daemon.sh`) still has a
-**one-shot safety net** for older engines / odd checkouts: before relaunching a
-dead supervisor, if recent `supervise.log` / `state.json` shows intake
-`spec-not-merged` (or “differs from origin”), it `git fetch`es and
-`git checkout origin/<default> -- <relSpecPath>` for the `launch.json` spec
-file only (no full branch switch), once per run (`spec-origin-sync.attempted`).
+Continuity lives in the per-workspace TypeScript daemon (`sdlc-workflow daemon`
+/ `ContinuityService`), not in `scripts/sdlc-continuity-daemon.sh`. That bash
+StartInterval job is being retired (SPEC-PRD-0020-P2): do **not** treat it as
+the safety net for dead supervisors, abandoned runs, or blocker-close. The
+daemon tick relaunches unfinished runs with a dead `supervise.pid` when
+`launch.json` is usable; abandoned idle runs get one wake and are not
+relaunched; needs-human blocker-close commits a `closed` wake on the shared
+inbox and resumes only through the registered `engine-resume` wake action.
+
+Enforce intake already reads the Approved spec from `origin/<defaultBranch>`,
+so operators should not rely on a relaunch-time working-tree spec sync.
 
 Product-task diffs must not edit `specs/**` — the envelope gate hard-breaches
 those paths even when listed in `allowedPaths`. Checkbox / `status: Done`

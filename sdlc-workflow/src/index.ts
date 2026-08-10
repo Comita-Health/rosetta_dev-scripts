@@ -206,6 +206,7 @@ import {
   ContinuityService,
   IContinuityService
 } from './services/continuity.service';
+import { BlockerService, IBlockerService } from './services/blocker.service';
 import {
   StaleAgentService,
   IStaleAgentService
@@ -481,6 +482,9 @@ container
   .bind<IStaleAgentService>(WORKFLOW_TOKENS.StaleAgentService)
   .to(StaleAgentService)
   .inSingletonScope();
+container
+  .bind<IBlockerService>(WORKFLOW_TOKENS.BlockerService)
+  .to(BlockerService);
 container
   .bind<IContinuityService>(WORKFLOW_TOKENS.ContinuityService)
   .to(ContinuityService)
