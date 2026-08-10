@@ -401,6 +401,21 @@ export interface RunState {
    */
   gateFixAttempts: Record<string, number>;
   /**
+   * SPEC-PRD-0025-P1 T-01: per-task count of operator-unstick agent turns.
+   * Persisted so a resume cannot refill the unstick budget (mirrors
+   * {@link gateFixAttempts}).
+   */
+  operatorUnstickAttempts: Record<string, number>;
+  /**
+   * SPEC-PRD-0025-P1 T-01: latest operator-unstick outcome per task.
+   */
+  operatorUnstickOutcomes: Record<string, OperatorUnstickOutcomeRecord>;
+  /**
+   * SPEC-PRD-0025-P1 T-01: per-task escalate tier for status surfaces
+   * (`unstick-in-flight` | `advisory-risky` | `halted-escalated`).
+   */
+  escalateTiers: Record<string, EscalateTier>;
+  /**
    * Wave 0: the latest engine remediation per task. Task re-selection uses
    * it to reopen a task whose phase gate breached *before* a fix landed —
    * without it, the breach would stay terminal and the fix would never be
@@ -414,6 +429,33 @@ export interface RunState {
   mergeBlockedRetries: number;
   updatedAt: string; // ISO timestamp
 }
+
+/**
+ * SPEC-PRD-0025-P1 T-01: durable operator-unstick outcome kinds.
+ * `cleared` suppresses blocking escalate; `abstained` / `exhausted` /
+ * `authority-bound` still file ACTION REQUIRED; `risky-proceed` keeps the
+ * train moving with a non-blocking advisory issue.
+ */
+export type OperatorUnstickOutcome =
+  'cleared' | 'abstained' | 'risky-proceed' | 'authority-bound' | 'exhausted';
+
+/** Latest operator-unstick outcome recorded for a task. */
+export interface OperatorUnstickOutcomeRecord {
+  outcome: OperatorUnstickOutcome;
+  /** Attempt number that produced this outcome. */
+  attempt: number;
+  recordedAt: string; // ISO timestamp
+  detail?: string;
+}
+
+/**
+ * SPEC-PRD-0025-P1 T-01 / T-07: status-consumable escalate tier for a task.
+ * Distinct from gate-remediation bookkeeping — surfaces whether unstick is
+ * in flight, a risky proceed is advisory-only, or the run halted for a
+ * human-blocking escalate.
+ */
+export type EscalateTier =
+  'unstick-in-flight' | 'advisory-risky' | 'halted-escalated';
 
 /**
  * One attempt inside a {@link RecoveryHistory} (SPEC-PRD-0021-P1 T-03).

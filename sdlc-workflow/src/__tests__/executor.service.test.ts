@@ -52,6 +52,9 @@ const baseState = (): RunState => ({
   tokenSpendK: 0,
   ciFixAttempts: {},
   gateFixAttempts: {},
+  operatorUnstickAttempts: {},
+  operatorUnstickOutcomes: {},
+  escalateTiers: {},
   remediations: {},
   mergeBlockedRetries: 0,
   updatedAt: 'x'
@@ -125,6 +128,9 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
           return state.tokenSpendK;
         }),
       recordGateFixAttempt: jest.fn(),
+      recordOperatorUnstickAttempt: jest.fn(),
+      recordOperatorUnstickOutcome: jest.fn(),
+      recordEscalateTier: jest.fn(),
       recordRemediation: jest.fn(),
       recordMergeBlockedRetry: jest.fn(),
       invalidateSteps: jest.fn().mockReturnValue([])

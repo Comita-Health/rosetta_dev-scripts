@@ -136,6 +136,9 @@ describe('daemon status (SPEC-PRD-0020-P1 T-07)', () => {
         tokenSpendK: 0,
         ciFixAttempts: {},
         gateFixAttempts: {},
+        operatorUnstickAttempts: {},
+        operatorUnstickOutcomes: {},
+        escalateTiers: {},
         remediations: {},
         mergeBlockedRetries: 0,
         updatedAt: '2026-08-07T12:00:00.000Z'
@@ -207,6 +210,9 @@ describe('daemon status (SPEC-PRD-0020-P1 T-07)', () => {
         tokenSpendK: 0,
         ciFixAttempts: {},
         gateFixAttempts: {},
+        operatorUnstickAttempts: {},
+        operatorUnstickOutcomes: {},
+        escalateTiers: {},
         remediations: {},
         mergeBlockedRetries: 0,
         updatedAt: '2026-08-07T12:00:00.000Z'

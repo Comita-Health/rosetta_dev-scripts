@@ -384,6 +384,10 @@ and exhaustion escalates loudly rather than spinning. Envelope remediation
 is instructed to **reduce the diff**, never to raise `maxDiffLines` — a gate
 that negotiates its own threshold is not a gate. Each round is recorded in
 `state.remediations` and a `[remediate] <task> …` line in `monitor.log`.
+After remediable remediation exhausts, Phase 1 (PRD-0025) will dispatch a
+separate operator-unstick turn (budget in `operatorUnstickAttempts`,
+outcomes in `operatorUnstickOutcomes`, status tiers in `escalateTiers`) —
+also durable across resume so the unstick budget cannot refill.
 
 **Merge-blocked retry.** The supervisor exited on `merge-blocked` 28 times
 across 79 waves, each ending the process. It now retries up to
