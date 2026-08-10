@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **sdlc-workflow (SPEC-PRD-0020-P2 T-02):** `StaleAgentService` reads each
+  run's `heartbeat.jsonl` on the continuity tick and, when an in-flight
+  implementation heartbeat is quieter than `SDLC_AGENT_STALL_SECONDS`
+  (default 2400), performs one kill attempt scoped to that `runId` and
+  commits one idempotent `agent-stalled` wake via `commitWatchSignal`.
+  Episode-keyed wake ids re-arm after the heartbeat recovers so a later
+  stall notifies again — no machine-global kill of unrelated agents.
+
 - **sdlc-workflow (SPEC-PRD-0020-P2 T-01):** `ContinuityService` scans the
   workspace `runsDir` each daemon tick and relaunches unfinished runs whose
   `supervise.pid` is dead, replaying `launch.json` argv/execArgv under

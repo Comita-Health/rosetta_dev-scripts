@@ -205,6 +205,14 @@ is not abandoned, it relaunches under `RunLockRepository` via
 `ProcessDetachRepository`, appends a monitor/supervise log line, and commits a
 `supervisor-restarted` wake through `commitWatchSignal`.
 
+`StaleAgentService` (SPEC-PRD-0020-P2 T-02) runs on the same continuity tick.
+It reads each run's engine `heartbeat.jsonl`: an in-flight `implementation`
+snapshot quieter than `SDLC_AGENT_STALL_SECONDS` (default 2400) triggers exactly
+one kill attempt whose process filter includes that `runId` (never a bare
+machine-global agent kill) and exactly one `agent-stalled` wake on the shared
+inbox. Wake signal ids are episode-keyed so a recovered heartbeat re-arms a
+later stall notification.
+
 An exclusive, expiring lease keeps overlapping ticks off the same watch. Leases
 live at `poll-leases/<sha256(watchId)>.<generation>.json`, and taking one means
 exclusively creating the generation after the highest one on disk. Recovering a

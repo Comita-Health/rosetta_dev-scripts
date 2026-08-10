@@ -85,5 +85,7 @@ export const WORKFLOW_TOKENS = {
   LegacyWakeInboxRepository: Symbol.for('LegacyWakeInboxRepository'),
   LegacyWakeMigrateService: Symbol.for('LegacyWakeMigrateService'),
   // SPEC-PRD-0020-P2 T-01
-  ContinuityService: Symbol.for('ContinuityService')
+  ContinuityService: Symbol.for('ContinuityService'),
+  // SPEC-PRD-0020-P2 T-02
+  StaleAgentService: Symbol.for('StaleAgentService')
 } as const;
