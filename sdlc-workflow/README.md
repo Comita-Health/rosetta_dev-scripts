@@ -384,10 +384,15 @@ and exhaustion escalates loudly rather than spinning. Envelope remediation
 is instructed to **reduce the diff**, never to raise `maxDiffLines` — a gate
 that negotiates its own threshold is not a gate. Each round is recorded in
 `state.remediations` and a `[remediate] <task> …` line in `monitor.log`.
-After remediable remediation exhausts, Phase 1 (PRD-0025) will dispatch a
-separate operator-unstick turn (budget in `operatorUnstickAttempts`,
-outcomes in `operatorUnstickOutcomes`, status tiers in `escalateTiers`) —
-also durable across resume so the unstick budget cannot refill.
+After remediable remediation exhausts, Phase 1 (PRD-0025) dispatches a
+separate operator-unstick turn whose prompt
+(`utils/operator-unstick-prompt.ts`) mandates rebase/integration tip,
+out-of-band merge + `record-merge`, and resume via existing engine CLIs —
+not gate-remediation trim-the-diff. Authority-bound acts abstain rather
+than silently rewriting Approved policy. Budget lives in
+`operatorUnstickAttempts`, outcomes in `operatorUnstickOutcomes`, status
+tiers in `escalateTiers` — durable across resume so the unstick budget
+cannot refill.
 
 **Merge-blocked retry.** The supervisor exited on `merge-blocked` 28 times
 across 79 waves, each ending the process. It now retries up to
@@ -971,6 +976,11 @@ Handler / Service / Repository with InversifyJS (workspace rule):
   new head. Bounded by `gateFixAttempts` per task and the run's token
   budget; envelope remediation must trim the diff, never widen the envelope
   (`utils/gate-fix-prompt.ts`).
+- `utils/operator-unstick-prompt.ts` — SPEC-PRD-0025-P1 T-02: headless
+  operator-unstick mandate (rebase/integration tip, out-of-band merge +
+  `record-merge`, resume) distinct from gate-fix; abstain on
+  Draft→Approved, live smoke/veto, PHI, envelope widening, and mid-run
+  `specs/**` closeout rather than silent policy rewrite.
 - `services/escalation.service.ts` — P3 T-06 / fail-loud T-04: turns
   exception entries into interrupting `action-required` queue items,
   assigned needs-human GitHub issues (`--operator` / `SDLC_OPERATOR`), and

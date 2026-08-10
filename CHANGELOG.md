@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **sdlc-workflow (SPEC-PRD-0025-P1 T-02):** Author `buildOperatorUnstickPrompt`
+  with an explicit operator mandate (rebase/integration tip, out-of-band
+  merge + `record-merge`, resume via existing engine CLIs) distinct from
+  gate-remediation trim-the-diff. Authority-bound and policy acts
+  (Draft→Approved, live smoke/veto, PHI, raising `maxDiffLines` /
+  `allowedPaths`, mid-run `specs/**` closeout) instruct abstain — never
+  silent Approved-spec rewrite. `buildGateFixPrompt` stays remediator-first.
+
 - **sdlc-workflow (SPEC-PRD-0025-P1 T-01):** Persist operator-unstick attempt
   budget and outcome model on run state. `state.json` carries per-task
   `operatorUnstickAttempts`, latest `operatorUnstickOutcomes` (`cleared` |
