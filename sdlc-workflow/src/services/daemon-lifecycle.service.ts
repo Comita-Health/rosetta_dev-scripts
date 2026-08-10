@@ -5,6 +5,7 @@ import type { IDaemonProcessRepository } from '../repositories/daemon-process.re
 import type { ILaunchdRepository } from '../repositories/launchd.repository';
 import { WORKFLOW_TOKENS } from '../tokens';
 import type { DaemonConfig, DaemonRuntimePaths } from '../types';
+import type { IContinuityService } from './continuity.service';
 import type { IPollSchedulerService } from './poll-scheduler.service';
 import type { IWakeConsumptionService } from './wake-consumption.service';
 
@@ -30,8 +31,9 @@ export interface DaemonInstallResult {
 
 /**
  * Process bootstrap and launchd lifecycle for the per-workspace daemon
- * (SPEC-PRD-0020-P1 T-01). Starts the poll scheduler (T-04) and wake
- * consumption loop (T-06) when those services are wired.
+ * (SPEC-PRD-0020-P1 T-01). Starts the poll scheduler (T-04), wake
+ * consumption loop (T-06), and continuity tick (PRD-0020-P2 T-01) when
+ * those services are wired.
  */
 export interface IDaemonLifecycleService {
   /** Validate workspace root + config, write pid/log, then block until signal. */
@@ -60,7 +62,10 @@ export class DaemonLifecycleService implements IDaemonLifecycleService {
     private readonly _poller?: IPollSchedulerService,
     @inject(WORKFLOW_TOKENS.WakeConsumptionService)
     @optional()
-    private readonly _consumer?: IWakeConsumptionService
+    private readonly _consumer?: IWakeConsumptionService,
+    @inject(WORKFLOW_TOKENS.ContinuityService)
+    @optional()
+    private readonly _continuity?: IContinuityService
   ) {}
 
   async run(workspaceRoot: string): Promise<DaemonRuntimePaths> {
@@ -78,6 +83,9 @@ export class DaemonLifecycleService implements IDaemonLifecycleService {
       if (this._consumer !== undefined) {
         this._consumer.start(workspaceRoot, config.defaultPollSeconds);
       }
+      if (this._continuity !== undefined) {
+        this._continuity.start(workspaceRoot, config.defaultPollSeconds);
+      }
       await this._processRepo.waitForShutdown();
     } finally {
       if (this._poller !== undefined) {
@@ -85,6 +93,9 @@ export class DaemonLifecycleService implements IDaemonLifecycleService {
       }
       if (this._consumer !== undefined) {
         this._consumer.stop();
+      }
+      if (this._continuity !== undefined) {
+        this._continuity.stop();
       }
       this._processRepo.clearPid(paths.pidFile, process.pid);
     }

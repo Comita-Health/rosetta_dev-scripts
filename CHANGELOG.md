@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **sdlc-workflow (SPEC-PRD-0020-P2 T-01):** `ContinuityService` scans the
+  workspace `runsDir` each daemon tick and relaunches unfinished runs whose
+  `supervise.pid` is dead, replaying `launch.json` argv/execArgv under
+  `RunLockRepository` so dual relaunch is impossible. Skips finished runs
+  (`allTasksMerged`), unresolved needs-human blockers, and abandoned idle
+  runs. Relaunch evidence goes to the run monitor/supervise log and a
+  `supervisor-restarted` wake via `commitWatchSignal` — no chat session,
+  deploy, or Draft→Approved path. Wired from daemon lifecycle DI.
+
 - **sdlc-workflow:** sandbox deploy observes push-triggered GitHub Actions
   runs when the sandbox contract names `deployWorkflow` (e.g.
   `deploy-organization.yml`). Phase-boundary no longer double-dispatches

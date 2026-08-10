@@ -198,6 +198,13 @@ on its own declared cadence: the interval between ticks is the shortest
 `.sdlc/daemon.json` is the _idle ceiling_ rather than the tick, and a watch that
 asks to be polled faster than the default gets it.
 
+`ContinuityService` (SPEC-PRD-0020-P2 T-01) starts on the same cadence and scans
+`DaemonConfig.runsDir` for unfinished runs whose `supervise.pid` is dead. When
+`launch.json` is usable, needs-human blockers are not unresolved, and the run
+is not abandoned, it relaunches under `RunLockRepository` via
+`ProcessDetachRepository`, appends a monitor/supervise log line, and commits a
+`supervisor-restarted` wake through `commitWatchSignal`.
+
 An exclusive, expiring lease keeps overlapping ticks off the same watch. Leases
 live at `poll-leases/<sha256(watchId)>.<generation>.json`, and taking one means
 exclusively creating the generation after the highest one on disk. Recovering a
@@ -569,10 +576,11 @@ pre-Wave-0 run directories remain readable.
 
 **Detection boundary:** exit traps own every termination Node can handle.
 `SIGKILL`, OOM-kill, and power-loss cannot run a handler by definition —
-those remain the continuity layer's job (`supervise.pid` liveness +
-heartbeat staleness in `sdlc-continuity-daemon.sh`). Startup-window death
-(child dies before the first wave) is still caught by the detach parent's
-post-spawn grace probe (PR #83/#84).
+dead-supervisor relaunch is now `ContinuityService` inside the per-workspace
+daemon (`supervise.pid` liveness + `launch.json` replay). Heartbeat
+staleness kill remains with `sdlc-continuity-daemon.sh` until P2 T-02.
+Startup-window death (child dies before the first wave) is still caught by
+the detach parent's post-spawn grace probe (PR #83/#84).
 
 ### Durable launch queue (SPEC-BUG-retro-and-queued-plans-P1 T-02)
 
