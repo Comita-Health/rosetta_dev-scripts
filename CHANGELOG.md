@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **sdlc-workflow (SPEC-PRD-0025-P1 T-04):** Non-blocking advisory GitHub
+  issues for risky unstick proceeds. `AdvisoryIssueService` files an
+  `ADVISORY: SDLC <runId> <taskId> risky proceed` issue (distinct from
+  `ACTION REQUIRED: SDLC <runId> <taskId>`), naming the decision, evidence
+  links, and course-correct steps. Agent- or engine-classified
+  `risky-proceed` keeps the train moving without posting a human-blocking
+  escalate for that wave; escalate tier becomes `advisory-risky` (not
+  `halted-escalated`). Does not write exception-ledger entries that
+  `BlockerService` treats as open needs-human blockers, and does not emit
+  `action-required` queue items or wake-inbox escalations.
+
 - **sdlc-workflow (SPEC-PRD-0025-P1 T-03):** Dispatch headless operator-unstick
   after remediable gate remediation exhausts, before ACTION REQUIRED.
   `OperatorUnstickService` runs on the local supervise/daemon path via

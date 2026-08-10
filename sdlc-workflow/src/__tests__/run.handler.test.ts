@@ -14,6 +14,7 @@ import {
 } from '../repositories/run-queue.repository';
 import type { IRunStateRepository } from '../repositories/run-state.repository';
 import type { ISpecDocRepository } from '../repositories/spec-doc.repository';
+import type { IAdvisoryIssueService } from '../services/advisory-issue.service';
 import type { IEscalationService } from '../services/escalation.service';
 import type { IGateRemediationService } from '../services/gate-remediation.service';
 import type { IOperatorUnstickService } from '../services/operator-unstick.service';
@@ -165,6 +166,7 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
   let removeWorktreeAsync: jest.Mock;
   let specRead: jest.Mock;
   let escalationPost: jest.Mock;
+  let advisoryFile: jest.Mock;
   let watchRegister: jest.Mock;
   let daemonConfigLoad: jest.Mock;
   let remediate: jest.Mock;
@@ -332,6 +334,10 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
     escalationPost = jest
       .fn()
       .mockReturnValue({ posted: [], wakes: [], issues: {} });
+    advisoryFile = jest.fn().mockReturnValue({
+      title: 'ADVISORY: SDLC run-1 T-01 risky proceed',
+      created: false
+    });
     // Default: nothing to remediate, so red gates still escalate and block
     // exactly as they did before Wave 0 — tests that want the remediation
     // path override this per case.
@@ -387,6 +393,9 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
     container
       .bind<IEscalationService>(WORKFLOW_TOKENS.EscalationService)
       .toConstantValue({ post: escalationPost });
+    container
+      .bind<IAdvisoryIssueService>(WORKFLOW_TOKENS.AdvisoryIssueService)
+      .toConstantValue({ file: advisoryFile });
     container
       .bind<ISpecDocRepository>(WORKFLOW_TOKENS.SpecDocRepository)
       .toConstantValue({
@@ -1542,7 +1551,9 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
         escalationPost.mockImplementation(() => {
           order.push('escalate');
           return {
-            posted: ['ACTION REQUIRED: SDLC run-1 T-01 — reviewer-disagreement'],
+            posted: [
+              'ACTION REQUIRED: SDLC run-1 T-01 — reviewer-disagreement'
+            ],
             wakes: [],
             issues: {}
           };
@@ -1583,8 +1594,40 @@ describe('RunHandler (shadow-mode pooled task loop)', () => {
 
         expect(unstick).toHaveBeenCalled();
         expect(escalationPost).not.toHaveBeenCalled();
+        expect(advisoryFile).not.toHaveBeenCalled();
         expect(prMerge).not.toHaveBeenCalled();
         expect(monitorLog()).toContain('[unstick] T-01 cleared');
+      });
+
+      // SPEC-PRD-0025-P1 T-04: risky proceed keeps the train moving with a
+      // non-blocking advisory (never ACTION REQUIRED for that wave).
+      it('continues without ACTION REQUIRED and files advisory when unstick labels risky-proceed', async () => {
+        exhaustedRemediableReviewer();
+        unstick.mockResolvedValue({
+          kind: 'risky-proceed',
+          attempt: 1,
+          detail: 'attempt 1/2 → risky-proceed: continuing with advisory'
+        });
+        advisoryFile.mockReturnValue({
+          title: 'ADVISORY: SDLC run-1 T-01 risky proceed',
+          created: true,
+          url: 'https://github.com/org/repo/issues/42'
+        });
+
+        await handler.runTask(unstickInput());
+
+        expect(unstick).toHaveBeenCalled();
+        expect(escalationPost).not.toHaveBeenCalled();
+        expect(advisoryFile).toHaveBeenCalledTimes(1);
+        const advisoryInput = advisoryFile.mock.calls[0][0];
+        expect(advisoryInput.classifiedBy).toBe('agent');
+        expect(advisoryInput.decision).toContain('risky-proceed');
+        expect(advisoryInput.taskId).toBe('T-01');
+        expect(advisoryInput.runId).toBe('run-1');
+        expect(monitorLog()).toContain(
+          'ADVISORY: SDLC run-1 T-01 risky proceed'
+        );
+        expect(monitorLog()).not.toContain('ACTION REQUIRED: SDLC run-1 T-01');
       });
 
       it('escalates ACTION REQUIRED and registers issue-state watches when unstick abstains', async () => {
