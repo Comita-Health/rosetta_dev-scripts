@@ -5,6 +5,14 @@ import os from 'os';
 import path from 'path';
 import { WorkflowError } from '../types';
 
+/**
+ * Former bash StartInterval LaunchAgent label from
+ * `install-continuity-daemon.sh`. Must be unloaded/removed before a
+ * per-workspace KeepAlive agent loads so dual relaunch cannot happen
+ * (SPEC-PRD-0020-P2 T-05).
+ */
+export const LEGACY_CONTINUITY_DAEMON_LABEL = 'com.rosetta.sdlc-daemon';
+
 export interface LaunchdPlistInput {
   label: string;
   /** Absolute path to the Node/Bun executable. */
@@ -39,6 +47,11 @@ export interface ILaunchdRepository {
   renderPlist(input: LaunchdPlistInput): string;
   install(input: LaunchdInstallInput): LaunchdInstallResult;
   uninstall(label: string, plistDir?: string): void;
+  /**
+   * Best-effort unload + remove of the retired bash StartInterval agent
+   * (`com.rosetta.sdlc-daemon`). Safe when the agent was never installed.
+   */
+  uninstallLegacyContinuityDaemon(plistDir?: string): void;
 }
 
 const xmlEscape = (value: string): string =>
@@ -196,6 +209,14 @@ export class LaunchdRepository implements ILaunchdRepository {
     this.bootout(label);
     const dir = plistDir ?? defaultPlistDir();
     this.removePlist(path.join(dir, `${label}.plist`));
+  }
+
+  /**
+   * Best-effort unload + remove of the retired bash StartInterval agent
+   * (`com.rosetta.sdlc-daemon`). Safe when the agent was never installed.
+   */
+  uninstallLegacyContinuityDaemon(plistDir?: string): void {
+    this.uninstall(LEGACY_CONTINUITY_DAEMON_LABEL, plistDir);
   }
 
   /**

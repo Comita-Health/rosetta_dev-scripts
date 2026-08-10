@@ -127,6 +127,8 @@ bun run dev -- status --queue
 # started outside launchd.
 # `install` creates `.sdlc/daemon/` + touches the log before launchd load;
 # load is transactional (enable failure → bootout + plist remove);
+# install/uninstall unload+remove legacy `com.rosetta.sdlc-daemon` first
+# (retired bash StartInterval agent — SPEC-PRD-0020-P2 T-05);
 # `uninstall` derives the label/plist from the workspace root alone so a
 # missing/malformed contract cannot leave an orphaned agent.
 bun run dev -- daemon --workspace ../..
@@ -591,19 +593,21 @@ A `--supervise` (or detached supervise child) process installs exit traps so
 artifacts alone distinguish quiet incompleteness from success.
 
 **The engine is the single writer of `supervise.exit`.** It used to have two
-incompatible formats on disk, because `sdlc-continuity-daemon.sh` deleted the
-file before a relaunch and then `echo $?`'d a bare exit code over it — which
-destroyed the `reason`/`abnormal` evidence and left a `0` that could not be
-told apart from a zero-exit with work unmerged. The daemon's relaunch probe
-now writes `supervise.relaunch-exit` instead. `SuperviseExitRepository.read`
-still parses the bare-integer form, reporting it as `abnormal: true`, so
-pre-Wave-0 run directories remain readable.
+incompatible formats on disk, because the retired bash continuity daemon
+deleted the file before a relaunch and then `echo $?`'d a bare exit code
+over it — which destroyed the `reason`/`abnormal` evidence and left a `0`
+that could not be told apart from a zero-exit with work unmerged. Relaunch
+probe evidence now goes to `supervise.relaunch-exit` instead.
+`SuperviseExitRepository.read` still parses the bare-integer form,
+reporting it as `abnormal: true`, so pre-Wave-0 run directories remain readable.
 
 **Detection boundary:** exit traps own every termination Node can handle.
 `SIGKILL`, OOM-kill, and power-loss cannot run a handler by definition —
-dead-supervisor relaunch is now `ContinuityService` inside the per-workspace
-daemon (`supervise.pid` liveness + `launch.json` replay). Heartbeat
-staleness kill remains with `sdlc-continuity-daemon.sh` until P2 T-02.
+dead-supervisor relaunch and heartbeat staleness kill are
+`ContinuityService` / `StaleAgentService` inside the per-workspace KeepAlive
+daemon (`supervise.pid` liveness + `launch.json` replay). The bash
+`sdlc-continuity-daemon.sh` StartInterval agent is retired (P2 T-05);
+`daemon install` unloads `com.rosetta.sdlc-daemon` before loading KeepAlive.
 Startup-window death (child dies before the first wave) is still caught by
 the detach parent's post-spawn grace probe (PR #83/#84).
 
