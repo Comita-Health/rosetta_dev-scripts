@@ -44,6 +44,9 @@ AI assistance. Git hooks and Conventional Commits apply regardless of agent.
 - Conventional Commits are enforced by husky `commit-msg` in every Rosetta repo.
 - **No “Made with Cursor” (or similar) in commits or PR descriptions** — see
   `.claude/rules/no-tool-attribution.md` / `.cursor/rules/no-tool-attribution.mdc`.
+- **Spell the product Comita** (pronounced “Kamita”) — see
+  `comita-brand-spelling`. Never write Kamita in UI, git, or docs except to
+  document that pronunciation.
 - **Watched issues drive to resolution** — see `issue-resolve-watch`
   (`/watch-issue-resolve`); arm after taking ownership (recreate as Addi when
   asked).

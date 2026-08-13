@@ -17,6 +17,12 @@ forbidden, what "verified" means). Declare it in the consumer's docs and in
 `.sdlc/` contracts — not by patching Rosetta engine defaults. See
 [ADR-0009](https://github.com/Rosetta-Foundation/rosetta_docs/blob/main/architecture/ADR-0009-platform-boundary-mechanism-vs-policy.md).
 
+## Comita brand spelling
+
+The product is spelled **Comita**. **Kamita** is the pronunciation only —
+never the spelling in UI, git, or docs (**Comita says**, **Run Comita**).
+Always-on rule: `.claude/rules/comita-brand-spelling.md`.
+
 ## Foundations — Read First
 
 `rosetta_docs/foundations/` is the project's constitution — founding context,

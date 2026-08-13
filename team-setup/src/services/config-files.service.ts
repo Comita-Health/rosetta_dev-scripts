@@ -55,6 +55,8 @@ const mirrorClaudeRulesToCursor = (
                         ? 'Default: live-verify PRs auto-dispatch deploy on push; re-smoke before Approve'
                         : stem === 'addi-authorship'
                           ? 'Mandatory: open PRs and issues as Addi (GitHub App), never as the human gh user'
+                          : stem === 'comita-brand-spelling'
+                            ? 'Spell the product Comita; Kamita is pronunciation only'
                           : `Rosetta rule: ${stem}`;
       const contents = [
         '---',
