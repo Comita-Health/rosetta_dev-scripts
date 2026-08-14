@@ -143,8 +143,12 @@ Or on demand: `eval "$(bash ~/.config/comita/slack-activate.sh)"`.
 
 **Sandbox verify list id** (`COMITA_VERIFY_SLACK_LIST_ID`) is not a
 secret. After the **Sandbox verify** Slack list exists, add the `F…` id
-to `slack.env` (see `slack.env.example`). Bret checks Verified/Failed
-there; do not reuse the Feedback tracker list id.
+and `COMITA_VERIFY_COL_*` column ids to `slack.env` (see
+`slack.env.example`) **and** the same keys as GitHub Actions variables
+on `comita_admissions` (bot token remains `secrets.SLACK_BOT_TOKEN`).
+Bret checks Verified/Failed there; do not reuse the Feedback tracker
+list id. Do not poll the list from a laptop — GHA **Sandbox verify**
+comments Failed rows onto the Ship issue.
 
 **New Cursor chats** pick up Slack via the `sessionStart` hook (existing chats
 need a new session or a manual `eval`).

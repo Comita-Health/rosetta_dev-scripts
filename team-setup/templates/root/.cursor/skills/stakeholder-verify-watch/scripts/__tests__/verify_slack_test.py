@@ -119,5 +119,37 @@ class SlackFieldShapeTests(unittest.TestCase):
         self.assertFalse(any("Should not" in row["item"] for row in rows))
 
 
+class SnapshotAndFailedTests(unittest.TestCase):
+    def test_check_off_verified_flips_matching_checkbox(self):
+        mod = load_mod()
+        markdown = (
+            "## Verify on admit.dev\n\n"
+            "- [ ] Care hop orgs on admit.dev.\n"
+            "- [ ] Contracts hop.\n\n"
+            "## Out of this ship\n"
+        )
+        updated = mod.check_off_verified(
+            markdown, {"Care hop orgs on admit.dev."}
+        )
+        self.assertIn("- [x] Care hop orgs on admit.dev.", updated)
+        self.assertIn("- [ ] Contracts hop.", updated)
+
+    def test_failed_comment_is_idempotent_by_marker(self):
+        mod = load_mod()
+        row = {
+            "item": "Care hop orgs",
+            "host": "admit.dev",
+            "ship": "474",
+            "notes": "picker empty",
+            "status": "failed",
+        }
+        body = mod.failed_comment_body(row)
+        key = mod.failed_comment_key("474", "Care hop orgs")
+        marker = mod.failed_marker(key)
+        self.assertIn(marker, body)
+        self.assertIn("picker empty", body)
+        self.assertEqual(mod.ship_issue("#474 / 2026-08-13"), "474")
+
+
 if __name__ == "__main__":
     unittest.main()

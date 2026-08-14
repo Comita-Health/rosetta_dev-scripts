@@ -1,11 +1,8 @@
 #!/usr/bin/env bash
-# Watch Slack Sandbox verify for Verified / Failed, then emit an agent wake.
-#
-# Usage:
-#   eval "$(bash ~/.config/comita/slack-activate.sh)"
-#   bash …/watch-stakeholder-verify.sh [--interval 30] [--kickoff]
-#
-# Sentinel (stdout): AGENT_LOOP_WAKE_stakeholder_verify <json>
-set -euo pipefail
-ROOT="$(cd "$(dirname "$0")" && pwd)"
-exec python3 "$ROOT/verify_slack.py" watch "$@"
+# Local Slack pollers are retired. Slack is the live ledger; GHA comments
+# Failed rows onto the Ship issue. Git snapshots at promote.
+echo "sandbox-verify: local Slack watch is retired." >&2
+echo "Live ledger: Slack Sandbox verify." >&2
+echo "Failed rows: GitHub Action 'Sandbox verify' on comita_admissions." >&2
+echo "Git snapshot: promote-to-prod / workflow_dispatch action=snapshot." >&2
+exit 2

@@ -57,5 +57,6 @@ AI assistance. Git hooks and Conventional Commits apply regardless of agent.
   Request changes (`/watch-pr-approve`); prefer GitHub reviews over chat for
   in-flight agent work.
 - **Stakeholder sandbox smoke lives on Slack** — `stakeholder-verify-watch`
-  (`/watch-stakeholder-verify`); Bret has no GitHub. Do not mix with his
+  (`/watch-stakeholder-verify`, publish only). Do not poll Slack from a
+  laptop. Bret has no GitHub. Do not mix with his
   Feedback tracker. Slack Verified is not GitHub Approve.

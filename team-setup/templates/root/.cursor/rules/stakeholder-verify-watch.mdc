@@ -1,4 +1,9 @@
-# Stakeholder verify watch (Bret / Slack)
+---
+description: "Default: publish sandbox verify to Slack; do not poll Slack from a laptop"
+alwaysApply: true
+---
+
+# Stakeholder verify (Bret / Slack)
 
 When a user-facing sandbox drop is on a live host (or the user asks to
 publish stakeholder verify):
