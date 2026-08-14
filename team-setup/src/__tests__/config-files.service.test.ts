@@ -48,7 +48,9 @@ describe('layDownRootConfig', () => {
           'code-style.md',
           'inline-docs.md',
           'sdlc-run-supervise.md',
-          'pr-approve-watch.md'
+          'pr-approve-watch.md',
+          'work-intake.md',
+          'stakeholder-verify-watch.md'
         ];
       if (p.endsWith(`${path.sep}commands`))
         return ['review.md', 'add-repo.md', 'sdlc-status.md', 'sdlc-run.md'];
@@ -91,6 +93,14 @@ describe('layDownRootConfig', () => {
     expect(mockWriteFileSync).toHaveBeenCalledWith(
       path.join('/base', '.cursor', 'rules', 'pr-approve-watch.mdc'),
       expect.stringContaining('Approve proceed signal')
+    );
+    expect(mockWriteFileSync).toHaveBeenCalledWith(
+      path.join('/base', '.cursor', 'rules', 'work-intake.mdc'),
+      expect.stringContaining('Bret verifies on Slack not GitHub')
+    );
+    expect(mockWriteFileSync).toHaveBeenCalledWith(
+      path.join('/base', '.cursor', 'rules', 'stakeholder-verify-watch.mdc'),
+      expect.stringContaining('Bret check-off')
     );
     expect(mockWriteFileSync).toHaveBeenCalledWith(
       path.join('/base', '.cursor', 'rules', 'command-review.mdc'),
