@@ -60,7 +60,9 @@ must still bind in a year. User-facing sandbox drops write dated
 the same smoke lines to Slack **Sandbox verify**. Bret has no GitHub; he
 checks Verified or Failed there. Slack is the live ledger — do not poll it
 from a laptop; do not make Russ relay. Slash: `/watch-stakeholder-verify`
-(publish only). Policy:
+(publish only). DEV hosts are **SB / Sandbox** with stakeholders. When
+the operator linked a Slack thread as the ask, reply **in that thread**
+after the fix is deployed to SB — not on push or CI. Policy:
 `comita_docs/docs/runbooks/work-intake-and-verification.md`.
 
 ## Package Manager

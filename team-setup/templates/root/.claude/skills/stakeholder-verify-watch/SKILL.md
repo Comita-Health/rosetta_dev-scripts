@@ -15,7 +15,9 @@ at **publish** and snapshotted again at **promote**. Do **not** arm a
 laptop Slack poller.
 
 Do **not** use Bret’s **Feedback** tracker for this — that list is an
-inbox of asks, not a smoke ledger.
+inbox of asks, not a smoke ledger. Operator-linked Slack threads get a
+separate SB-deploy **thread reply** (`deploy-verify-watch`); that is
+not this list and not `@channel`.
 
 Policy: `comita_docs/docs/runbooks/work-intake-and-verification.md`.
 

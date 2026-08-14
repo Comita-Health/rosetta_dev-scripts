@@ -45,5 +45,11 @@ smoke ledger. Never mix them. No PHI on either list.
 4. Do **not** arm a laptop Slack watcher. Failed lands as a comment on
    the Ship issue (GHA **Sandbox verify**). Do not treat chat “Bret
    approved” as the check-off.
+5. **Slack-linked asks:** if the operator pasted a Slack permalink as
+   the request, record it on the GitHub issue Source. After the fix is
+   **deployed to SB** (DEV hosts; stakeholders say Sandbox / SB, not
+   “dev”), reply **in that same thread** that a new update for the
+   issue has been deployed to SB. No `@channel`. PHI-free. Not on push
+   or CI green — only `deploy_green` for the SHA that contains the fix.
 
 Promote to prod only after sandbox Verified. Re-smoke prod as new rows.
