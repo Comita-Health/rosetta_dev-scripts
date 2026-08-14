@@ -49,7 +49,9 @@ describe('layDownRootConfig', () => {
           'inline-docs.md',
           'sdlc-run-supervise.md',
           'pr-approve-watch.md',
-          'comita-brand-spelling.md'
+          'comita-brand-spelling.md',
+          'work-intake.md',
+          'stakeholder-verify-watch.md'
         ];
       if (p.endsWith(`${path.sep}commands`))
         return ['review.md', 'add-repo.md', 'sdlc-status.md', 'sdlc-run.md'];
@@ -96,6 +98,14 @@ describe('layDownRootConfig', () => {
     expect(mockWriteFileSync).toHaveBeenCalledWith(
       path.join('/base', '.cursor', 'rules', 'comita-brand-spelling.mdc'),
       expect.stringContaining('Spell the product Comita')
+    );
+    expect(mockWriteFileSync).toHaveBeenCalledWith(
+      path.join('/base', '.cursor', 'rules', 'work-intake.mdc'),
+      expect.stringContaining('Bret verifies on Slack not GitHub')
+    );
+    expect(mockWriteFileSync).toHaveBeenCalledWith(
+      path.join('/base', '.cursor', 'rules', 'stakeholder-verify-watch.mdc'),
+      expect.stringContaining('Bret check-off')
     );
     expect(mockWriteFileSync).toHaveBeenCalledWith(
       path.join('/base', '.cursor', 'rules', 'command-review.mdc'),

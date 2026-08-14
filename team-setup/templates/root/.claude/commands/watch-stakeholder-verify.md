@@ -1,0 +1,1 @@
+Publish the dated sandbox verify list to Slack **Sandbox verify**. Follow the `stakeholder-verify-watch` skill. Do **not** arm a local Slack poller — Slack is the live ledger; GHA comments Failed rows onto the Ship issue; promote snapshots git. Bret has no GitHub — do not make Russ relay. Pair with `/watch-deploy-verify` and `/watch-pr-approve`.

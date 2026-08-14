@@ -53,11 +53,15 @@ const mirrorClaudeRulesToCursor = (
                       ? 'Default: watch owned GitHub issues toward resolution (Done-when → close)'
                       : stem === 'deploy-verify-watch'
                         ? 'Default: live-verify PRs auto-dispatch deploy on push; re-smoke before Approve'
-                        : stem === 'addi-authorship'
+                          : stem === 'addi-authorship'
                           ? 'Mandatory: open PRs and issues as Addi (GitHub App), never as the human gh user'
                           : stem === 'comita-brand-spelling'
                             ? 'Spell the product Comita; Kamita is pronunciation only'
-                          : `Rosetta rule: ${stem}`;
+                            : stem === 'work-intake'
+                              ? 'Issues are the ledger; PRD vs ADR; Bret verifies on Slack not GitHub'
+                              : stem === 'stakeholder-verify-watch'
+                                ? 'Default: publish sandbox verify to Slack and watch Bret check-off (no GitHub)'
+                                : `Rosetta rule: ${stem}`;
       const contents = [
         '---',
         `description: ${yamlDoubleQuoted(description)}`,
