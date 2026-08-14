@@ -10,7 +10,8 @@ publish stakeholder verify):
 
 - Follow the **`stakeholder-verify-watch`** skill.
 - Upsert **Not verified** lines from `docs/releases/YYYY-MM-DD.md` to the
-  Slack **Sandbox verify** list (not the Feedback tracker).
+  Slack **Sandbox verify** list (not the Feedback tracker). New rows
+  `@channel` **#comita-support** with the list URL and smoke lines.
 - **Do not** arm a local Slack poller. Slack is the live ledger. Failed
   rows are commented onto the Ship issue by GHA **Sandbox verify**.
   Promote snapshots Verified into git.

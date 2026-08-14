@@ -56,7 +56,11 @@ bash .cursor/skills/stakeholder-verify-watch/scripts/publish-stakeholder-verify.
   --ship 474
 ```
 
-Ping Bret with the **list URL only**.
+Publish upserts **Not verified** rows, then posts `<!channel>` in
+**#comita-support** with the list URL and the new smoke lines. Override
+the channel with `COMITA_VERIFY_NOTIFY_CHANNEL_ID`. Do not paste the
+whole dated markdown into chat. Re-publish is idempotent — already
+present rows do not ping again.
 
 If `COMITA_VERIFY_SLACK_LIST_ID` is unset, publish prints the rows and
 exits 2. The list is **Sandbox verify** (not Feedback). After create,

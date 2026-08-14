@@ -148,7 +148,8 @@ and `COMITA_VERIFY_COL_*` column ids to `slack.env` (see
 on `comita_admissions` (bot token remains `secrets.SLACK_BOT_TOKEN`).
 Bret checks Verified/Failed there; do not reuse the Feedback tracker
 list id. Do not poll the list from a laptop — GHA **Sandbox verify**
-comments Failed rows onto the Ship issue.
+comments Failed rows onto the Ship issue. New rows `@channel`
+**#comita-support** (override with `COMITA_VERIFY_NOTIFY_CHANNEL_ID`).
 
 **New Cursor chats** pick up Slack via the `sessionStart` hook (existing chats
 need a new session or a manual `eval`).

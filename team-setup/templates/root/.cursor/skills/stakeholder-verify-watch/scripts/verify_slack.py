@@ -24,6 +24,9 @@ SANDBOX_HOSTS = ("admit.dev", "care.dev", "contracts.dev")
 FAILED_STATUSES = frozenset({"failed", "fail", "blocked"})
 VERIFIED_STATUSES = frozenset({"verified", "done"})
 PENDING_STATUSES = frozenset({"not_verified", "not verified", ""})
+# Public channel the bot already joins. Override with
+# COMITA_VERIFY_NOTIFY_CHANNEL_ID (id or #name).
+DEFAULT_NOTIFY_CHANNEL = "#comita-support"
 
 
 def die(message: str, code: int = 2) -> None:
@@ -397,6 +400,75 @@ def check_off_verified(markdown: str, verified_texts: set[str]) -> str:
     return "".join(lines)
 
 
+def notify_channel() -> str:
+    """#comita-support unless COMITA_VERIFY_NOTIFY_CHANNEL_ID is set."""
+    return (
+        os.environ.get("COMITA_VERIFY_NOTIFY_CHANNEL_ID", "").strip()
+        or DEFAULT_NOTIFY_CHANNEL
+    )
+
+
+def slack_list_url(token: str, list_id: str) -> str:
+    team = os.environ.get("COMITA_SLACK_TEAM_ID", "").strip()
+    if not team:
+        body = slack_post("auth.test", token, {})
+        team = str(body.get("team_id") or "").strip()
+    if team:
+        return f"https://app.slack.com/lists/{team}/{list_id}"
+    return f"https://app.slack.com/lists/{list_id}"
+
+
+def new_items_notice(
+    *,
+    ship: str,
+    list_url: str,
+    rows: list[dict[str, str]],
+) -> str:
+    """Channel ping body: @channel, ship, new smoke lines, list URL."""
+    count = len(rows)
+    noun = "item" if count == 1 else "items"
+    ship_label = ship.strip()
+    if ship_label and not ship_label.startswith("#"):
+        ship_label = f"#{ship_label}"
+    lines = [f"<!channel> {count} new sandbox verify {noun} to smoke."]
+    if ship_label:
+        lines.append(f"Ship: {ship_label}")
+    lines.append("")
+    for row in rows:
+        host = row.get("host") or "sandbox"
+        item = normalize_item(row.get("item") or "")
+        lines.append(f"• [{host}] {item}")
+    if list_url:
+        lines.append("")
+        lines.append(list_url)
+    return "\n".join(lines)
+
+
+def notify_new_items(
+    token: str,
+    *,
+    channel: str,
+    list_url: str,
+    ship: str,
+    rows: list[dict[str, str]],
+) -> None:
+    """Post @channel in #comita-support when new list rows were created."""
+    if not rows:
+        return
+    slack_post(
+        "chat.postMessage",
+        token,
+        {
+            "channel": channel,
+            "text": new_items_notice(
+                ship=ship, list_url=list_url, rows=rows
+            ),
+            "unfurl_links": False,
+            "unfurl_media": False,
+        },
+    )
+
+
 def cmd_parse(args: argparse.Namespace) -> None:
     text = Path(args.file).read_text(encoding="utf-8")
     rows = parse_not_verified(text)
@@ -420,7 +492,7 @@ def cmd_publish(args: argparse.Namespace) -> None:
     existing = list_rows(token, list_id)
     known = {(normalize_item(row["item"]), row["host"]) for row in existing}
     cols = col_map()
-    created = 0
+    created_rows: list[dict[str, str]] = []
     for row in rows:
         key = (normalize_item(row["item"]), row["host"])
         if key in known:
@@ -438,11 +510,23 @@ def cmd_publish(args: argparse.Namespace) -> None:
                 ),
             },
         )
-        created += 1
+        created_rows.append(row)
         known.add(key)
+    created = len(created_rows)
     print(
         f"sandbox-verify: created {created}, already present {len(rows) - created}"
     )
+    if created_rows:
+        channel = notify_channel()
+        url = slack_list_url(token, list_id)
+        notify_new_items(
+            token,
+            channel=channel,
+            list_url=url,
+            ship=args.ship,
+            rows=created_rows,
+        )
+        print(f"sandbox-verify: notified {channel} ({created} new item(s))")
 
 
 def cmd_status(args: argparse.Namespace) -> None:

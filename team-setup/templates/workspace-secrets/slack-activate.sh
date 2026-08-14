@@ -27,7 +27,9 @@ for key in \
   COMITA_VERIFY_COL_HOST \
   COMITA_VERIFY_COL_STATUS \
   COMITA_VERIFY_COL_SHIP \
-  COMITA_VERIFY_COL_NOTES; do
+  COMITA_VERIFY_COL_NOTES \
+  COMITA_VERIFY_NOTIFY_CHANNEL_ID \
+  COMITA_SLACK_TEAM_ID; do
   if [[ -n "${!key:-}" ]]; then
     printf 'export %s=%q\n' "$key" "${!key}"
   fi
