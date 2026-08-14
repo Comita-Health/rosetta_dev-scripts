@@ -52,8 +52,9 @@ backlog — promote it. GitHub Issues are the engineering ledger (`direct` /
 must still bind in a year. User-facing sandbox drops write dated
 `docs/releases/` (**Delivered** / **Not verified** / **Verified**) and upsert
 the same smoke lines to Slack **Sandbox verify**. Bret has no GitHub; he
-checks Verified or Failed there. Agents sync git — do not make Russ relay.
-Slash: `/watch-stakeholder-verify`. Policy:
+checks Verified or Failed there. Slack is the live ledger — do not poll it
+from a laptop; do not make Russ relay. Slash: `/watch-stakeholder-verify`
+(publish only). Policy:
 `comita_docs/docs/runbooks/work-intake-and-verification.md`.
 
 ## Package Manager

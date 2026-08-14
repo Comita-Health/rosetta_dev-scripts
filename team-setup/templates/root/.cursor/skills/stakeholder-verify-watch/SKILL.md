@@ -1,73 +1,51 @@
 ---
 name: stakeholder-verify-watch
 description: >-
-  Publish a sandbox drop’s verify list to Slack (Bret’s check-off ledger)
-  and watch for Verified / Failed so git docs/releases stays in sync
-  without Russ relaying. Use after a live deploy, or when the user asks
-  to watch stakeholder verify.
+  Publish a sandbox drop’s verify list to Slack (Bret’s check-off ledger).
+  Slack Status is the live ledger; do not poll Slack from a laptop. Use
+  after a live deploy, or when the user asks to publish stakeholder verify.
 ---
 
-# Stakeholder verify watch (Bret / Slack)
+# Stakeholder verify (Bret / Slack)
 
 **Bret does not have GitHub.** Chronicle is engineering memory; his analog
 is the Slack **Sandbox verify** list. He checks **Verified** or **Failed**
-there. Agents sync `docs/releases/` and do **not** ask Russ to relay.
+there. Slack Status is the live check-off. Git `docs/releases/` is written
+at **publish** and snapshotted again at **promote**. Do **not** arm a
+laptop Slack poller.
 
 Do **not** use Bret’s **Feedback** tracker for this — that list is an
 inbox of asks, not a smoke ledger.
 
 Policy: `comita_docs/docs/runbooks/work-intake-and-verification.md`.
 
-## When to arm
+## When to publish
 
 - After a user-facing sandbox deploy is green (or will be by the time he
   starts).
 - When opening / pushing a `verify-live` PR that needs Bret smoke.
-- When the operator says to watch stakeholder verify.
+- When the operator says to publish stakeholder verify.
 
 Pair with `deploy-verify-watch` and `pr-approve-watch`. Slack Verified is
-**not** GitHub Approve.
+**not** GitHub Approve and is **not** promote-to-prod.
 
 ## Hard rules
 
 1. PHI-free rows only (no patient names, filenames that could be PHI,
    production dumps).
-2. Upsert by Item text — do not duplicate rows for the same smoke line.
-3. After a live sandbox deploy (or when the user asks), start
-   `.cursor/skills/stakeholder-verify-watch/scripts/watch-stakeholder-verify.sh`
-   in the **background** with agent `notify_on_output` on
-   `^AGENT_LOOP_WAKE_stakeholder_verify` (Claude Code mirror:
-   `.claude/skills/stakeholder-verify-watch/scripts/`).
-4. On `verified`: move the matching line in `docs/releases/YYYY-MM-DD.md`
-   from **Not verified** to **Verified**. Commit as Addi if the operator
-   wants git updated in that sitting.
-5. On `failed`: do **not** mark Verified; fix / push / republish the row
-   as Not verified. Comment the issue.
+2. Upsert by Item text + Host — do not duplicate rows for the same smoke
+   line on the same host.
+3. **Do not** start `watch-stakeholder-verify.sh` or any local Slack poll
+   loop. Failed rows are commented onto the Ship issue by GitHub Action
+   `Sandbox verify` (`comita_admissions/.github/workflows/sandbox-verify.yml`).
+4. On **Verified**: do nothing in git. Slack already holds it. Promote
+   snapshots checkboxes into `docs/releases/`.
+5. On **Failed** (from the Ship issue comment): do **not** mark Verified;
+   fix / push / republish the row as Not verified. Do not promote.
 6. Do not mark Slack Feedback rows Done until the matching verify item is
-   Verified.
-7. Drain `AGENT_LOOP_WAKE_stakeholder_verify` from the watcher terminal
-   even when chat notify is silent.
+   Verified on Slack.
 
-## Wake delivery (chat notify is best-effort)
-
-`notify_on_output` often does **not** start a new agent turn after the turn
-that armed the watcher has ended. The sentinel still prints to the watcher
-terminal:
-
-```text
-AGENT_LOOP_WAKE_stakeholder_verify {"signal":"verified","item":"...","notes":""}
-```
-
-**Agent duties while a watcher is armed:**
-
-- Before ending a turn: skim armed watcher terminal output for unconsumed
-  `AGENT_LOOP_WAKE_stakeholder_verify` lines and process each **now**.
-- When the user says Bret verified, “check watchers”, “process wakes”, or
-  similar: that is a proceed nudge — read the watcher terminal **and** the
-  Slack list, then drain any fired or missed wakes.
-- Do not claim “no activity” without checking the watcher terminal.
-
-## Publish then watch
+## Publish
 
 ```bash
 eval "$(bash ~/.config/comita/slack-activate.sh)"
@@ -76,40 +54,21 @@ eval "$(bash ~/.config/comita/slack-activate.sh)"
 bash .cursor/skills/stakeholder-verify-watch/scripts/publish-stakeholder-verify.sh \
   --file comita_admissions/docs/releases/2026-08-13.md \
   --ship 474
-
-bash .cursor/skills/stakeholder-verify-watch/scripts/watch-stakeholder-verify.sh \
-  --interval 30 \
-  --kickoff
 ```
 
-Arm the watcher in the **background** with agent `notify_on_output` on
-`^AGENT_LOOP_WAKE_stakeholder_verify`.
+Ping Bret with the **list URL only**.
 
 If `COMITA_VERIFY_SLACK_LIST_ID` is unset, publish prints the rows and
 exits 2. The list is **Sandbox verify** (not Feedback). After create,
 put `COMITA_VERIFY_SLACK_LIST_ID` and `COMITA_VERIFY_COL_*` (column ids,
-not display names) in `~/.config/comita/slack.env` so `slack-activate.sh`
-exports them. Do not fall back to pasting a giant checklist in chat.
+not display names) in `~/.config/comita/slack.env` **and** the matching
+GitHub Actions variables on `comita_admissions`. Do not fall back to
+pasting a giant checklist in chat.
 
-## Wake JSON
+## Live status (no watch loop)
 
-```text
-AGENT_LOOP_WAKE_stakeholder_verify {"signal":"kickoff","list_id":"..."}
-AGENT_LOOP_WAKE_stakeholder_verify {"signal":"verified","item":"...","notes":""}
-AGENT_LOOP_WAKE_stakeholder_verify {"signal":"failed","item":"...","notes":"..."}
+```bash
+python3 comita_admissions/scripts/sandbox-verify/verify_slack.py status
 ```
 
-`signal` is `kickoff` | `verified` | `failed`.
-
-## On wake — `signal: verified`
-
-1. Find the matching `- [ ]` line in today’s `docs/releases/` file.
-2. Move it to **Verified** as `- [x]` (never delete).
-3. Commit as Addi with DCO (`-s`) when the operator wants git updated now.
-4. Do not treat this as GitHub Approve or promote-to-prod.
-
-## On wake — `signal: failed`
-
-1. Do **not** move the git line to Verified.
-2. Read Notes (PHI-free). Fix, push, republish the row as Not verified.
-3. Comment the tracking issue. Keep watching.
+Failed notify and promote snapshot are hosted: workflow `Sandbox verify`.
