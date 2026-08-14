@@ -1,5 +1,6 @@
 from pathlib import Path
 import importlib.util
+import os
 import unittest
 
 HELPER = Path(__file__).resolve().parents[1] / "verify_slack.py"
@@ -149,6 +150,68 @@ class SnapshotAndFailedTests(unittest.TestCase):
         self.assertIn(marker, body)
         self.assertIn("picker empty", body)
         self.assertEqual(mod.ship_issue("#474 / 2026-08-13"), "474")
+
+
+class ChannelNotifyTests(unittest.TestCase):
+    def test_notice_includes_channel_mention_ship_and_list_url(self):
+        mod = load_mod()
+        text = mod.new_items_notice(
+            ship="474",
+            list_url="https://app.slack.com/lists/T0/F0",
+            rows=[{"item": "Care hop orgs", "host": "admit.dev"}],
+        )
+        self.assertIn("<!channel>", text)
+        self.assertIn("Ship: #474", text)
+        self.assertIn("[admit.dev] Care hop orgs", text)
+        self.assertIn("https://app.slack.com/lists/T0/F0", text)
+        self.assertIn("1 new sandbox verify item to smoke", text)
+
+    def test_notify_new_items_posts_comita_support(self):
+        mod = load_mod()
+        calls: list[tuple[str, dict]] = []
+
+        def fake_post(method, token, payload):
+            calls.append((method, payload))
+            return {"ok": True}
+
+        orig = mod.slack_post
+        mod.slack_post = fake_post
+        try:
+            mod.notify_new_items(
+                "xoxb-test",
+                channel="#comita-support",
+                list_url="https://app.slack.com/lists/T0/F0",
+                ship="474",
+                rows=[{"item": "Care hop orgs", "host": "admit.dev"}],
+            )
+            mod.notify_new_items(
+                "xoxb-test",
+                channel="#comita-support",
+                list_url="https://app.slack.com/lists/T0/F0",
+                ship="474",
+                rows=[],
+            )
+        finally:
+            mod.slack_post = orig
+        self.assertEqual(len(calls), 1)
+        method, payload = calls[0]
+        self.assertEqual(method, "chat.postMessage")
+        self.assertEqual(payload["channel"], "#comita-support")
+        self.assertIn("<!channel>", payload["text"])
+        self.assertFalse(payload["unfurl_links"])
+
+    def test_notify_channel_defaults_to_comita_support(self):
+        mod = load_mod()
+        old = os.environ.pop("COMITA_VERIFY_NOTIFY_CHANNEL_ID", None)
+        try:
+            self.assertEqual(mod.notify_channel(), "#comita-support")
+            os.environ["COMITA_VERIFY_NOTIFY_CHANNEL_ID"] = "C123"
+            self.assertEqual(mod.notify_channel(), "C123")
+        finally:
+            if old is None:
+                os.environ.pop("COMITA_VERIFY_NOTIFY_CHANNEL_ID", None)
+            else:
+                os.environ["COMITA_VERIFY_NOTIFY_CHANNEL_ID"] = old
 
 
 if __name__ == "__main__":

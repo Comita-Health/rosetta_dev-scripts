@@ -40,8 +40,8 @@ smoke ledger. Never mix them. No PHI on either list.
 2. Dated `docs/releases/YYYY-MM-DD.md`: **Delivered**, **Not verified**,
    **Verified**, **Out**. Slack Status is the live check-off. Promote
    snapshots Verified into git; never delete a line.
-3. Upsert the same Not-verified lines to Slack Sandbox verify. Ping Bret
-   with the **list URL only**.
+3. Upsert the same Not-verified lines to Slack Sandbox verify. New rows
+   `@channel` **#comita-support** with the list URL and smoke lines.
 4. Do **not** arm a laptop Slack watcher. Failed lands as a comment on
    the Ship issue (GHA **Sandbox verify**). Do not treat chat “Bret
    approved” as the check-off.
