@@ -44,6 +44,18 @@ default branch after GHA merges. Otherwise merge as Addi, then pull. Do **not**
 treat chat "approved" as the proceed signal. Slash: `/watch-pr-approve`. See
 `rosetta_dev-scripts/team-setup/docs/addi-pr-automation-standard.md`.
 
+## Work intake and stakeholder verify
+
+Intake (transcripts, Slack, Bret’s Feedback tracker, prompts) is **not** the
+backlog — promote it. GitHub Issues are the engineering ledger (`direct` /
+`bug-spec` / `plan`). PRDs are the product contract; ADRs are decisions that
+must still bind in a year. User-facing sandbox drops write dated
+`docs/releases/` (**Delivered** / **Not verified** / **Verified**) and upsert
+the same smoke lines to Slack **Sandbox verify**. Bret has no GitHub; he
+checks Verified or Failed there. Agents sync git — do not make Russ relay.
+Slash: `/watch-stakeholder-verify`. Policy:
+`comita_docs/docs/runbooks/work-intake-and-verification.md`.
+
 ## Package Manager
 
 Always use `bun` over `npm`/`yarn` (`bun install`, `bun run <script>`).

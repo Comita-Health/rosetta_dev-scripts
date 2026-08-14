@@ -1,0 +1,43 @@
+# Work intake and stakeholder verification
+
+Intake (Meet transcripts, Slack, Bret’s Feedback tracker, prompts) is
+**not** the backlog. Promote it. GitHub Issues are the engineering
+ledger. PRDs are the product contract. ADRs are decisions that must
+still bind in a year. Bret checks off sandbox drops in Slack, not
+GitHub.
+
+Full procedure:
+[`comita_docs/docs/runbooks/work-intake-and-verification.md`](../../comita_docs/docs/runbooks/work-intake-and-verification.md)
+
+## Ledger vs contract vs decision
+
+| Artifact | Job | When |
+| --- | --- | --- |
+| Intake | Raw ask | Transcript, Slack, tracker, prompt |
+| **GitHub Issue** | Open/closed work | Anything that must not be forgotten |
+| **PRD** | What to build / “done” | Feature-sized; input to `decompose` |
+| **ADR** | Durable architecture | PHI/inference, SSO, composition — not a UI preference |
+| **Bug spec** | Same run machine, no PRD | Non-trivial bug |
+| **`docs/releases/`** | Delivered + verify list | Every user-facing sandbox drop |
+| **Slack Sandbox verify** | Bret’s check-off | He has no GitHub. Do not make Russ relay. |
+| Chronicle | Why, after the fact | Not a backlog |
+
+Issue routes: `direct` (branch + PR) · `bug-spec` · `plan` (PRD first).
+Do not `decompose` until the PRD is Accepted. Do not PRD a same-day
+deploy bundle.
+
+Bret’s **Feedback** tracker is an inbox. **Sandbox verify** is the
+smoke ledger. Never mix them. No PHI on either list.
+
+## Delivery + verify (mandatory for user-facing work)
+
+1. PR body `## Release notes` (feeds prod GitHub Release).
+2. Dated `docs/releases/YYYY-MM-DD.md`: **Delivered**, **Not verified**,
+   **Verified**, **Out**. Move a line when Bret marks Verified in Slack;
+   never delete it.
+3. Upsert the same Not-verified lines to Slack Sandbox verify. Ping Bret
+   with the **list URL only**.
+4. Arm `stakeholder-verify-watch`. On Verified: update git. On Failed:
+   fix and republish. Do not treat chat “Bret approved” as the check-off.
+
+Promote to prod only after sandbox Verified. Re-smoke prod as new rows.
