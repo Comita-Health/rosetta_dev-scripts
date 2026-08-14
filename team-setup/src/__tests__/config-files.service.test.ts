@@ -49,6 +49,7 @@ describe('layDownRootConfig', () => {
           'inline-docs.md',
           'sdlc-run-supervise.md',
           'pr-approve-watch.md',
+          'comita-brand-spelling.md',
           'work-intake.md',
           'stakeholder-verify-watch.md'
         ];
@@ -93,6 +94,10 @@ describe('layDownRootConfig', () => {
     expect(mockWriteFileSync).toHaveBeenCalledWith(
       path.join('/base', '.cursor', 'rules', 'pr-approve-watch.mdc'),
       expect.stringContaining('Approve proceed signal')
+    );
+    expect(mockWriteFileSync).toHaveBeenCalledWith(
+      path.join('/base', '.cursor', 'rules', 'comita-brand-spelling.mdc'),
+      expect.stringContaining('Spell the product Comita')
     );
     expect(mockWriteFileSync).toHaveBeenCalledWith(
       path.join('/base', '.cursor', 'rules', 'work-intake.mdc'),
