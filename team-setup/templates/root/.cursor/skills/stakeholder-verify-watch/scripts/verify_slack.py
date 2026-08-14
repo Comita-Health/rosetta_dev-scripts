@@ -77,11 +77,17 @@ def parse_not_verified(markdown: str) -> list[dict[str, str]]:
 
     for raw in lines:
         stripped = raw.strip()
-        if stripped.startswith("### Not verified"):
+        if stripped.startswith("### Not verified") or stripped.startswith(
+            "## Verify"
+        ):
             in_section = True
             continue
         if in_section and (
-            stripped.startswith("### Verified") or stripped.startswith("## ")
+            stripped.startswith("### Verified")
+            or (
+                stripped.startswith("## ")
+                and not stripped.startswith("## Verify")
+            )
         ):
             flush()
             break
@@ -116,7 +122,7 @@ def require_env() -> tuple[str, str]:
 
 
 def col_map() -> dict[str, str]:
-    """Optional explicit column ids; otherwise use names the list must match."""
+    """Column ids from slack.env; display names only as a last-resort fallback."""
     return {
         "item": os.environ.get("COMITA_VERIFY_COL_ITEM", "Item"),
         "host": os.environ.get("COMITA_VERIFY_COL_HOST", "Host"),
@@ -124,6 +130,40 @@ def col_map() -> dict[str, str]:
         "ship": os.environ.get("COMITA_VERIFY_COL_SHIP", "Ship"),
         "notes": os.environ.get("COMITA_VERIFY_COL_NOTES", "Notes"),
     }
+
+
+def rich_text(text: str) -> list[dict[str, Any]]:
+    """Slack Lists text cells take a rich_text block, not a plain string."""
+    return [
+        {
+            "type": "rich_text",
+            "elements": [
+                {
+                    "type": "rich_text_section",
+                    "elements": [{"type": "text", "text": text}],
+                }
+            ],
+        }
+    ]
+
+
+def item_fields(
+    cols: dict[str, str],
+    *,
+    item: str,
+    host: str,
+    ship: str,
+    status: str = "not_verified",
+) -> list[dict[str, Any]]:
+    """initial_fields for slackLists.items.create (column_id + typed values)."""
+    fields: list[dict[str, Any]] = [
+        {"column_id": cols["item"], "rich_text": rich_text(item)},
+        {"column_id": cols["host"], "select": [host]},
+        {"column_id": cols["status"], "select": [status]},
+    ]
+    if ship:
+        fields.append({"column_id": cols["ship"], "rich_text": rich_text(ship)})
+    return fields
 
 
 def field_text(field: dict[str, Any]) -> str:
@@ -229,12 +269,12 @@ def cmd_publish(args: argparse.Namespace) -> None:
             token,
             {
                 "list_id": list_id,
-                "initial_fields": [
-                    {"key": cols["item"], "value": row["item"]},
-                    {"key": cols["host"], "value": row["host"]},
-                    {"key": cols["status"], "value": "Not verified"},
-                    {"key": cols["ship"], "value": args.ship},
-                ],
+                "initial_fields": item_fields(
+                    cols,
+                    item=row["item"],
+                    host=row["host"],
+                    ship=args.ship,
+                ),
             },
         )
         created += 1

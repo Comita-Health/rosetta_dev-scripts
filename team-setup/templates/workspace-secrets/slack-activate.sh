@@ -18,7 +18,16 @@ set -a
 source "$ENV_FILE"
 set +a
 
-for key in SLACK_BOT_TOKEN SLACK_CHANNEL_ID SLACK_SIGNING_SECRET; do
+for key in \
+  SLACK_BOT_TOKEN \
+  SLACK_CHANNEL_ID \
+  SLACK_SIGNING_SECRET \
+  COMITA_VERIFY_SLACK_LIST_ID \
+  COMITA_VERIFY_COL_ITEM \
+  COMITA_VERIFY_COL_HOST \
+  COMITA_VERIFY_COL_STATUS \
+  COMITA_VERIFY_COL_SHIP \
+  COMITA_VERIFY_COL_NOTES; do
   if [[ -n "${!key:-}" ]]; then
     printf 'export %s=%q\n' "$key" "${!key}"
   fi

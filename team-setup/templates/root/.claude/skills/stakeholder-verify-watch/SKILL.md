@@ -86,9 +86,10 @@ Arm the watcher in the **background** with agent `notify_on_output` on
 `^AGENT_LOOP_WAKE_stakeholder_verify`.
 
 If `COMITA_VERIFY_SLACK_LIST_ID` is unset, publish prints the rows and
-exits 2 — create the Slack list (columns Item, Host, Status, Ship, Notes),
-add the id to `~/.config/comita/slack.env`, retry. Do not fall back to
-pasting a giant checklist in chat as the source of truth.
+exits 2. The list is **Sandbox verify** (not Feedback). After create,
+put `COMITA_VERIFY_SLACK_LIST_ID` and `COMITA_VERIFY_COL_*` (column ids,
+not display names) in `~/.config/comita/slack.env` so `slack-activate.sh`
+exports them. Do not fall back to pasting a giant checklist in chat.
 
 ## Wake JSON
 
