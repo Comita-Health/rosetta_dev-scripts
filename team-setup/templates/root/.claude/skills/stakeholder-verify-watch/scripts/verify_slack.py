@@ -126,6 +126,70 @@ def col_map() -> dict[str, str]:
     }
 
 
+def field_text(field: dict[str, Any]) -> str:
+    """Best-effort display text from a Slack Lists field object."""
+    text = field.get("text")
+    if isinstance(text, str) and text.strip():
+        return text.strip()
+    val = field.get("value")
+    if isinstance(val, str) and val.strip():
+        return val.strip()
+    if isinstance(val, dict):
+        for key in ("text", "name", "label", "value"):
+            inner = val.get(key)
+            if isinstance(inner, str) and inner.strip():
+                return inner.strip()
+    select = field.get("select")
+    if isinstance(select, str) and select.strip():
+        return select.strip()
+    if isinstance(select, list) and select:
+        first = select[0]
+        if isinstance(first, str) and first.strip():
+            return first.strip()
+        if isinstance(first, dict):
+            for key in ("name", "label", "value", "text"):
+                inner = first.get(key)
+                if isinstance(inner, str) and inner.strip():
+                    return inner.strip()
+    return ""
+
+
+def flatten_fields(entry: dict[str, Any]) -> dict[str, str]:
+    """Map Slack field key/column_id (lowercased) to display text."""
+    raw = entry.get("fields") or entry.get("columns") or []
+    out: dict[str, str] = {}
+    if isinstance(raw, dict):
+        for key, value in raw.items():
+            text = value if isinstance(value, str) else field_text({"value": value})
+            if text:
+                out[str(key).lower()] = text
+        return out
+    if isinstance(raw, list):
+        for field in raw:
+            if not isinstance(field, dict):
+                continue
+            text = field_text(field)
+            if not text:
+                continue
+            for key in (field.get("key"), field.get("column_id")):
+                if key:
+                    out[str(key).lower()] = text
+    return out
+
+
+def pick_field(flat: dict[str, str], *names: str) -> str:
+    for name in names:
+        if not name:
+            continue
+        hit = flat.get(name.lower())
+        if hit:
+            return hit
+        for key, value in flat.items():
+            if name.lower() in key:
+                return value
+    return ""
+
+
 def cmd_parse(args: argparse.Namespace) -> None:
     text = Path(args.file).read_text(encoding="utf-8")
     rows = parse_not_verified(text)
@@ -152,11 +216,9 @@ def cmd_publish(args: argparse.Namespace) -> None:
     )
     known: set[str] = set()
     for entry in existing.get("items", existing.get("records", [])):
-        fields = entry.get("fields") or entry.get("columns") or {}
-        if isinstance(fields, dict):
-            for value in fields.values():
-                if isinstance(value, str) and value.strip():
-                    known.add(value.strip())
+        item, _, _ = item_status(entry)
+        if item:
+            known.add(item)
     cols = col_map()
     created = 0
     for row in rows:
@@ -181,21 +243,11 @@ def cmd_publish(args: argparse.Namespace) -> None:
 
 def item_status(entry: dict[str, Any]) -> tuple[str, str, str]:
     """Return (item_text, status_lower, notes)."""
-    fields = entry.get("fields") or entry.get("columns") or {}
-    item = ""
-    status = ""
-    notes = ""
-    if isinstance(fields, dict):
-        for key, value in fields.items():
-            text = value if isinstance(value, str) else json.dumps(value)
-            key_l = str(key).lower()
-            if "status" in key_l:
-                status = text
-            elif "note" in key_l:
-                notes = text
-            elif "item" in key_l or "title" in key_l or not item:
-                if "host" not in key_l and "ship" not in key_l:
-                    item = text
+    cols = col_map()
+    flat = flatten_fields(entry)
+    item = pick_field(flat, cols["item"], "name", "item", "title")
+    status = pick_field(flat, cols["status"], "status")
+    notes = pick_field(flat, cols["notes"], "notes", "note")
     return item.strip(), status.strip().lower(), notes.strip()
 
 

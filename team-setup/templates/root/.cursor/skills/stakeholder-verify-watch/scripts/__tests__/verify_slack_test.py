@@ -47,5 +47,36 @@ class ParseNotVerifiedTests(unittest.TestCase):
         self.assertFalse(any("Already done" in t for t in texts))
 
 
+class SlackFieldShapeTests(unittest.TestCase):
+    def test_item_status_reads_list_of_field_objects(self):
+        mod = load_mod()
+        entry = {
+            "fields": [
+                {
+                    "column_id": "ColAAA",
+                    "key": "name",
+                    "text": "Care mention emails fire",
+                    "value": "Care mention emails fire",
+                },
+                {
+                    "column_id": "ColBBB",
+                    "key": "Status",
+                    "value": "Verified",
+                    "select": "Verified",
+                },
+                {
+                    "column_id": "ColCCC",
+                    "key": "Notes",
+                    "text": "ok on admit.dev",
+                    "value": "ok on admit.dev",
+                },
+            ]
+        }
+        item, status, notes = mod.item_status(entry)
+        self.assertEqual(item, "Care mention emails fire")
+        self.assertEqual(status, "verified")
+        self.assertEqual(notes, "ok on admit.dev")
+
+
 if __name__ == "__main__":
     unittest.main()
