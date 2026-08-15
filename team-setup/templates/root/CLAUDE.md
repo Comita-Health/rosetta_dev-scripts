@@ -24,9 +24,24 @@ manifesto, principles, glossary, and settled decisions. Read it before making
 architectural or product decisions. When implementation and philosophy
 conflict, philosophy wins.
 
-## SDLC runs (default supervise pattern)
+## SDLC drops (default for inbox work)
 
-When kicking off or watching `sdlc-workflow` (`run` / shadow waves):
+When the ask is a GitHub issue (or a small set) that should land as **one PR**:
+
+- Follow **`sdlc-drop`** — `sdlc-workflow drop` arms one worktree, implement
+  as commits, `drop --finish` opens the PR, then `pr-approve-watch`.
+- Slash reminder: `/sdlc-drop`.
+- Do **not** `decompose` a drop into per-task PRs.
+
+`--finish` does **not** wait on reviewer, CI, or AC. On repos that still
+require a human Approve (including Foundation today), merge fails loud
+(`BRANCH_PROTECTION_REQUIRES_HUMAN`). Arm `pr-approve-watch`; do not claim
+machine-gate merge is already installed.
+
+## SDLC runs (spec-task opt-in)
+
+When kicking off or watching `sdlc-workflow` (`run` / shadow waves) for an
+Accepted multi-task spec:
 
 - Follow **`sdlc-run-supervise`** — engine `--supervise --detach`, `--heartbeat`,
   yield the agent turn, check in on wakes. Do **not** block the chat on
@@ -92,6 +107,10 @@ Read the architecture rule before writing or reviewing any TypeScript.
 
 ### Starting work
 
+**Inbox / direct issues use a drop** (`sdlc/drop/<id>` via `sdlc-workflow drop`)
+— see **SDLC drops** above. Hand-cut `f/` / `b/` branches stay valid for
+work that is not going through the drop CLI.
+
 **Always sync the default branch before creating a feature branch.** The first step of any
 new task — before writing code or even analyzing — is to get onto an up-to-date `main`. Never
 branch from a stale or arbitrary current branch.
@@ -102,7 +121,8 @@ git pull --ff-only
 git checkout -b f/TICKET-123-short-description
 ```
 
-Branch prefixes: `f/` for features, `b/` for bugs.
+Branch prefixes: `f/` for features, `b/` for bugs. Drop branches are
+`sdlc/drop/<id>`.
 
 **Stacked branches — chain when overlapping.** Before branching, check whether the new work
 modifies a file that one of your **open PRs** already modifies (canonical case: the ADR/PRD

@@ -16,8 +16,8 @@ truth for workflow, git conventions, and architecture pointers.
 | Project brief        | `CLAUDE.md`                                                                                                                                       | `CLAUDE.md` + this `AGENTS.md`                                                         |
 | Architecture / style | `.claude/rules/`                                                                                                                                  | `.cursor/rules/*.mdc` (mirrored on setup)                                              |
 | Permissions          | `.claude/settings.json`                                                                                                                           | `.cursor/cli.json`                                                                     |
-| Slash-style prompts  | `.claude/commands/` (`/review`, `/add-repo`, `/sdlc-status`, `/prd-portfolio`, `/sdlc-run`, `/watch-pr-approve`, `/write-prd`, `/write-bug-spec`) | Matching `.cursor/rules/command-*.mdc` — ask the agent to follow them                  |
-| Agent skills         | `.claude/skills/`                                                                                                                                 | `.cursor/skills/` (e.g. `pr-approve-watch`, `sdlc-run-supervise`, `sdlc-prd-progress`) |
+| Slash-style prompts  | `.claude/commands/` (`/review`, `/add-repo`, `/sdlc-status`, `/prd-portfolio`, `/sdlc-drop`, `/sdlc-run`, `/watch-pr-approve`, `/write-prd`, `/write-bug-spec`) | Matching `.cursor/rules/command-*.mdc` — ask the agent to follow them                  |
+| Agent skills         | `.claude/skills/`                                                                                                                                 | `.cursor/skills/` (e.g. `sdlc-drop`, `pr-approve-watch`, `sdlc-run-supervise`, `sdlc-prd-progress`) |
 
 ## Quick start
 
@@ -41,6 +41,8 @@ AI assistance. Git hooks and Conventional Commits apply regardless of agent.
 - Branch from up-to-date `main` using `f/` (feature) or `b/` (bug).
 - **Do not commit on `main`** unless a human explicitly authorizes a documented exception
   (foundation bootstrap or emergency hotfix — see `CLAUDE.md`).
+- **Inbox / direct work is a drop** — see `sdlc-drop` (`/sdlc-drop`): one
+  worktree + one PR. `run` / `decompose` stay the spec-task opt-in.
 - Conventional Commits are enforced by husky `commit-msg` in every Rosetta repo.
 - **No “Made with Cursor” (or similar) in commits or PR descriptions** — see
   `.claude/rules/no-tool-attribution.md` / `.cursor/rules/no-tool-attribution.mdc`.
