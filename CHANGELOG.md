@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- **team-setup (Comita overlay):** fork templates keep brand / work-intake /
+  Slack verify and add Comita drop arm defaults (Addi activate,
+  admissions `--base-ref origin/build-env/dev`, `--require-approve`).
+- **team-setup (PRD-0026):** drop is the default grain for inbox / direct
+  work — `sdlc-drop` skill + `/sdlc-drop`. `run` / `decompose` stay the
+  spec-task opt-in. Foundation `main` requires status checks only, so
+  `drop --finish` merges unless **`--require-approve`** is set. That flag
+  keeps human Approve / GHA merge-on-approve as the proceed signal.
+  `BRANCH_PROTECTION_REQUIRES_HUMAN` only fires when protection actually
+  requires a review.
+- **sdlc-workflow (PRD-0026):** drop mode — `sdlc-workflow drop` arms one
+  worktree and one PR per named set of GitHub issues. `maxDiffLines` is
+  advisory (digest note). Token spend halts new agent dispatches at
+  **3×** `budgetK`. Direct drops merge on machine gates and fail loud
+  when branch protection still requires a human review
+  (`--require-approve` opts back in).
+- **sdlc-workflow:** `record-merge --task` now appends a run-state `phase: stood`
+  verdict when a human approved the merge after a red/missing phase, and
+  closeout treats `stood` + `mergedSha` as phase coverage so `status: Done`
+  can be derived without hand-editing the SPEC (#169).
+
 - **sdlc-workflow (SPEC-PRD-0025-P1 T-03):** Dispatch headless operator-unstick
   after remediable gate remediation exhausts, before ACTION REQUIRED.
   `OperatorUnstickService` runs on the local supervise/daemon path via
@@ -227,7 +248,6 @@
   adapter is skipped rather than failed, and the loop polls nothing at all until
   adapters are registered, so no watch is degraded by the daemon's own wiring
   (SPEC-PRD-0020-P1 T-04).
-
 - **sdlc-workflow:** add the workspace-scoped durable watch registry lifecycle
   API with deterministic kind/target deduplication, active-watch age and
   last-poll projections, explicit expiry, and automatic expiry when a poll
@@ -613,10 +633,8 @@ enable` failures after a successful bootstrap fail the install instead of
   enforce ship (or vanish) before a human reviews the spec. The known labels
   are also fed into the synthesis prompt so the model picks from real
   surfaces. Specs whose labels all resolve render byte-identically to prior
-  behavior, and arbitrary consumer labels (e.g. a healthcare
-  `payments-phi-boundary`) round-trip PRD → spec → intake without loss.
-
-- **sdlc-workflow:** the envelope gate resolves `.sdlc/surfaces.json` from
+  behavior, and arbitrary consumer labels (e.g.
+  `regulated-data-boundary`) round-trip PRD → spec → intake without loss.- **sdlc-workflow:** the envelope gate resolves `.sdlc/surfaces.json` from
   the git tree under judgment (the task PR tip) via
   `SurfaceMapRepository.loadAtRef`, never the operator's local checkout — a
   locally edited (uncommitted) contract can no longer sway a verdict. A

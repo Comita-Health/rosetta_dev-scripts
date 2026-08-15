@@ -1,6 +1,7 @@
-# SDLC run supervision (default)
+# SDLC run supervision (spec-task opt-in)
 
-When starting, resuming, or watching `sdlc-workflow` (`run`, shadow waves,
+Inbox / direct work uses **`sdlc-drop`**. Use this pattern when starting,
+resuming, or watching `sdlc-workflow` (`run`, shadow waves,
 `record-merge` follow-ups):
 
 - Follow the **`sdlc-run-supervise`** skill.

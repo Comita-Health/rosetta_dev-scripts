@@ -116,7 +116,7 @@ const buildPrompt = (
     '- Prefer test: criteria; use agent: for end-to-end interface behavior.',
     '- The envelope is the blast radius: allowedPaths globs the implementation',
     '  may modify, forbiddenSurfaces labels it must not touch (e.g.',
-    '  "migrations", "auth", "ci-config"), maxDiffLines a hard size cap.',
+    '  "migrations", "auth", "ci-config"), maxDiffLines an advisory size note.',
     "- forbiddenSurfaces entries MUST come from the target repo's known",
     `  surface labels: ${
       knownSurfaceLabels.length > 0

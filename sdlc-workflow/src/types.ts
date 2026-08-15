@@ -111,7 +111,15 @@ export interface TaskRunResult {
   recordedAt: string; // ISO timestamp
 }
 
-export type GateOutcome = 'pass' | 'breach' | 'blocked' | 'human-required';
+/**
+ * Machine-gate outcomes. `stood` is recorded by `record-merge --task` when a
+ * human approved the merge after a red/missing phase — the prior breach
+ * stood, and closeout treats that as phase coverage for `status: Done`.
+ * It is never produced by a gate evaluator and never means "the gate went
+ * green."
+ */
+export type GateOutcome =
+  'pass' | 'breach' | 'blocked' | 'human-required' | 'stood';
 
 /**
  * A machine-gate verdict. Phase 2 runs every gate in shadow mode: the
@@ -126,6 +134,11 @@ export interface GateVerdict {
   outcome: GateOutcome;
   wouldEscalate: boolean;
   reasons: string[];
+  /**
+   * Advisory observations that must not fail the gate (PRD-0026):
+   * oversize vs `maxDiffLines` is digest-only.
+   */
+  notes?: string[];
   /** Full agent transcript for agent-driven gates (T-05). */
   transcript?: string;
   /**
@@ -751,6 +764,43 @@ export interface WakeEvent extends WakeEventInput {
   actionFailures?: WakeActionFailure[];
 }
 
+export type DropMode = 'direct' | 'bug-spec' | 'plan-artifact';
+
+/** Named ship: one or more inbox issues, one worktree, one PR. */
+export interface DropInput {
+  dropId: string;
+  issues: string[];
+  repoPath: string;
+  dropsDir: string;
+  baseRef: string;
+  mode: DropMode;
+  requireApprove: boolean;
+  envelope?: Envelope;
+}
+
+export interface DropTask {
+  id: string;
+  title: string;
+  done: boolean;
+}
+
+export interface DropState {
+  dropId: string;
+  issues: string[];
+  repoPath: string;
+  worktreePath: string;
+  branch: string;
+  baseSha: string;
+  mode: DropMode;
+  requireApprove: boolean;
+  tasks: DropTask[];
+  prUrl?: string;
+  prNumber?: number;
+  mergedSha?: string;
+  envelope?: Envelope;
+  updatedAt: string;
+}
+
 export type WorkflowErrorCode =
   | 'PRD_NOT_FOUND'
   | 'PRD_MALFORMED'
@@ -785,7 +835,11 @@ export type WorkflowErrorCode =
    * Mutating `gh` (issue/PR create) refused to run as the ambient human login
    * and could not activate an Addi GitHub App identity.
    */
-  | 'GH_NOT_ADDI';
+  | 'GH_NOT_ADDI'
+  /** PRD-0026: drop id or issue ref is unusable. */
+  | 'DROP_INVALID'
+  /** PRD-0026 Phase 3: protection still requires a human review. */
+  | 'BRANCH_PROTECTION_REQUIRES_HUMAN';
 
 export class WorkflowError extends Error {
   constructor(

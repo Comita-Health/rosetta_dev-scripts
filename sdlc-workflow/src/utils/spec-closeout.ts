@@ -275,7 +275,7 @@ export const closeoutBody = (input: CloseoutBodyInput): string => {
     }
     if (phaseUnproven.length > 0) {
       lines.push(
-        `Tasks with no passing phase gate: ${phaseUnproven
+        `Tasks with no passing or stood phase gate: ${phaseUnproven
           .map(taskId => `\`${taskId}\``)
           .join(', ')}.`,
         ''
@@ -309,6 +309,10 @@ export const closeoutBody = (input: CloseoutBodyInput): string => {
         : ''),
     `- Tasks with a green phase gate: ${gates
       .filter(gate => gate.outcome === 'pass')
+      .map(gate => gate.taskId)
+      .join(', ')}`,
+    `- Tasks with a stood phase gate (human-approved merge): ${gates
+      .filter(gate => gate.outcome === 'stood')
       .map(gate => gate.taskId)
       .join(', ')}`,
     '',

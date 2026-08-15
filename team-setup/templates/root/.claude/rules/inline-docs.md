@@ -12,7 +12,7 @@ class (and each new public method on those classes) MUST have a TSDoc block that
 
 1. **Purpose** — what this type/method is for in one or two sentences (not a restatement
    of the class name).
-2. **Non-obvious invariants** — authz, PHI/PII boundaries, idempotency, ordering,
+2. **Non-obvious invariants** — authz, data-sensitivity / PII boundaries, idempotency, ordering,
    failure modes, or “when not to call this.”
 3. **`@remarks` / `@example`** when a call is easy to misuse or when the contract is
    richer than the TypeScript types alone.

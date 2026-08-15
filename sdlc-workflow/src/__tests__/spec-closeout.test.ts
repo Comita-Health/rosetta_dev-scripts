@@ -376,7 +376,7 @@ describe('closeout PR identity and body', () => {
     expect(remainder).not.toContain('Nothing outstanding');
     expect(remainder).toContain('Tasks with no merge commit recorded: `T-02`.');
     expect(remainder).toContain(
-      'Tasks with no passing phase gate: `T-01`, `T-02`.'
+      'Tasks with no passing or stood phase gate: `T-01`, `T-02`.'
     );
     expect(body).toContain('left unchanged (coverage incomplete)');
   });

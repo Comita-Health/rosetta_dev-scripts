@@ -40,6 +40,7 @@ export interface SdlcDigest {
     outcome: GateVerdict['outcome'];
     wouldEscalate: boolean;
     reasons: string[];
+    notes?: string[];
     evidenceLinks: string[];
   }>;
   exceptions: ExceptionEntry[];
@@ -96,6 +97,9 @@ export class DigestService implements IDigestService {
         outcome: verdict.outcome,
         wouldEscalate: verdict.wouldEscalate,
         reasons: verdict.reasons,
+        ...(verdict.notes !== undefined && verdict.notes.length > 0
+          ? { notes: verdict.notes }
+          : {}),
         evidenceLinks: (verdict.evidenceIds ?? []).map(id =>
           evidenceLink(input.runId, id)
         )
