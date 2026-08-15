@@ -220,7 +220,7 @@ describe('GateRemediationService (Wave 0 bounded gate re-dispatch)', () => {
   });
 
   it('skips once the envelope token budget is spent', async () => {
-    state.tokenSpendK = 250;
+    state.tokenSpendK = 600;
 
     const outcome = await service.remediate(input({ budgetK: 200 }));
 

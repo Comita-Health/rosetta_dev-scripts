@@ -908,9 +908,9 @@ describe('ExecutorService (P2 T-01 + P3 T-01 pool)', () => {
   });
 
   describe('P3 T-06 budget enforcement', () => {
-    it('halts new agent dispatches when spend exceeds budgetK and records the escalation', async () => {
+    it('halts new agent dispatches when spend reaches 3× budgetK', async () => {
       const state = baseState();
-      state.tokenSpendK = 250; // envelope default budgetK is 200
+      state.tokenSpendK = 600; // envelope default budgetK is 200
       stateMock.load.mockReturnValue(state);
 
       const pool = await executor.executeReady(INPUT);

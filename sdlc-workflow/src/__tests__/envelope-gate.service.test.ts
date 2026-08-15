@@ -116,7 +116,7 @@ describe('EnvelopeGateService (T-02)', () => {
     );
   });
 
-  it('breaches when the diff exceeds maxDiffLines, citing the line count', async () => {
+  it('notes oversize vs maxDiffLines without failing the gate (PRD-0026)', async () => {
     setDiff({
       files: [{ path: 'src/big.ts', lines: 250 }],
       totalLines: 250
@@ -124,9 +124,12 @@ describe('EnvelopeGateService (T-02)', () => {
 
     const verdict = await gate.evaluate(INPUT);
 
-    expect(verdict.outcome).toBe('breach');
-    expect(verdict.reasons.join(' ')).toContain('250');
-    expect(verdict.reasons.join(' ')).toContain('100');
+    expect(verdict.outcome).toBe('pass');
+    expect(verdict.wouldEscalate).toBe(false);
+    expect(verdict.reasons).toEqual([]);
+    expect(verdict.notes?.join(' ') ?? '').toContain('250');
+    expect(verdict.notes?.join(' ') ?? '').toContain('advisory maxDiffLines');
+    expect(verdict.notes?.join(' ') ?? '').toContain('100');
   });
 
   // BUG-retro-and-queued-plans-P1 retro: a thorough test suite is not a
@@ -151,7 +154,7 @@ describe('EnvelopeGateService (T-02)', () => {
     });
   });
 
-  it('breaches on non-test lines alone even when the full diff (incl. tests) is much larger', async () => {
+  it('notes non-test oversize even when the full diff (incl. tests) is much larger', async () => {
     setDiff({
       files: [
         { path: 'src/feature/a.ts', lines: 150 },
@@ -162,12 +165,11 @@ describe('EnvelopeGateService (T-02)', () => {
 
     const verdict = await gate.evaluate(INPUT);
 
-    expect(verdict.outcome).toBe('breach');
-    // Cites the non-test count (150) against the budget (100), and still
-    // surfaces the true total (1050) for context.
-    expect(verdict.reasons.join(' ')).toContain('150 non-test lines');
-    expect(verdict.reasons.join(' ')).toContain('1050 total');
-    expect(verdict.reasons.join(' ')).toContain('100');
+    expect(verdict.outcome).toBe('pass');
+    expect(verdict.reasons).toEqual([]);
+    expect(verdict.notes?.join(' ') ?? '').toContain('150 non-test lines');
+    expect(verdict.notes?.join(' ') ?? '').toContain('1050 total');
+    expect(verdict.notes?.join(' ') ?? '').toContain('100');
   });
 
   it('reports an unresolvable surface label instead of ignoring it', async () => {

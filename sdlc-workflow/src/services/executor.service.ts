@@ -9,6 +9,7 @@ import { RunState, SpecDocument, SpecTask, stepKey } from '../types';
 import { agentSpendK } from '../utils/agent-spend';
 import { inputsDigest } from '../utils/digest';
 import { buildImplementationPrompt } from '../utils/implementation-prompt';
+import { budgetHaltDetail, isBudgetHalt } from '../utils/budget-halt';
 import { taskIntegrationTip } from '../utils/task-base';
 
 export interface ExecutorInput {
@@ -311,8 +312,11 @@ export class ExecutorService implements IExecutorService {
     // P3 T-06: budget exhaustion halts new agent dispatches pool-wide.
     // In-flight non-agent steps (worktree creation above, gates later)
     // still complete — only the agent call is skipped.
-    if (state.tokenSpendK > spec.envelope.budgetK) {
-      const detail = `budget exhausted: spend ${state.tokenSpendK}k exceeds budget ${spec.envelope.budgetK}k`;
+    if (isBudgetHalt(state.tokenSpendK, spec.envelope.budgetK)) {
+      const detail = budgetHaltDetail(
+        state.tokenSpendK,
+        spec.envelope.budgetK
+      );
       this._runStateRepo.recordTaskResult(input.runsDir, state, {
         taskId: task.id,
         status: 'failed',

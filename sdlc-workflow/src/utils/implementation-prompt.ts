@@ -35,7 +35,7 @@ export const buildImplementationPrompt = (
     '',
     `- Allowed paths: ${spec.envelope.allowedPaths.join(', ')}`,
     `- Forbidden surfaces: ${spec.envelope.forbiddenSurfaces.join(', ')}`,
-    `- Max diff lines: ${spec.envelope.maxDiffLines}`,
+    `- Max diff lines: ${spec.envelope.maxDiffLines} (advisory; oversize is a digest note)`,
     '',
     'HARD RULE — do not modify anything under `specs/**` (or `**/specs/**`):',
     'do not flip acceptance-criteria checkboxes, do not change `status:`,',

@@ -134,17 +134,26 @@ describe('AggregatorService (T-06)', () => {
     );
   });
 
-  it('writes a budget-exhaustion ledger entry when spend exceeds the budget', () => {
-    const state = makeState({ tokenSpendK: 250 });
+  it('writes a budget-exhaustion ledger entry only at 3× budgetK', () => {
+    const state = makeState({ tokenSpendK: 600 });
 
     const { exceptions } = aggregate(allGreen(), state, 200);
 
     expect(exceptions).toContainEqual(
       expect.objectContaining({
         trigger: 'budget-exhaustion',
-        context: ['token spend 250k exceeds budget 200k']
+        context: [
+          'budget exhausted: spend 600k reaches halt 600k (3× budget 200k)'
+        ]
       })
     );
+  });
+
+  it('does not halt when spend is above budgetK but below 3×', () => {
+    const state = makeState({ tokenSpendK: 250 });
+
+    const { exceptions } = aggregate(allGreen(), state, 200);
+    expect(exceptions).toEqual([]);
   });
 
   it('stays quiet below the exception thresholds', () => {

@@ -134,6 +134,11 @@ export interface GateVerdict {
   outcome: GateOutcome;
   wouldEscalate: boolean;
   reasons: string[];
+  /**
+   * Advisory observations that must not fail the gate (PRD-0026):
+   * oversize vs `maxDiffLines` is digest-only.
+   */
+  notes?: string[];
   /** Full agent transcript for agent-driven gates (T-05). */
   transcript?: string;
   /**
@@ -612,6 +617,43 @@ export interface WakeEvent extends WakeEventInput {
   id: string;
 }
 
+export type DropMode = 'direct' | 'bug-spec' | 'plan-artifact';
+
+/** Named ship: one or more inbox issues, one worktree, one PR. */
+export interface DropInput {
+  dropId: string;
+  issues: string[];
+  repoPath: string;
+  dropsDir: string;
+  baseRef: string;
+  mode: DropMode;
+  requireApprove: boolean;
+  envelope?: Envelope;
+}
+
+export interface DropTask {
+  id: string;
+  title: string;
+  done: boolean;
+}
+
+export interface DropState {
+  dropId: string;
+  issues: string[];
+  repoPath: string;
+  worktreePath: string;
+  branch: string;
+  baseSha: string;
+  mode: DropMode;
+  requireApprove: boolean;
+  tasks: DropTask[];
+  prUrl?: string;
+  prNumber?: number;
+  mergedSha?: string;
+  envelope?: Envelope;
+  updatedAt: string;
+}
+
 export type WorkflowErrorCode =
   | 'PRD_NOT_FOUND'
   | 'PRD_MALFORMED'
@@ -634,7 +676,11 @@ export type WorkflowErrorCode =
   | 'GIT_FAILED'
   | 'GH_FAILED'
   /** SPEC-PRD-0020-P1 T-01: workspace root missing or daemon config unusable. */
-  | 'DAEMON_CONFIG_INVALID';
+  | 'DAEMON_CONFIG_INVALID'
+  /** PRD-0026: drop id or issue ref is unusable. */
+  | 'DROP_INVALID'
+  /** PRD-0026 Phase 3: protection still requires a human review. */
+  | 'BRANCH_PROTECTION_REQUIRES_HUMAN';
 
 export class WorkflowError extends Error {
   constructor(

@@ -55,7 +55,7 @@ describe('buildReviewerPrompt', () => {
     );
 
     expect(prompt).toContain('test files');
-    expect(prompt).toContain('exempt from this budget');
+    expect(prompt).toContain('advisory');
     expect(prompt).toContain('__tests__/**');
   });
 

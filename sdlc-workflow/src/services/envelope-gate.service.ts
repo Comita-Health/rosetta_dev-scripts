@@ -51,11 +51,10 @@ export interface EnvelopeGateInput {
  * never from the operator's local checkout. A contract missing at that
  * tree is a named breach reason, not a local-file fallback.
  *
- * `maxDiffLines` budgets non-test lines only (BUG-retro-and-queued-plans-P1
- * retro): test files ({@link isTestPath}) still count for `allowedPaths` /
- * `forbiddenSurfaces`, but their line count is excluded from the size
- * budget so thorough test coverage never forces a task to either under-test
- * or breach on size alone.
+ * `maxDiffLines` is advisory (PRD-0026): oversize vs the budget is a
+ * digest note, not a breach, when allowed-path and forbidden-surface
+ * rules still hold. Test files ({@link isTestPath}) are excluded from
+ * the size note so coverage never looks like blast radius.
  */
 export interface IEnvelopeGateService {
   evaluate(input: EnvelopeGateInput): Promise<GateVerdict>;
@@ -129,13 +128,17 @@ export class EnvelopeGateService implements IEnvelopeGateService {
       }
     }
 
+    const notes: string[] = [];
     const nonTestLines = diff.files
       .filter(file => !isTestPath(file.path))
       .reduce((sum, file) => sum + file.lines, 0);
+    // PRD-0026: maxDiffLines is advisory. Oversize is digest-only when
+    // allowed-path and forbidden-surface rules still hold.
     if (nonTestLines > input.envelope.maxDiffLines) {
-      reasons.push(
+      notes.push(
         `diff is ${nonTestLines} non-test lines (${diff.totalLines} total ` +
-          `including tests), exceeding maxDiffLines ${input.envelope.maxDiffLines}`
+          `including tests), exceeding advisory maxDiffLines ` +
+          `${input.envelope.maxDiffLines}`
       );
     }
 
@@ -145,6 +148,7 @@ export class EnvelopeGateService implements IEnvelopeGateService {
       outcome: breach ? 'breach' : 'pass',
       wouldEscalate: breach,
       reasons,
+      ...(notes.length > 0 ? { notes } : {}),
       recordedAt: new Date().toISOString()
     };
   }

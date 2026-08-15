@@ -299,7 +299,7 @@ describe('CiGateService (P3 T-03 live monitor + bounded fix cycle)', () => {
   });
 
   it('skips the fix agent when the token budget is exhausted (P3 T-06)', async () => {
-    state.tokenSpendK = 250;
+    state.tokenSpendK = 600;
     checkRuns.mockReturnValue(red);
 
     const verdict = await gate.monitor(input());

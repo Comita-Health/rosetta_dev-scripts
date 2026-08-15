@@ -1,5 +1,6 @@
 import { injectable } from 'inversify';
 import { ExceptionEntry, GateVerdict, RunState } from '../types';
+import { budgetHaltDetail, isBudgetHalt } from '../utils/budget-halt';
 
 export interface GateSet {
   ci: GateVerdict;
@@ -123,12 +124,12 @@ export class AggregatorService implements IAggregatorService {
       });
     }
 
-    if (input.state.tokenSpendK > input.budgetK) {
+    if (isBudgetHalt(input.state.tokenSpendK, input.budgetK)) {
       exceptions.push({
         trigger: 'budget-exhaustion',
         taskId: input.taskId,
         context: [
-          `token spend ${input.state.tokenSpendK}k exceeds budget ${input.budgetK}k`
+          budgetHaltDetail(input.state.tokenSpendK, input.budgetK)
         ],
         recordedAt: now
       });

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **sdlc-workflow (PRD-0026):** drop mode — `sdlc-workflow drop` arms one
+  worktree and one PR per named set of GitHub issues. `maxDiffLines` is
+  advisory (digest note). Token spend halts new agent dispatches at
+  **3×** `budgetK`. Direct drops merge on machine gates and fail loud
+  when branch protection still requires a human review
+  (`--require-approve` opts back in).
 - **sdlc-workflow:** `record-merge --task` now appends a run-state `phase: stood`
   verdict when a human approved the merge after a red/missing phase, and
   closeout treats `stood` + `mergedSha` as phase coverage so `status: Done`
