@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **team-setup (PRD-0026):** drop is the default grain for inbox / direct
+  work — `sdlc-drop` skill + `/sdlc-drop`. `run` / `decompose` stay the
+  spec-task opt-in. Foundation still uses human Approve /
+  merge-on-Approve; `--finish` merge failing loud is expected until
+  Phase 3 protection is installed.
 - **sdlc-workflow (PRD-0026):** drop mode — `sdlc-workflow drop` arms one
   worktree and one PR per named set of GitHub issues. `maxDiffLines` is
   advisory (digest note). Token spend halts new agent dispatches at
