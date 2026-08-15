@@ -10,8 +10,9 @@ land as **one PR**, or the user asks to drop / `/sdlc-drop`:
 - Do **not** `decompose` a drop into per-task PRs.
 - `run` / `decompose` stay the spec-task opt-in for an Accepted
   multi-task spec — see `sdlc-run-supervise`.
-- `--finish` does **not** wait on reviewer, CI, or AC. On repos that
-  still require a human Approve (including Foundation today), merge
-  fails loud (`BRANCH_PROTECTION_REQUIRES_HUMAN`). That is expected
-  until Phase 3 protection is installed. Do not claim `--finish`
-  already skips Approve.
+- `--finish` does **not** wait on reviewer, CI, or AC. For `direct` it
+  then calls `gh pr merge`. Foundation `main` today requires status
+  checks only — not approving reviews — so that merge succeeds. Pass
+  **`--require-approve`** when Approve / GHA merge-on-approve must stay
+  the proceed signal. `BRANCH_PROTECTION_REQUIRES_HUMAN` only fires
+  when protection actually requires a person.
