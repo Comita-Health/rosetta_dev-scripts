@@ -324,6 +324,61 @@ describe('CloseoutAggregateService (SPEC-PRD-0023-P1 T-01)', () => {
     expect(result.phasePassedTaskIds).toEqual(['T-01']);
   });
 
+  it('#169: treats phase:stood + mergedSha as phase coverage for Done', () => {
+    const complete = state({
+      taskResults: {
+        'T-01': {
+          taskId: 'T-01',
+          status: 'completed',
+          mergedSha: 'a',
+          recordedAt: 'x'
+        },
+        'T-02': {
+          taskId: 'T-02',
+          status: 'completed',
+          mergedSha: 'b',
+          recordedAt: 'x'
+        }
+      },
+      verdicts: [
+        verdict({ taskId: 'T-01', gate: 'phase', outcome: 'breach' }),
+        verdict({
+          taskId: 'T-01',
+          gate: 'phase',
+          outcome: 'stood',
+          recordedAt: '2026-08-05T12:00:00.000Z'
+        }),
+        verdict({ taskId: 'T-02', gate: 'phase', outcome: 'stood' })
+      ],
+      criterionVerdicts: SPEC.tasks.flatMap(task =>
+        task.acceptanceCriteria.map(text =>
+          criterion({ taskId: task.id, criterion: text })
+        )
+      )
+    });
+
+    expect(aggregate(complete).fullyCovered).toBe(true);
+    expect(aggregate(complete).phasePassedTaskIds).toEqual(['T-01', 'T-02']);
+  });
+
+  it('#169: phase:stood without mergedSha is not coverage', () => {
+    const result = aggregate(
+      state({
+        taskResults: {
+          'T-01': {
+            taskId: 'T-01',
+            status: 'completed',
+            recordedAt: 'x'
+          }
+        },
+        verdicts: [verdict({ taskId: 'T-01', gate: 'phase', outcome: 'stood' })]
+      })
+    );
+
+    expect(result.phasePassedTaskIds).toEqual([]);
+    expect(result.fullyCovered).toBe(false);
+  });
+
   it('reads the latest phase verdict, so a re-judged breach can clear', () => {
     const runState = state({
       taskResults: {

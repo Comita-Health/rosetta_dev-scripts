@@ -165,7 +165,7 @@ describe('SpecSynthesisService', () => {
       const payload = validPayload();
       payload.envelope.forbiddenSurfaces = [
         'ci-config',
-        'payments-phi-boundary',
+        'regulated-data-boundary',
         'made-up-surface'
       ];
       generateJson.mockResolvedValueOnce(payload);
@@ -179,7 +179,7 @@ describe('SpecSynthesisService', () => {
       expect(loadSurfaceMap).toHaveBeenCalledWith('/tmp/target-repo');
       const details = (error as WorkflowError).details;
       expect(details).toContain(
-        'unresolvable surface label: "payments-phi-boundary"'
+        'unresolvable surface label: "regulated-data-boundary"'
       );
       expect(details).toContain(
         'unresolvable surface label: "made-up-surface"'
@@ -231,15 +231,15 @@ describe('SpecSynthesisService', () => {
     });
 
     it('round-trips an arbitrary consumer label PRD → spec → intake without loss', async () => {
-      // A healthcare-shaped label the engine has never heard of — known only
+      // A consumer-owned label the engine has never heard of — known only
       // to the consumer repo's surfaces.json.
       loadSurfaceMap.mockReturnValue({
-        'payments-phi-boundary': ['src/payments/**', 'src/phi/**'],
+        'regulated-data-boundary': ['src/payments/**', 'src/sensitive/**'],
         'ci-config': ['.github/workflows/**']
       });
       const payload = validPayload();
       payload.envelope.forbiddenSurfaces = [
-        'payments-phi-boundary',
+        'regulated-data-boundary',
         'ci-config'
       ];
       generateJson.mockResolvedValueOnce(payload);
@@ -248,7 +248,7 @@ describe('SpecSynthesisService', () => {
       const intake = parseSpec(spec.markdown);
 
       expect(intake.envelope.forbiddenSurfaces).toEqual([
-        'payments-phi-boundary',
+        'regulated-data-boundary',
         'ci-config'
       ]);
     });

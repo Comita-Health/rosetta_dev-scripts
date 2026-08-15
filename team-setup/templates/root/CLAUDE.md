@@ -30,9 +30,33 @@ manifesto, principles, glossary, and settled decisions. Read it before making
 architectural or product decisions. When implementation and philosophy
 conflict, philosophy wins.
 
-## SDLC runs (default supervise pattern)
+## SDLC drops (default for inbox work)
 
-When kicking off or watching `sdlc-workflow` (`run` / shadow waves):
+When the ask is a GitHub issue (or a small set) that should land as **one PR**:
+
+- Follow **`sdlc-drop`** — `sdlc-workflow drop` arms one worktree, implement
+  as commits, `drop --finish` opens the PR, then `pr-approve-watch`.
+- Slash reminder: `/sdlc-drop`.
+- Do **not** `decompose` a drop into per-task PRs.
+
+`--finish` does **not** wait on reviewer, CI, or AC. For `direct` it then
+calls `gh pr merge`. That succeeds when protection does not require a
+person — Foundation `main` today requires status checks (`test`, DCO) only,
+not approving reviews. Pass **`--require-approve`** when human Approve /
+GHA merge-on-approve must stay the proceed signal. `BRANCH_PROTECTION_REQUIRES_HUMAN`
+only fires when protection actually requires a review.
+
+**Comita workspace arm defaults:** activate
+`~/.config/comita/github-app-activate.sh` (`addi-m[bot]`). For
+`comita_admissions`, `--base-ref origin/build-env/dev` and
+**`--require-approve`** (`ADDI_MERGE_ON_APPROVE` is on). This fork of
+`rosetta_dev-scripts` needs `gh pr create --repo Comita-Health/rosetta_dev-scripts`
+so the PR does not target Rosetta-Foundation.
+
+## SDLC runs (spec-task opt-in)
+
+When kicking off or watching `sdlc-workflow` (`run` / shadow waves) for an
+Accepted multi-task spec:
 
 - Follow **`sdlc-run-supervise`** — engine `--supervise --detach`, `--heartbeat`,
   yield the agent turn, check in on wakes. Do **not** block the chat on
@@ -114,6 +138,10 @@ Read the architecture rule before writing or reviewing any TypeScript.
 
 ### Starting work
 
+**Inbox / direct issues use a drop** (`sdlc/drop/<id>` via `sdlc-workflow drop`)
+— see **SDLC drops** above. Hand-cut `f/` / `b/` branches stay valid for
+work that is not going through the drop CLI.
+
 **Always sync the default branch before creating a feature branch.** The first step of any
 new task — before writing code or even analyzing — is to get onto an up-to-date `main`. Never
 branch from a stale or arbitrary current branch.
@@ -124,7 +152,8 @@ git pull --ff-only
 git checkout -b f/TICKET-123-short-description
 ```
 
-Branch prefixes: `f/` for features, `b/` for bugs.
+Branch prefixes: `f/` for features, `b/` for bugs. Drop branches are
+`sdlc/drop/<id>`.
 
 **Stacked branches — chain when overlapping.** Before branching, check whether the new work
 modifies a file that one of your **open PRs** already modifies (canonical case: the ADR/PRD

@@ -28,7 +28,7 @@ live: (a) decompose synthesizes `allowedPaths` purely from LLM guesses with
 no repo-tree grounding, producing envelopes that miss real paths or allow
 imaginary ones ([#35]); (b) `forbiddenSurfaces` labels that don't resolve
 against the target repo's `.sdlc/surfaces.json` are silently dropped at
-synthesis — including `payments-phi-boundary` on a healthcare product, the
+synthesis — including `regulated-data-boundary` on a consumer product, the
 worst possible silent drop ([#36]); (c) the envelope gate reads
 `surfaces.json` from the operator's local checkout rather than the tree
 under judgment; (d) agents can tick their own acceptance checkboxes inside
@@ -50,11 +50,11 @@ validates labels; envelope hard-breach on `specs/**` is documented) —
 **each task verifies current behavior on `main` first and reduces to
 regression tests where the guarantee already holds.**
 
-**Why now / blast radius:** The envelope is the compliance boundary; for a
-healthcare consumer a silently-dropped PHI surface label is a categorical
-guardrail failure. Engine-internal only; consumer surface _contents_ stay
-consumer-owned (`payments-phi-boundary` remains a consumer label in the consumer's
-`surfaces.json`).
+**Why now / blast radius:** The envelope is the compliance boundary; a
+silently-dropped consumer surface label is a categorical guardrail
+failure. Engine-internal only; consumer surface _contents_ stay
+consumer-owned (`regulated-data-boundary` remains a consumer label in the
+consumer's `surfaces.json`).
 
 ## Task T-01: Ground synthesized `allowedPaths` in the target repo tree (#35)
 
@@ -99,9 +99,8 @@ synthesis time where labels vanish before any human sees the spec.
       and the repo's known labels in the error; nothing is dropped.
 - [x] test: a spec whose labels all resolve synthesizes byte-identically to
       current behavior.
-- [x] test: regression — a healthcare-shaped label (arbitrary consumer
-      label unknown to the engine) round-trips PRD → spec → intake without
-      loss.
+- [x] test: regression — an arbitrary consumer label unknown to the
+      engine round-trips PRD → spec → intake without loss.
 
 ## Task T-03: Contract blobs are read from the tree under judgment
 

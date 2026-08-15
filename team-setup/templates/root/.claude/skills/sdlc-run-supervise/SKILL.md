@@ -1,15 +1,18 @@
 ---
 name: sdlc-run-supervise
 description: >-
-  Default operator pattern for sdlc-workflow: detach runs with --supervise
+  Spec-task opt-in for sdlc-workflow run: detach with --supervise
   --detach + --heartbeat, end the agent turn, and check in on heartbeats /
   HUMAN GATE / PRs instead of blocking the chat on long sandbox waits. Use
   whenever starting, resuming, or supervising `run` / `record-merge` waves.
+  Inbox / direct work uses sdlc-drop instead.
 ---
 
-# SDLC run — background supervise (default)
+# SDLC run — background supervise (spec-task opt-in)
 
-**Default, not optional.** Agents MUST NOT hold the main chat turn hostage
+**Opt-in for Accepted multi-task specs** (`run` / `decompose`). Inbox /
+direct issues use **`sdlc-drop`** (one worktree + one PR). When you *do*
+run a spec wave, this supervise pattern is **not optional.** Agents MUST NOT hold the main chat turn hostage
 with multi-minute `sleep`/poll loops while `sdlc-workflow run` is in flight
 (sandbox alone is often 7+ minutes). Detach the engine, report once, yield
 the turn, then wake on heartbeats or a short `/loop`.

@@ -173,6 +173,12 @@ export class ChronicleCommitService implements IChronicleCommitService {
         input.taskId,
         input.mergedSha
       );
+      // Closeout needs phase coverage in run state, not only Chronicle
+      // outcomes. Human Approve after escalate never re-judges phase:pass;
+      // append phase:stood so Done can be derived without hand-editing the
+      // SPEC (#169). Machine-gate merges already have phase:pass — skip.
+      // Run before writeOutcomes so the new phase:stood is ledgered too.
+      this.recordStoodPhaseVerdict(input, state);
       // T-02: the merge stood — annotate this task's gate verdicts so
       // per-gate precision is computable from the ledger.
       this.writeOutcomes(
@@ -246,6 +252,53 @@ export class ChronicleCommitService implements IChronicleCommitService {
       `${input.runId} veto revert at ${input.revertSha.slice(0, 12)}`
     );
     return path;
+  }
+
+  /**
+   * Append a run-state `phase: stood` verdict for a human-approved task
+   * merge so closeout can derive `status: Done` (#169).
+   *
+   * @remarks
+   * Idempotent: skips when the latest phase is already `pass` or `stood`.
+   * Machine-gate merges (`approvedBy: 'machine-gates'`) already carry
+   * `phase: pass` from the aggregator — never overwrite that with stood.
+   */
+  private recordStoodPhaseVerdict(
+    input: RecordMergeInput,
+    state: RunState
+  ): void {
+    if (input.taskId === undefined) {
+      return;
+    }
+    if (input.approvedBy === 'machine-gates') {
+      return;
+    }
+    const phases = state.verdicts.filter(
+      verdict => verdict.gate === 'phase' && verdict.taskId === input.taskId
+    );
+    const newest = phases.reduce<(typeof phases)[number] | undefined>(
+      (best, verdict) =>
+        best === undefined || verdict.recordedAt > best.recordedAt
+          ? verdict
+          : best,
+      undefined
+    );
+    if (newest?.outcome === 'pass' || newest?.outcome === 'stood') {
+      return;
+    }
+    this._runStateRepo.appendVerdict(input.runsDir, state, {
+      gate: 'phase',
+      taskId: input.taskId,
+      outcome: 'stood',
+      wouldEscalate: false,
+      reasons: [
+        `human-approved merge ${input.mergedSha.slice(0, 12)} — prior phase breach stood (record-merge)`
+      ],
+      ...(newest?.inputsDigest !== undefined
+        ? { inputsDigest: newest.inputsDigest }
+        : {}),
+      recordedAt: new Date().toISOString()
+    });
   }
 
   /**

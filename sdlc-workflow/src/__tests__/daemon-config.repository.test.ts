@@ -169,7 +169,6 @@ describe('DaemonConfigRepository source lint', () => {
   const forbidden = [
     'Rosetta-Foundation',
     'github.com',
-    'comita',
     'bakerstreet',
     'HIPAA',
     'PHI',

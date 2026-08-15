@@ -9,6 +9,7 @@ import type { IRunStateRepository } from '../repositories/run-state.repository';
 import { WORKFLOW_TOKENS } from '../tokens';
 import { GateVerdict, RunState, SpecTask } from '../types';
 import { agentSpendK } from '../utils/agent-spend';
+import { budgetHaltDetail, isBudgetHalt } from '../utils/budget-halt';
 import { buildCiFixPrompt } from '../utils/ci-fix-prompt';
 import { inputsDigest } from '../utils/digest';
 
@@ -181,9 +182,9 @@ export class CiGateService implements ICiGateService {
         };
       }
 
-      if (input.state.tokenSpendK > input.budgetK) {
+      if (isBudgetHalt(input.state.tokenSpendK, input.budgetK)) {
         log.push(
-          `token budget exhausted (${input.state.tokenSpendK}k > ${input.budgetK}k) — skipping fix agent`
+          `token budget exhausted (${budgetHaltDetail(input.state.tokenSpendK, input.budgetK)}) — skipping fix agent`
         );
         return {
           ...base(),
@@ -191,7 +192,7 @@ export class CiGateService implements ICiGateService {
           wouldEscalate: true,
           reasons: [
             ...summary.failed.map(name => `check failed: ${name}`),
-            `budget exhausted: spend ${input.state.tokenSpendK}k exceeds budget ${input.budgetK}k`
+            budgetHaltDetail(input.state.tokenSpendK, input.budgetK)
           ]
         };
       }

@@ -32,12 +32,20 @@ PRD-0011 (Full-Loop SDLC Automation):
   and the phase digest posts to the PRD-0007 queue with merge links; a
   `[veto]` tag on that item (`check-veto`) reverts the phase merges
   through a PR, redeploys the sandbox at the reverted SHA, and records
-  an `sdlc.revert.v1` Chronicle artifact; and T-06 escalation surface —
+  an `sdlc.revert.v1` Chronicle artifact;   and T-06 escalation surface —
   each exception trigger posts an `action-required` queue item (task,
   trigger, evidence refs), token spend against `budgetK` halts new agent
-  dispatches pool-wide, and `status` categorizes tasks as merged /
+  dispatches at **3×** the envelope (PRD-0026; below that is digest-only),
+  and `status` categorizes tasks as merged /
   halted-escalated / blocked-by-dependency so a partial failure is
   triageable without opening state files.
+
+- **Drop mode** (`drop`, [PRD-0026](https://github.com/Rosetta-Foundation/rosetta_docs/blob/main/product/PRD-0026-drop-mode-sdlc.md)):
+  one worktree and one PR for a named set of GitHub issues. Parallel
+  drops from the same default-branch tip do not share a working tree.
+  `maxDiffLines` is advisory. Direct drops merge on machine gates
+  (`--require-approve` opts back in to a human review). `run
+  --max-parallel` per-task worktrees remain opt-in.
 
 ## Usage
 
@@ -59,6 +67,13 @@ bun run dev -- spec-lint --spec ../specs/PRD-0011/phase-2-spec.md
 # Execute all ready tasks from an Approved spec (parallel worktrees)
 bun run dev -- run --spec ../specs/PRD-0011/phase-3-spec.md --repo .. \
   --chronicle-repo ../../rosetta_chronicle_roustalski
+
+# Drop mode (PRD-0026): one worktree + one PR from issue refs
+bun run dev -- drop --drop-id 2026-08-15 --repo .. \
+  --issues Rosetta-Foundation/rosetta_docs#57
+# implement as commits in ~/.rosetta/sdlc-drops/<id>/worktree, then:
+bun run dev -- drop --drop-id 2026-08-15 --repo .. \
+  --issues Rosetta-Foundation/rosetta_docs#57 --finish
 
 # Options
 #   --run-id          stable run identifier; branches are sdlc/<run-id>/<task-id>
@@ -82,7 +97,9 @@ bun run dev -- run --spec ../specs/PRD-0011/phase-3-spec.md --repo .. \
 # See docs/operator-background-supervise.md (team-setup skill: sdlc-run-supervise).
 
 # Record a human-approved merge in the run's Chronicle artifact (T-08);
-# --task marks that task merged, which unblocks its dependents (P3 T-01)
+# --task marks that task merged, which unblocks its dependents (P3 T-01).
+# After escalate → human Approve, --task also appends phase:stood in run
+# state so a later `closeout` can write status: Done (#169).
 bun run dev -- record-merge --run-id <run-id> --sha <merged-sha> \
   --task T-01 --chronicle-repo ../../rosetta_chronicle_roustalski
 
@@ -381,8 +398,9 @@ task's existing worktree with the failing verdicts' reasons as input,
 commits and pushes the fix, and lets the gates judge the new head. The
 budget is explicit (`gateFixAttempts` per task in `state.json`, default 2)
 and exhaustion escalates loudly rather than spinning. Envelope remediation
-is instructed to **reduce the diff**, never to raise `maxDiffLines` — a gate
-that negotiates its own threshold is not a gate. Each round is recorded in
+is instructed to **reduce the diff**, never to raise `maxDiffLines` — the
+field is advisory (PRD-0026) and still not a lever the remediator may
+rewrite. Each round is recorded in
 `state.remediations` and a `[remediate] <task> …` line in `monitor.log`.
 After remediable remediation exhausts, Phase 1 (PRD-0025) dispatches a
 separate headless operator-unstick turn (`OperatorUnstickService`, wired
@@ -552,8 +570,9 @@ generates a **closeout PR** whose entire diff is derived from `state.json`:
 2. `spec-closeout.ts` applies that map to the spec markdown on the default
    branch: a criterion with a passing verdict is ticked, everything else is
    left alone, and `status: Done` is written **only** when every criterion
-   passes, every task merged, and every phase gate is green. Partial coverage
-   never downgrades or placeholders the existing status.
+   passes, every task merged, and every phase gate is green **or** `stood`
+   (human-approved merge after escalate — see `record-merge --task` / #169).
+   Partial coverage never downgrades or placeholders the existing status.
 3. `closeout.service` commits through `SpecFileRepository.writeCloseout` — the
    one route allowed to overwrite a spec — onto the stable branch
    `sdlc/closeout/<spec-id>`, then opens or **updates in place** the PR for
@@ -950,10 +969,10 @@ Handler / Service / Repository with InversifyJS (workspace rule):
   (`state.json`) before intake so forensics survive a mid-start crash.
 - `services/envelope-gate.service.ts` — diff vs blast-radius envelope,
   shadow-mode verdict (T-02); resolves `surfaces.json` at the judged ref,
-  never local disk (envelope-spec-integrity T-03). `maxDiffLines` exempts
-  test files (`*.test.*` / `*.spec.*` / `__tests__/**` / `__mocks__/**`,
-  `isTestPath`) from the size budget — they still count for `allowedPaths`
-  / `forbiddenSurfaces` (BUG-retro-and-queued-plans-P1 retro).
+  never local disk (envelope-spec-integrity T-03). `maxDiffLines` is
+  advisory (PRD-0026) and exempts test files (`*.test.*` / `*.spec.*` /
+  `__tests__/**` / `__mocks__/**`, `isTestPath`) from the size note —
+  they still count for `allowedPaths` / `forbiddenSurfaces`.
 - `services/pr-lifecycle.service.ts` — P3 T-02: push the task branch,
   find-or-create its PR with deterministic title/body (`utils/pr-content`).
 - `services/sandbox-deploy.service.ts` — task-branch build → sandbox via the

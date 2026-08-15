@@ -5,6 +5,7 @@ import type { IRunStateRepository } from '../repositories/run-state.repository';
 import { WORKFLOW_TOKENS } from '../tokens';
 import { Envelope, GateVerdict, RunState, SpecTask } from '../types';
 import { agentSpendK } from '../utils/agent-spend';
+import { budgetHaltDetail, isBudgetHalt } from '../utils/budget-halt';
 import { buildGateFixPrompt } from '../utils/gate-fix-prompt';
 
 export interface GateRemediationInput {
@@ -107,13 +108,11 @@ export class GateRemediationService implements IGateRemediationService {
         detail: `gate-fix attempts exhausted (${spent}/${GATE_FIX_ATTEMPT_LIMIT})`
       };
     }
-    if (input.state.tokenSpendK > input.budgetK) {
+    if (isBudgetHalt(input.state.tokenSpendK, input.budgetK)) {
       return {
         kind: 'skipped',
         attempt: spent,
-        detail:
-          `budget exhausted: spend ${input.state.tokenSpendK}k exceeds ` +
-          `budget ${input.budgetK}k`
+        detail: budgetHaltDetail(input.state.tokenSpendK, input.budgetK)
       };
     }
 

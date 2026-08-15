@@ -7,6 +7,7 @@ import chalk from 'chalk';
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
 import os from 'os';
+import { DropHandler, IDropHandler } from './handlers/drop.handler';
 import { resolveDaemonCliEntry } from './utils/daemon-cli-entry';
 import { exitDaemonFatal } from './utils/daemon-exit';
 import { RunHandler, IRunHandler } from './handlers/run.handler';
@@ -24,6 +25,10 @@ import {
   EvidenceRepository,
   IEvidenceRepository
 } from './repositories/evidence.repository';
+import {
+  DropStateRepository,
+  IDropStateRepository
+} from './repositories/drop-state.repository';
 import { GitRepository, IGitRepository } from './repositories/git.repository';
 import {
   ShellCommandRepository,
@@ -116,6 +121,7 @@ import {
 } from './services/spec-synthesis.service';
 import { CiGateService, ICiGateService } from './services/ci-gate.service';
 import { DigestService, IDigestService } from './services/digest.service';
+import { DropService, IDropService } from './services/drop.service';
 import { RetroService, IRetroService } from './services/retro.service';
 import {
   ChronicleCommitService,
@@ -265,6 +271,7 @@ import {
 } from './services/wake-consumption.service';
 import { WORKFLOW_TOKENS } from './tokens';
 import { WorkflowError } from './types';
+import { parseDropMode } from './utils/drop-id';
 import { resolveInferenceBackend } from './utils/backend-select';
 import { runExitCode } from './utils/run-exit';
 import { lintSpec } from './utils/spec-lint';
@@ -534,6 +541,11 @@ container
 }
 
 container.bind<IDaemonHandler>(WORKFLOW_TOKENS.DaemonHandler).to(DaemonHandler);
+container
+  .bind<IDropStateRepository>(WORKFLOW_TOKENS.DropStateRepository)
+  .to(DropStateRepository);
+container.bind<IDropService>(WORKFLOW_TOKENS.DropService).to(DropService);
+container.bind<IDropHandler>(WORKFLOW_TOKENS.DropHandler).to(DropHandler);
 
 yargs(hideBin(process.argv))
   .command(
@@ -796,6 +808,78 @@ yargs(hideBin(process.argv))
         if (runExitCode(result) !== 0) {
           process.exit(1);
         }
+      } catch (err) {
+        if (err instanceof WorkflowError) {
+          console.error(chalk.red(`\n✗ ${err.code}: ${err.message}`));
+          for (const detail of err.details) {
+            console.error(chalk.red(`  - ${detail}`));
+          }
+        } else {
+          console.error(chalk.red(`\n✗ ${err}`));
+        }
+        process.exit(1);
+      }
+    }
+  )
+  .command(
+    'drop',
+    'PRD-0026: one worktree and one PR for a named set of GitHub issues',
+    y =>
+      y
+        .option('issues', {
+          type: 'array',
+          demandOption: true,
+          describe: 'Inbox issue refs (owner/repo#N), one or more'
+        })
+        .option('repo', {
+          type: 'string',
+          demandOption: true,
+          describe: 'Path to the target repo the drop is implemented in'
+        })
+        .option('drop-id', {
+          type: 'string',
+          demandOption: true,
+          describe: 'Named drop / ship id (directory + branch fragment)'
+        })
+        .option('drops-dir', {
+          type: 'string',
+          default: path.join(os.homedir(), '.rosetta', 'sdlc-drops'),
+          describe: 'Directory holding drop state and worktrees'
+        })
+        .option('base-ref', {
+          type: 'string',
+          default: 'HEAD',
+          describe: 'Shared base tip (resolved in the target repo)'
+        })
+        .option('mode', {
+          type: 'string',
+          choices: ['direct', 'bug-spec', 'plan-artifact'] as const,
+          default: 'direct',
+          describe: 'Drop kind — direct merges on machine gates'
+        })
+        .option('require-approve', {
+          type: 'boolean',
+          default: false,
+          describe: 'Opt in to human Approve before merge (direct default: off)'
+        })
+        .option('finish', {
+          type: 'boolean',
+          default: false,
+          describe: 'Open the drop PR and merge when direct + gates green'
+        }),
+    async argv => {
+      const handler = container.get<IDropHandler>(WORKFLOW_TOKENS.DropHandler);
+      try {
+        await handler.run({
+          dropId: argv['drop-id'],
+          issues: (argv.issues as Array<string | number>).map(String),
+          repoPath: argv.repo,
+          dropsDir: argv['drops-dir'],
+          baseRef: argv['base-ref'],
+          mode: parseDropMode(argv.mode),
+          requireApprove: argv['require-approve'],
+          finish: argv.finish
+        });
       } catch (err) {
         if (err instanceof WorkflowError) {
           console.error(chalk.red(`\n✗ ${err.code}: ${err.message}`));

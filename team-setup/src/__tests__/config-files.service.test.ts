@@ -47,6 +47,7 @@ describe('layDownRootConfig', () => {
           'architecture-hsr.md',
           'code-style.md',
           'inline-docs.md',
+          'sdlc-drop.md',
           'sdlc-run-supervise.md',
           'pr-approve-watch.md',
           'comita-brand-spelling.md',
@@ -86,6 +87,10 @@ describe('layDownRootConfig', () => {
     expect(mockWriteFileSync).toHaveBeenCalledWith(
       path.join('/base', '.cursor', 'rules', 'inline-docs.mdc'),
       expect.stringContaining('TSDoc / JSDoc bar')
+    );
+    expect(mockWriteFileSync).toHaveBeenCalledWith(
+      path.join('/base', '.cursor', 'rules', 'sdlc-drop.mdc'),
+      expect.stringContaining('one sdlc-workflow drop')
     );
     expect(mockWriteFileSync).toHaveBeenCalledWith(
       path.join('/base', '.cursor', 'rules', 'sdlc-run-supervise.mdc'),

@@ -1,0 +1,1 @@
+Arm an `sdlc-workflow` drop (one worktree + one PR) for inbox / direct work, implement as commits in that worktree, then `drop --finish` and arm `pr-approve-watch`. Follow the `sdlc-drop` skill (`.claude/skills/sdlc-drop/SKILL.md` or `.cursor/skills/sdlc-drop/SKILL.md`). Keep `run` / `decompose` as the spec-task opt-in.
