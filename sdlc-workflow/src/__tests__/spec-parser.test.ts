@@ -113,7 +113,7 @@ describe('parseSpec', () => {
       "      'specs/PRD-0004/**',",
       '    ]',
       '  forbiddenSurfaces:',
-      "    ['payments-phi-boundary', 'production-deploy', 'ci-config']",
+      "    ['regulated-data-boundary', 'production-deploy', 'ci-config']",
       '  maxDiffLines: 450',
       '  budgetK: 160',
       '---',
@@ -137,7 +137,7 @@ describe('parseSpec', () => {
       'specs/PRD-0004/**'
     ]);
     expect(doc.envelope.forbiddenSurfaces).toEqual([
-      'payments-phi-boundary',
+      'regulated-data-boundary',
       'production-deploy',
       'ci-config'
     ]);

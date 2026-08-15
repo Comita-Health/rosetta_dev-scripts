@@ -33,10 +33,9 @@ often takes 5–10+ minutes — before `remediationRound` fires. That is
 wasteful of **time and of the sandbox itself**: Deploy Organization ships
 code the reviewer already rejected. Remediation (when it eventually runs)
 changes `headSha`, so the deploy is discarded and must run again on the
-fixed tip. Observed live on admissions Phase 0l T-02
-([Comita-Health/comita_admissions#396](https://github.com/Comita-Health/comita_admissions/pull/396)):
-reviewer breach logged, then a long sandbox on the red head while
-`remediations` stayed empty.
+fixed tip. Observed live on an enforce-run task: reviewer breach
+logged, then a long sandbox on the red head while `remediations`
+stayed empty.
 
 **Repro:** Enforce-run a task whose reviewer gate returns `breach` (any
 deterministic checklist failure). Observe heartbeat/step order:

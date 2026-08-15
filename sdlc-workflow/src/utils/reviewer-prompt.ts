@@ -31,7 +31,7 @@ const buildChecklistSection = (checklist: ReviewChecklist): string[] => [
  *
  * @remarks
  * This prompt is the upstream default, so it stays domain-neutral: a consumer's
- * rules ("never log a patient identifier") arrive through
+ * rules ("never log a payment-card number") arrive through
  * `.sdlc/review-checklist.md`, which is the seam ADR-0009 requires policy to
  * travel through. A domain example baked in here would ship one consumer's
  * vocabulary to every other one.

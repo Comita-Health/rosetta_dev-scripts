@@ -304,8 +304,8 @@ enable` failures after a successful bootstrap fail the install instead of
   enforce ship (or vanish) before a human reviews the spec. The known labels
   are also fed into the synthesis prompt so the model picks from real
   surfaces. Specs whose labels all resolve render byte-identically to prior
-  behavior, and arbitrary consumer labels (e.g. a healthcare
-  `payments-phi-boundary`) round-trip PRD → spec → intake without loss.
+  behavior, and arbitrary consumer labels (e.g.
+  `regulated-data-boundary`) round-trip PRD → spec → intake without loss.
 - **sdlc-workflow:** the envelope gate resolves `.sdlc/surfaces.json` from
   the git tree under judgment (the task PR tip) via
   `SurfaceMapRepository.loadAtRef`, never the operator's local checkout — a

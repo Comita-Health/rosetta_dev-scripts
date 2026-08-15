@@ -27,7 +27,7 @@ describe('buildReviewerPrompt', () => {
       'diff --git a/src/a.ts b/src/a.ts\n+added line'
     );
 
-    for (const term of ['PHI', 'HIPAA', 'patient']) {
+    for (const term of ['PHI', 'HIPAA', 'patient', 'Comita']) {
       expect(prompt).not.toContain(term);
     }
     // The generic invariant it replaced still has to be asked about.
@@ -39,10 +39,10 @@ describe('buildReviewerPrompt', () => {
       makeTask(),
       makeEnvelope(),
       'diff --git a/src/a.ts b/src/a.ts\n+added line',
-      { items: [{ text: 'Never log a patient identifier', mandatory: true }] }
+      { items: [{ text: 'Never log a payment-card number', mandatory: true }] }
     );
 
-    expect(prompt).toContain('1. Never log a patient identifier (mandatory)');
+    expect(prompt).toContain('1. Never log a payment-card number (mandatory)');
   });
 
   // BUG-retro-and-queued-plans-P1 retro: the reviewer's own size judgment
