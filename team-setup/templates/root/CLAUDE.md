@@ -33,10 +33,12 @@ When the ask is a GitHub issue (or a small set) that should land as **one PR**:
 - Slash reminder: `/sdlc-drop`.
 - Do **not** `decompose` a drop into per-task PRs.
 
-`--finish` does **not** wait on reviewer, CI, or AC. On repos that still
-require a human Approve (including Foundation today), merge fails loud
-(`BRANCH_PROTECTION_REQUIRES_HUMAN`). Arm `pr-approve-watch`; do not claim
-machine-gate merge is already installed.
+`--finish` does **not** wait on reviewer, CI, or AC. For `direct` it then
+calls `gh pr merge`. That succeeds when protection does not require a
+person — Foundation `main` today requires status checks (`test`, DCO) only,
+not approving reviews. Pass **`--require-approve`** when human Approve /
+GHA merge-on-approve must stay the proceed signal. `BRANCH_PROTECTION_REQUIRES_HUMAN`
+only fires when protection actually requires a review.
 
 ## SDLC runs (spec-task opt-in)
 

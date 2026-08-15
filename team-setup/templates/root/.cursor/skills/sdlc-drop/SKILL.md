@@ -40,15 +40,19 @@ Live-val: PRD-0026. Engine: `sdlc-workflow drop`.
    the worktree).
 2. **Implement only in that worktree.** Do not commit on `main` or on
    an unrelated topic branch.
-3. **`--finish` opens one PR.** For `direct` it then calls `gh pr merge`.
-   It does **not** wait on reviewer, CI, or AC checkboxes.
-4. **Human Approve is still the Foundation proceed signal** until
-   Phase 3 protection (machine-gate merge without a person) is
-   installed. On those repos `--finish` merge fails loud
-   (`BRANCH_PROTECTION_REQUIRES_HUMAN`). That is expected — arm
-   `pr-approve-watch`. Do not claim `--finish` already skips Approve.
-5. If the repo enables **Addi merge on Approve** (`ADDI_MERGE_ON_APPROVE`),
-   do **not** `gh pr merge` from the agent after `--finish`.
+3. **`--finish` opens one PR.** For `direct` it then calls `gh pr merge`
+   unless `--require-approve` is set. It does **not** wait on reviewer,
+   CI, or AC checkboxes.
+4. **Do not assume `--finish` merge fails on Foundation.** `main` there
+   currently requires status checks (`test`, DCO) only — not approving
+   reviews — so `gh pr merge` succeeds. That is not Phase 3 protection.
+   When the proceed signal must stay human Approve / GHA
+   merge-on-approve, pass **`--require-approve`** and arm
+   `pr-approve-watch`. `BRANCH_PROTECTION_REQUIRES_HUMAN` only fires
+   when protection actually requires a person.
+5. If the repo enables **Addi merge on Approve** (`ADDI_MERGE_ON_APPROVE`)
+   and you used `--require-approve`, do **not** `gh pr merge` from the
+   agent after Approve — GHA merges.
 6. If the clone's `origin` is a **fork**, `drop --finish` pushes to
    `origin` and `gh pr create` (no `--repo`) may target the upstream
    parent. Push the drop branch to the canonical remote and create the
@@ -70,7 +74,7 @@ bunx tsx src/index.ts drop \
   --issues "$ISSUE" \
   --base-ref origin/main
 # --mode direct|bug-spec|plan-artifact  (default: direct)
-# --require-approve  when this repo must keep human Approve
+# --require-approve  keep human Approve / GHA merge-on-approve
 ```
 
 Worktree: `~/.rosetta/sdlc-drops/<id>/worktree`  
@@ -93,10 +97,11 @@ bunx tsx src/index.ts drop \
   --repo "$REPO" \
   --issues "$ISSUE" \
   --finish
+# add --require-approve when Approve must remain the proceed signal
 ```
 
-Then arm **`pr-approve-watch`** on the opened PR. Yield the turn; do
-not block the chat waiting for Approve.
+Then arm **`pr-approve-watch`** if the PR is still open. Yield the turn;
+do not block the chat waiting for Approve.
 
 ## Anti-patterns
 
@@ -104,5 +109,6 @@ not block the chat waiting for Approve.
 - Using `run --supervise --detach` for a single inbox issue
 - Treating `--finish` as hands-off orchestration (no implementer, no
   CI wait, no AC roll-up)
-- Claiming Foundation drops merge without a human Approve
+- Claiming Foundation `--finish` fails loud when protection does not
+  require a review
 - Implementing in the primary checkout instead of the drop worktree
