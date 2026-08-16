@@ -819,4 +819,65 @@ describe('engine risky strategy classification (SPEC-PRD-0025-P1 T-04)', () => {
       })
     ).toBe('abstained');
   });
+
+  it('does not reclassify OUTCOME: abstained that mentions risky-advisory', () => {
+    // Prompt echo / restatement — the unstick prompt names risky-advisory
+    // next to abstain guidance; bare substring must not suppress escalate.
+    const output =
+      'OUTCOME: abstained — considered the risky-advisory path from the ' +
+      'prompt but cannot proceed safely without human review';
+    expect(engineClassifiesStrategyAsRisky(output)).toBe(false);
+    expect(
+      classifyOperatorUnstickOutcome({ ...base, agentOutput: output })
+    ).toBe('abstained');
+    expect(suppressesBlockingEscalate('abstained')).toBe(false);
+  });
+
+  it('keeps OUTCOME: risky-advisory even when narrative mentions abstain', () => {
+    const output =
+      'OUTCOME: risky-advisory — did not abstain; continuing under tip assumption';
+    expect(engineClassifiesStrategyAsRisky(output)).toBe(true);
+    expect(
+      classifyOperatorUnstickOutcome({ ...base, agentOutput: output })
+    ).toBe('risky-proceed');
+  });
+
+  it('does not treat a bare risky-advisory token as engine continue', () => {
+    const output =
+      'Discussed risky-advisory with the operator mandate; still stuck on tip';
+    expect(engineClassifiesStrategyAsRisky(output)).toBe(false);
+    expect(
+      classifyOperatorUnstickOutcome({ ...base, agentOutput: output })
+    ).toBe('abstained');
+  });
+
+  it('does not reclassify last-attempt exhaust that mentions risky-advisory', () => {
+    const output =
+      'still stuck after tip rebase; risky-advisory was considered but no clear';
+    expect(engineClassifiesStrategyAsRisky(output)).toBe(false);
+    expect(
+      classifyOperatorUnstickOutcome({
+        ...base,
+        attempt: 2,
+        agentOutput: output
+      })
+    ).toBe('exhausted');
+  });
+
+  it('does not treat bare risky-proceed prose as agent continue', () => {
+    const output =
+      'The prompt says write risky-proceed only when continuing; abstaining instead';
+    expect(
+      classifyOperatorUnstickOutcome({ ...base, agentOutput: output })
+    ).toBe('abstained');
+  });
+
+  it('excludes abstain language from risky-assumption engine continue', () => {
+    const output =
+      'risky assumption about tip — abstaining rather than continue';
+    expect(engineClassifiesStrategyAsRisky(output)).toBe(false);
+    expect(
+      classifyOperatorUnstickOutcome({ ...base, agentOutput: output })
+    ).toBe('abstained');
+  });
 });

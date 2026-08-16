@@ -10,8 +10,9 @@ import { Envelope, GateVerdict, SpecTask } from '../types';
  * stays remediator-first and trim-the-diff; unstick's mandate is routine
  * operator integration work via existing engine CLIs (rebase / integration
  * tip, out-of-band merge + `record-merge`, resume). Authority-bound and
- * policy-rewrite acts must abstain (or take a risky-advisory path only when
- * the engine classifies a proceed) — never silently rewrite Approved policy.
+ * policy-rewrite acts must abstain — never silently rewrite Approved policy.
+ * Non-policy risky proceeds use an explicit `OUTCOME:` marker; the engine
+ * alone promotes that to a continue+advisory path.
  */
 export const buildOperatorUnstickPrompt = (
   task: SpecTask,
@@ -59,6 +60,16 @@ export const buildOperatorUnstickPrompt = (
     'rebase will not suppress ACTION REQUIRED. If you cannot clear safely,',
     'abstain so the engine can file ACTION REQUIRED.',
     '',
+    'When you **do** continue under a named non-policy risk (not an',
+    'Approved-artifact edit), end with exactly one of:',
+    '',
+    '  OUTCOME: risky-proceed',
+    '  OUTCOME: risky-advisory',
+    '',
+    'The engine alone promotes those markers to a continue+advisory path.',
+    'Mentioning the words in prose, or restating this guidance while',
+    'abstaining, is not a proceed — write `OUTCOME: abstained` instead.',
+    '',
     '## Task context',
     '',
     task.engineeringNotes,
@@ -86,9 +97,8 @@ export const buildOperatorUnstickPrompt = (
     'rewriting policy or forging authority. Do not silently flip, waive, or',
     'widen. Editing Approved artifacts (`specs/**`, envelope limits) is never',
     'a proceed — the engine will classify those turns as abstained even if',
-    'you write `risky-proceed` / `risky-advisory`. Only the engine may',
-    'classify a non-policy strategy as risky-proceed; you must not',
-    'self-authorize by editing Approved artifacts.',
+    'you claim a risky OUTCOME marker. You must not self-authorize by',
+    'editing Approved artifacts.',
     '',
     '- **Draft→Approved flips** — never change spec `status:` from Draft to',
     '  Approved (or otherwise approve a spec mid-run). Abstain.',
@@ -97,9 +107,7 @@ export const buildOperatorUnstickPrompt = (
     '- **PHI handling** — never handle, relocate, or “fix around” PHI.',
     '  Abstain for human/ACTION REQUIRED.',
     '- **Raising `maxDiffLines` / `allowedPaths`** — never edit the Approved',
-    '  envelope to raise limits or expand surfaces. Abstain (or leave the',
-    '  engine to route risky-advisory only if it classifies a proceed) —',
-    '  never silent policy rewrite.',
+    '  envelope to raise limits or expand surfaces. Abstain — never silent policy rewrite.',
     '- **Mid-run `specs/**` closeout edits** — never flip acceptance-criteria',
     '  checkboxes, change `status:`, or otherwise close out the Approved',
     '  spec mid-run. Phase Done / checkbox closeout is a separate docs PR.',
