@@ -7,13 +7,16 @@
   `ADVISORY: SDLC <runId> <taskId> risky proceed` issue (distinct from
   `ACTION REQUIRED: SDLC <runId> <taskId>`), naming the decision, evidence
   links, and course-correct steps. Agent-labeled `risky-proceed` and
-  engine-classified strategies (`risky-advisory` / risky-assumption) both
-  continue via `RunHandler` without posting a human-blocking escalate for
-  that wave (`classifiedBy` attributed from the unstick result; escalate
-  tier `advisory-risky`, not `halted-escalated`). Does not write
-  exception-ledger entries that `BlockerService` treats as open needs-human
-  blockers, and does not emit `action-required` queue items or wake-inbox
-  escalations.
+  engine-classified strategies (`OUTCOME: risky-advisory` / risky-assumption)
+  both continue via `RunHandler` without posting a human-blocking escalate
+  for that wave (`classifiedBy` attributed from the unstick result; escalate
+  tier `advisory-risky`, not `halted-escalated`). Engine continue requires
+  an explicit `OUTCOME:` marker (never a bare `risky-advisory` /
+  `risky-proceed` token) and does not override `OUTCOME: abstained` or
+  last-attempt exhaust — prompt echo of those words must not suppress
+  ACTION REQUIRED. Does not write exception-ledger entries that
+  `BlockerService` treats as open needs-human blockers, and does not emit
+  `action-required` queue items or wake-inbox escalations.
 
 - **sdlc-workflow (SPEC-PRD-0025-P1 T-03):** Dispatch headless operator-unstick
   after remediable gate remediation exhausts, before ACTION REQUIRED.
