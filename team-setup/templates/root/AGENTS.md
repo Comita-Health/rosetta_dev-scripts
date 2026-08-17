@@ -64,4 +64,5 @@ AI assistance. Git hooks and Conventional Commits apply regardless of agent.
 - **Stakeholder sandbox smoke lives on Slack** — `stakeholder-verify-watch`
   (`/watch-stakeholder-verify`, publish only). Do not poll Slack from a
   laptop. Bret has no GitHub. Do not mix with his
-  Feedback tracker. Slack Verified is not GitHub Approve.
+  Feedback tracker. Slack Verified is not GitHub Approve. DEV is **SB**.
+  Operator-linked Slack threads get an SB-deploy reply on that thread.

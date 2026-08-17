@@ -19,3 +19,6 @@ publish stakeholder verify):
   do not promote.
 - Bret has no GitHub. Do **not** ask Russ to relay check-offs.
 - Slack Verified is **not** GitHub Approve (`pr-approve-watch`).
+- When the operator **linked a Slack thread** as the ask, SB deploy
+  green also gets a **thread reply** on that message (see
+  `deploy-verify-watch`). That is not this list and not `@channel`.
