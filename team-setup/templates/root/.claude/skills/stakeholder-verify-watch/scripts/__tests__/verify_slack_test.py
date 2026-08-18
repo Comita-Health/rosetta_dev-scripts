@@ -135,6 +135,56 @@ class SnapshotAndFailedTests(unittest.TestCase):
         self.assertIn("- [x] Care hop orgs on admit.dev.", updated)
         self.assertIn("- [ ] Contracts hop.", updated)
 
+    def test_move_verified_lines_into_verified_section(self):
+        mod = load_mod()
+        markdown = (
+            "### Not verified\n\n"
+            "- [ ] Care hop orgs on admit.dev.\n"
+            "- [ ] Uploaded referral PDFs show viewer-local date/time next to the\n"
+            "      filename.\n\n"
+            "### Verified\n\n"
+            "_(none yet — move a line here when Bret confirms)_\n\n"
+            "## Out of this ship\n"
+        )
+        updated = mod.move_verified_lines(
+            markdown,
+            {"Care hop orgs on admit.dev."},
+        )
+        self.assertNotIn(
+            "- [ ] Care hop orgs on admit.dev.",
+            updated.split("### Verified")[0],
+        )
+        verified = updated.split("### Verified", 1)[1]
+        self.assertIn("- [x] Care hop orgs on admit.dev.", verified)
+        self.assertIn("- [ ] Uploaded referral PDFs", updated)
+        self.assertNotIn("none yet", updated)
+        self.assertIn("## Out of this ship", updated)
+
+    def test_move_verified_keeps_existing_verified_and_wrapped_lines(self):
+        mod = load_mod()
+        markdown = (
+            "### Not verified\n\n"
+            "- [ ] Uploaded referral PDFs show viewer-local date/time next to the\n"
+            "      filename.\n\n"
+            "### Verified\n\n"
+            "- [x] Already verified item.\n\n"
+            "## Out of this ship\n"
+        )
+        updated = mod.move_verified_lines(
+            markdown,
+            {
+                "Uploaded referral PDFs show viewer-local date/time next to the filename."
+            },
+        )
+        verified = updated.split("### Verified", 1)[1]
+        self.assertIn("- [x] Already verified item.", verified)
+        self.assertIn("- [x] Uploaded referral PDFs", verified)
+        self.assertIn("filename.", verified)
+        self.assertNotIn(
+            "- [ ] Uploaded referral PDFs",
+            updated.split("### Verified")[0],
+        )
+
     def test_failed_comment_is_idempotent_by_marker(self):
         mod = load_mod()
         row = {

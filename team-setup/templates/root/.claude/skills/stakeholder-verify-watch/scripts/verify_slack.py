@@ -347,6 +347,9 @@ def failed_comment_body(row: dict[str, str]) -> str:
     )
 
 
+PLACEHOLDER_RE = re.compile(r"^_\(.*none yet.*\)_\s*$", re.I)
+
+
 def check_off_verified(markdown: str, verified_texts: set[str]) -> str:
     """Flip `- [ ]` to `- [x]` when the smoke line matches a Slack Verified item."""
     normalized = {normalize_item(text) for text in verified_texts}
@@ -398,6 +401,135 @@ def check_off_verified(markdown: str, verified_texts: set[str]) -> str:
             pending_parts.append(stripped)
     flush()
     return "".join(lines)
+
+
+def _heading_index(lines: list[str], prefix: str) -> int | None:
+    for i, raw in enumerate(lines):
+        if raw.strip().startswith(prefix):
+            return i
+    return None
+
+
+def _checkbox_blocks(
+    lines: list[str], start: int, end: int
+) -> list[dict[str, Any]]:
+    """Checkbox items between start (inclusive) and end (exclusive)."""
+    blocks: list[dict[str, Any]] = []
+    pending_idxs: list[int] = []
+    pending_parts: list[str] = []
+
+    def flush() -> None:
+        nonlocal pending_idxs, pending_parts
+        if not pending_idxs:
+            pending_parts = []
+            return
+        text = " ".join(part.strip() for part in pending_parts if part.strip())
+        blocks.append(
+            {
+                "idxs": list(pending_idxs),
+                "text": text,
+                "lines": [lines[i] for i in pending_idxs],
+            }
+        )
+        pending_idxs = []
+        pending_parts = []
+
+    for i in range(start, end):
+        raw = lines[i]
+        stripped = raw.strip()
+        if stripped.startswith("- [ ]") or stripped.startswith("- [x]"):
+            flush()
+            pending_idxs = [i]
+            if stripped.startswith("- [x]"):
+                body = stripped[len("- [x]") :].strip()
+            else:
+                body = stripped[len("- [ ]") :].strip()
+            pending_parts = [body]
+        elif pending_idxs and stripped.startswith("- ["):
+            flush()
+        elif (
+            pending_idxs
+            and raw[:1].isspace()
+            and not stripped.startswith("- ")
+        ):
+            pending_idxs.append(i)
+            pending_parts.append(stripped)
+        elif pending_idxs and stripped.startswith("#"):
+            flush()
+    flush()
+    return blocks
+
+
+def move_verified_lines(markdown: str, verified_texts: set[str]) -> str:
+    """Move Slack-Verified smoke lines into ### Verified. Never delete a line."""
+    normalized = {normalize_item(text) for text in verified_texts}
+    if not normalized:
+        return markdown
+    lines = markdown.splitlines(keepends=True)
+    not_idx = _heading_index(lines, "### Not verified")
+    verified_idx = _heading_index(lines, "### Verified")
+    if not_idx is None or verified_idx is None or verified_idx <= not_idx:
+        return check_off_verified(markdown, verified_texts)
+
+    after_idx = len(lines)
+    for i in range(verified_idx + 1, len(lines)):
+        stripped = lines[i].strip()
+        if stripped.startswith("## ") and not stripped.startswith("### "):
+            after_idx = i
+            break
+
+    blocks = _checkbox_blocks(lines, not_idx + 1, verified_idx)
+    move_idxs: set[int] = set()
+    moved_lines: list[str] = []
+    for block in blocks:
+        if normalize_item(block["text"]) not in normalized:
+            continue
+        first = block["lines"][0].replace("- [ ]", "- [x]", 1)
+        moved_lines.append(first if first.endswith("\n") else first + "\n")
+        for extra in block["lines"][1:]:
+            moved_lines.append(extra if extra.endswith("\n") else extra + "\n")
+        move_idxs.update(block["idxs"])
+
+    if not moved_lines:
+        return markdown
+
+    keep_verified: list[str] = []
+    for raw in lines[verified_idx + 1 : after_idx]:
+        if PLACEHOLDER_RE.match(raw.strip()):
+            continue
+        keep_verified.append(raw)
+    while keep_verified and keep_verified[0].strip() == "":
+        keep_verified.pop(0)
+    while keep_verified and keep_verified[-1].strip() == "":
+        keep_verified.pop()
+
+    heading = lines[verified_idx]
+    if not heading.endswith("\n"):
+        heading += "\n"
+    new_verified = [heading, "\n"]
+    if keep_verified:
+        new_verified.extend(keep_verified)
+        if not new_verified[-1].endswith("\n"):
+            new_verified[-1] += "\n"
+        new_verified.append("\n")
+    new_verified.extend(moved_lines)
+    if not new_verified[-1].endswith("\n"):
+        new_verified[-1] += "\n"
+
+    rebuilt: list[str] = []
+    rebuilt.extend(lines[: not_idx + 1])
+    for i in range(not_idx + 1, verified_idx):
+        if i not in move_idxs:
+            rebuilt.append(lines[i])
+    rebuilt.extend(new_verified)
+    if after_idx < len(lines):
+        if rebuilt and rebuilt[-1].strip() != "" and lines[after_idx].strip():
+            rebuilt.append("\n")
+        rebuilt.extend(lines[after_idx:])
+    result = "".join(rebuilt)
+    if markdown.endswith("\n") and not result.endswith("\n"):
+        result += "\n"
+    return result
 
 
 def notify_channel() -> str:
@@ -620,7 +752,7 @@ def cmd_snapshot(args: argparse.Namespace) -> None:
     changed = 0
     for path in release_files(releases_dir):
         original = path.read_text(encoding="utf-8")
-        updated = check_off_verified(original, verified)
+        updated = move_verified_lines(original, verified)
         if updated != original:
             path.write_text(updated, encoding="utf-8")
             changed += 1
