@@ -42,7 +42,9 @@ AI assistance. Git hooks and Conventional Commits apply regardless of agent.
 - **Do not commit on `main`** unless a human explicitly authorizes a documented exception
   (foundation bootstrap or emergency hotfix — see `CLAUDE.md`).
 - **Inbox / direct work is a drop** — see `sdlc-drop` (`/sdlc-drop`): one
-  worktree + one PR. `run` / `decompose` stay the spec-task opt-in.
+  worktree + one PR. Same-session work on a one-SHA smoke host is **one
+  bundle**, not sibling PRs (`sdlc-live-host-bundle`). `run` /
+  `decompose` stay the spec-task opt-in.
 - Conventional Commits are enforced by husky `commit-msg` in every Rosetta repo.
 - **No “Made with Cursor” (or similar) in commits or PR descriptions** — see
   `.claude/rules/no-tool-attribution.md` / `.cursor/rules/no-tool-attribution.mdc`.

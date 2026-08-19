@@ -45,6 +45,8 @@ const mirrorClaudeRulesToCursor = (
               ? 'TSDoc / JSDoc bar for backend HSR classes and frontend exports (SDLC)'
               : stem === 'sdlc-drop'
                 ? 'Default: inbox/direct work is one sdlc-workflow drop (one worktree + one PR)'
+                : stem === 'sdlc-live-host-bundle'
+                  ? 'Same-session related work on a one-SHA smoke host is one drop (one branch, one PR)'
                 : stem === 'sdlc-run-supervise'
                 ? 'Spec-task opt-in: background-supervise sdlc-workflow runs (--supervise --detach + heartbeat)'
                 : stem === 'pr-approve-watch'

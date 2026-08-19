@@ -38,6 +38,11 @@ When the ask is a GitHub issue (or a small set) that should land as **one PR**:
   as commits, `drop --finish` opens the PR, then `pr-approve-watch`.
 - Slash reminder: `/sdlc-drop`.
 - Do **not** `decompose` a drop into per-task PRs.
+- **Live smoke host = one SHA.** Same-session related work is **one
+  bundle** (one branch, many commits, one PR). Do not `--finish` a
+  sibling drop from the default branch and steal dest / `admit.dev` —
+  see **`sdlc-live-host-bundle`**. Unrelated work still branches from
+  dest.
 
 `--finish` does **not** wait on reviewer, CI, or AC. For `direct` it then
 calls `gh pr merge`. That succeeds when protection does not require a
@@ -173,6 +178,11 @@ Merge stacks bottom-up (parent first). When the parent merges, GitHub automatica
 the child PR onto `main` — no conflict, no rebase. Stacked PRs require merge commits (never
 squash-merge a stack). Unrelated work keeps branching from `main` so PRs stay independently
 mergeable — do not chain by default.
+
+**Live-host bundle is not a stack of PRs.** Same-session dest / SB work
+that must share one smoke SHA is **one drop, one PR** (commits, not
+child PRs). See **`sdlc-live-host-bundle`**. If you do stack for
+per-issue review, deploy **only the tip**.
 
 **Default: do not commit on `main`.** All product work lands via a topic branch + PR.
 

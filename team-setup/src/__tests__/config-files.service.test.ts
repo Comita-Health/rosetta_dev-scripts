@@ -48,6 +48,7 @@ describe('layDownRootConfig', () => {
           'code-style.md',
           'inline-docs.md',
           'sdlc-drop.md',
+          'sdlc-live-host-bundle.md',
           'sdlc-run-supervise.md',
           'pr-approve-watch.md',
           'comita-brand-spelling.md',
@@ -91,6 +92,10 @@ describe('layDownRootConfig', () => {
     expect(mockWriteFileSync).toHaveBeenCalledWith(
       path.join('/base', '.cursor', 'rules', 'sdlc-drop.mdc'),
       expect.stringContaining('one sdlc-workflow drop')
+    );
+    expect(mockWriteFileSync).toHaveBeenCalledWith(
+      path.join('/base', '.cursor', 'rules', 'sdlc-live-host-bundle.mdc'),
+      expect.stringContaining('one-SHA smoke host')
     );
     expect(mockWriteFileSync).toHaveBeenCalledWith(
       path.join('/base', '.cursor', 'rules', 'sdlc-run-supervise.mdc'),
