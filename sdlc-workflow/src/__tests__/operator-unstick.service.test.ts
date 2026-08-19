@@ -9,6 +9,8 @@ import {
 } from '../services/gate-remediation.service';
 import {
   classifyOperatorUnstickOutcome,
+  classifyRiskyProceedSource,
+  engineClassifiesStrategyAsRisky,
   OPERATOR_UNSTICK_ATTEMPT_LIMIT,
   OperatorUnstickService,
   IOperatorUnstickService,
@@ -451,6 +453,32 @@ describe('OperatorUnstickService (SPEC-PRD-0025-P1 T-03)', () => {
     const outcome = await service.unstick(input());
 
     expect(outcome.kind).toBe('risky-proceed');
+    if (outcome.kind === 'risky-proceed') {
+      expect(outcome.classifiedBy).toBe('agent');
+    }
+    expect(recordEscalateTier).toHaveBeenCalledWith(
+      '/runs',
+      state,
+      'T-01',
+      'advisory-risky'
+    );
+    expect(suppressesBlockingEscalate(outcome.kind)).toBe(true);
+  });
+
+  it('engine-classifies risky-advisory strategy as risky-proceed (classifiedBy engine)', async () => {
+    headSha.mockReset().mockReturnValue('same-sha');
+    agentRun.mockResolvedValue({
+      ok: true,
+      output:
+        'OUTCOME: risky-advisory — proceeded under contested tip assumption'
+    });
+
+    const outcome = await service.unstick(input());
+
+    expect(outcome.kind).toBe('risky-proceed');
+    if (outcome.kind === 'risky-proceed') {
+      expect(outcome.classifiedBy).toBe('engine');
+    }
     expect(recordEscalateTier).toHaveBeenCalledWith(
       '/runs',
       state,
@@ -752,5 +780,104 @@ describe('suppressesBlockingEscalate', () => {
     expect(suppressesBlockingEscalate('authority-bound')).toBe(false);
     expect(suppressesBlockingEscalate('exhausted')).toBe(false);
     expect(suppressesBlockingEscalate('skipped')).toBe(false);
+  });
+});
+
+describe('engine risky strategy classification (SPEC-PRD-0025-P1 T-04)', () => {
+  const base = {
+    attempt: 1,
+    attemptLimit: 2,
+    taskMerged: false,
+    headMoved: false,
+    policyRewriteAttempt: false
+  };
+
+  it('classifies risky-advisory marker as risky-proceed (engine source)', () => {
+    const output =
+      'OUTCOME: risky-advisory — continuing under contested tip assumption';
+    expect(
+      classifyOperatorUnstickOutcome({ ...base, agentOutput: output })
+    ).toBe('risky-proceed');
+    expect(engineClassifiesStrategyAsRisky(output)).toBe(true);
+    expect(classifyRiskyProceedSource(output)).toBe('engine');
+  });
+
+  it('attributes explicit risky-proceed marker to agent', () => {
+    const output = 'OUTCOME: risky-proceed — continuing with advisory';
+    expect(
+      classifyOperatorUnstickOutcome({ ...base, agentOutput: output })
+    ).toBe('risky-proceed');
+    expect(classifyRiskyProceedSource(output)).toBe('agent');
+  });
+
+  it('does not let policy-rewrite + risky-advisory self-authorize', () => {
+    expect(
+      classifyOperatorUnstickOutcome({
+        ...base,
+        agentOutput: 'OUTCOME: risky-advisory — edited specs',
+        policyRewriteAttempt: true
+      })
+    ).toBe('abstained');
+  });
+
+  it('does not reclassify OUTCOME: abstained that mentions risky-advisory', () => {
+    // Prompt echo / restatement — the unstick prompt names risky-advisory
+    // next to abstain guidance; bare substring must not suppress escalate.
+    const output =
+      'OUTCOME: abstained — considered the risky-advisory path from the ' +
+      'prompt but cannot proceed safely without human review';
+    expect(engineClassifiesStrategyAsRisky(output)).toBe(false);
+    expect(
+      classifyOperatorUnstickOutcome({ ...base, agentOutput: output })
+    ).toBe('abstained');
+    expect(suppressesBlockingEscalate('abstained')).toBe(false);
+  });
+
+  it('keeps OUTCOME: risky-advisory even when narrative mentions abstain', () => {
+    const output =
+      'OUTCOME: risky-advisory — did not abstain; continuing under tip assumption';
+    expect(engineClassifiesStrategyAsRisky(output)).toBe(true);
+    expect(
+      classifyOperatorUnstickOutcome({ ...base, agentOutput: output })
+    ).toBe('risky-proceed');
+  });
+
+  it('does not treat a bare risky-advisory token as engine continue', () => {
+    const output =
+      'Discussed risky-advisory with the operator mandate; still stuck on tip';
+    expect(engineClassifiesStrategyAsRisky(output)).toBe(false);
+    expect(
+      classifyOperatorUnstickOutcome({ ...base, agentOutput: output })
+    ).toBe('abstained');
+  });
+
+  it('does not reclassify last-attempt exhaust that mentions risky-advisory', () => {
+    const output =
+      'still stuck after tip rebase; risky-advisory was considered but no clear';
+    expect(engineClassifiesStrategyAsRisky(output)).toBe(false);
+    expect(
+      classifyOperatorUnstickOutcome({
+        ...base,
+        attempt: 2,
+        agentOutput: output
+      })
+    ).toBe('exhausted');
+  });
+
+  it('does not treat bare risky-proceed prose as agent continue', () => {
+    const output =
+      'The prompt says write risky-proceed only when continuing; abstaining instead';
+    expect(
+      classifyOperatorUnstickOutcome({ ...base, agentOutput: output })
+    ).toBe('abstained');
+  });
+
+  it('excludes abstain language from risky-assumption engine continue', () => {
+    const output =
+      'risky assumption about tip — abstaining rather than continue';
+    expect(engineClassifiesStrategyAsRisky(output)).toBe(false);
+    expect(
+      classifyOperatorUnstickOutcome({ ...base, agentOutput: output })
+    ).toBe('abstained');
   });
 });
