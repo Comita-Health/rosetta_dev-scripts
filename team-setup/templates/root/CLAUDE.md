@@ -23,6 +23,14 @@ The product is spelled **Comita**. **Kamita** is the pronunciation only —
 never the spelling in UI, git, or docs (**Comita says**, **Run Comita**).
 Always-on rule: `.claude/rules/comita-brand-spelling.md`.
 
+## Theme and buttons (product SPAs)
+
+Admissions, Accounts, Care, Contracts, and the **next** SPA share one
+chrome: `GET /public/branding` + `@comita/shared-ui`
+`createBrandedTheme` / `PublicBrandingRoot` / `PrimaryButton`. Do not
+hard-code a second primary hex. Always-on rule: `.claude/rules/comita-theme.md`.
+Details: `comita_admissions/docs/theme-and-buttons.md`.
+
 ## Foundations — Read First
 
 `rosetta_docs/foundations/` is the project's constitution — founding context,
