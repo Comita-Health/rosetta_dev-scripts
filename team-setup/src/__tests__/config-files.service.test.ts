@@ -51,6 +51,7 @@ describe('layDownRootConfig', () => {
           'sdlc-run-supervise.md',
           'pr-approve-watch.md',
           'comita-brand-spelling.md',
+          'comita-theme.md',
           'work-intake.md',
           'stakeholder-verify-watch.md'
         ];
@@ -103,6 +104,10 @@ describe('layDownRootConfig', () => {
     expect(mockWriteFileSync).toHaveBeenCalledWith(
       path.join('/base', '.cursor', 'rules', 'comita-brand-spelling.mdc'),
       expect.stringContaining('Spell the product Comita')
+    );
+    expect(mockWriteFileSync).toHaveBeenCalledWith(
+      path.join('/base', '.cursor', 'rules', 'comita-theme.mdc'),
+      expect.stringContaining('One Comita theme and button set')
     );
     expect(mockWriteFileSync).toHaveBeenCalledWith(
       path.join('/base', '.cursor', 'rules', 'work-intake.mdc'),

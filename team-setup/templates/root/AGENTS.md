@@ -49,6 +49,9 @@ AI assistance. Git hooks and Conventional Commits apply regardless of agent.
 - **Spell the product Comita** (pronounced “Kamita”) — see
   `comita-brand-spelling`. Never write Kamita in UI, git, or docs except to
   document that pronunciation.
+- **One theme and button set for every product SPA** — see `comita-theme`.
+  `PublicBrandingRoot` + `PrimaryButton` from `@comita/shared-ui`. Do not
+  invent a second primary hex.
 - **Watched issues drive to resolution** — see `issue-resolve-watch`
   (`/watch-issue-resolve`); arm after taking ownership (recreate as Addi when
   asked).
