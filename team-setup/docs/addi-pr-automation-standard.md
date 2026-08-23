@@ -19,6 +19,7 @@ which path owns what.
 | Stacked PR (`pull.stack` set), Approved + mergeable                       | **GHA (gold)**                 | `PUT .../merge-async` with `merge_method=merge` (sync `gh pr merge` fails)      |
 | Stack blocked because a **lower** PR is CONFLICTING                       | **Agent / human**              | Fix bottom-up; GHA comments only — does not auto-resolve conflicts              |
 | Human **Requests changes**                                                | **Agent / `pr-approve-watch`** | Fix, push, reply; **do not merge** until Approve                                |
+| Required GitHub checks fail                                               | **Agent / `pr-checks-watch`**  | Logs → fix → push (up to 3); **do not merge** on green                          |
 | Review-comment triage (Copilot / human threads)                           | **Agent / `pr-approve-watch`** | Reply + resolve; GHA does not triage comments                                   |
 | Agent opens a PR                                                          | **Addi identity**              | `addi-github-identity` / `addi-authorship` — activate App before `gh pr create` |
 | Consumer **Jira ticket → code → PR → merge** (no human Approve)           | **`process-ticket.yml`**       | Separate automation; keep. Not replaceable by merge-on-approve                  |

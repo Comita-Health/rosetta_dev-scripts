@@ -6,7 +6,8 @@ land as **one PR**, or the user asks to drop / `/sdlc-drop`:
 - Follow the **`sdlc-drop`** skill.
 - Arm `sdlc-workflow drop --drop-id … --repo … --issues owner/repo#N`.
 - Implement as commits in `~/.rosetta/sdlc-drops/<id>/worktree`.
-- `drop --finish` opens the one PR; then arm **`pr-approve-watch`**.
+- `drop --finish` opens the one PR; then arm **`pr-approve-watch`**
+  and **`pr-checks-watch`**.
 - Do **not** `decompose` a drop into per-task PRs.
 - `run` / `decompose` stay the spec-task opt-in for an Accepted
   multi-task spec — see `sdlc-run-supervise`.

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **team-setup:** add `pr-checks-watch` skill/rule/command — background-watch
+  open PRs for GitHub check failures and wake the agent to fix/push (do not
+  merge on green). `sdlc-drop --finish` now arms this **and**
+  `pr-approve-watch`. Replaces the blocking `gh pr checks` poll loop in
+  CLAUDE.md. Session-mortal until PRD-0020 Phase 3 absorbs remaining
+  bash watchers.
+
 - **team-setup (Comita overlay):** fork templates keep brand / work-intake /
   Slack verify and add Comita drop arm defaults (Addi activate,
   admissions `--base-ref origin/build-env/dev`, `--require-approve`).

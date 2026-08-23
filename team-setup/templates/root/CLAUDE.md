@@ -35,7 +35,8 @@ conflict, philosophy wins.
 When the ask is a GitHub issue (or a small set) that should land as **one PR**:
 
 - Follow **`sdlc-drop`** — `sdlc-workflow drop` arms one worktree, implement
-  as commits, `drop --finish` opens the PR, then `pr-approve-watch`.
+  as commits, `drop --finish` opens the PR, then `pr-approve-watch` and
+  `pr-checks-watch`.
 - Slash reminder: `/sdlc-drop`.
 - Do **not** `decompose` a drop into per-task PRs.
 
@@ -73,6 +74,15 @@ on `AGENT_LOOP_WAKE_pr_approve`, triage review comments. If the repo enables
 default branch after GHA merges. Otherwise merge as Addi, then pull. Do **not**
 treat chat "approved" as the proceed signal. Slash: `/watch-pr-approve`. See
 `rosetta_dev-scripts/team-setup/docs/addi-pr-automation-standard.md`.
+
+## PR checks watch (CI failures)
+
+When you open or push to an agent PR: follow **`pr-checks-watch`** — arm the
+background checks watcher, wake on `AGENT_LOOP_WAKE_pr_checks`. After
+`sdlc-drop --finish`, arm this **and** `pr-approve-watch`. On red: logs →
+fix → push (up to 3 iterations). On green: brief note only; do **not**
+merge. Do **not** block the chat on `gh pr checks --watch`. Slash:
+`/watch-pr-checks`.
 
 ## Work intake and stakeholder verify
 
@@ -273,16 +283,12 @@ After opening or pushing to a PR, GitHub Copilot posts an automated review (typi
 
 ### PR checks review cycle
 
-After pushing to a PR, required status checks (CI) run automatically. **You must monitor and fix failing checks.** This cycle runs in parallel with the Copilot review cycle.
-
-1. Poll `gh run list --branch {branch} --limit 5 --json status,conclusion,name,databaseId` every 30 seconds until all runs reach a terminal state (`completed`, `cancelled`, `failure`), up to 15 minutes.
-2. If all checks pass, the cycle is done.
-3. If any check fails:
-   a. Retrieve logs: `gh run view {run-id} --log-failed`
-   b. Diagnose the failure — read the error output and identify the root cause.
-   c. Fix the issue locally, commit with an appropriate message (e.g. `fix(<scope>): correct type error caught by CI`), and push.
-   d. Return to step 1 — poll the new run.
-4. Repeat until all checks pass, up to **3 iterations**. If checks still fail after 3 fix attempts, flag for human review with a summary of what was tried and what remains broken.
+After pushing to a PR, required status checks (CI) run automatically. **Arm
+`pr-checks-watch` instead of blocking the chat on a poll loop.** The
+watcher wakes on `checks_failed` / `checks_success`. On failure: retrieve
+logs (`gh run view {run-id} --log-failed`), fix, commit, push; the watcher
+re-fires on the next SHA. Repeat up to **3 iterations**, then flag for
+human review. Do **not** merge on green.
 
 ### Cleaning up
 

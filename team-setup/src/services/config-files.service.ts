@@ -55,6 +55,8 @@ const mirrorClaudeRulesToCursor = (
                       ? 'Default: watch owned GitHub issues toward resolution (Done-when → close)'
                       : stem === 'deploy-verify-watch'
                         ? 'Default: live-verify PRs auto-dispatch deploy on push; re-smoke before Approve'
+                        : stem === 'pr-checks-watch'
+                          ? 'Default: background-watch agent PRs for GitHub check failures; fix and push, do not merge on green'
                           : stem === 'addi-authorship'
                           ? 'Mandatory: open PRs and issues as Addi (GitHub App), never as the human gh user'
                           : stem === 'comita-brand-spelling'
