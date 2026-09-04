@@ -260,7 +260,61 @@ install_deps() {
   fi
 }
 
+# Bootstrap the sibling product repos in the Comita multi-repo workspace so a
+# fresh Cloud Agent starts with dependencies ready (and, under environment
+# Builds, baked into the snapshot). Best-effort and non-fatal by design: a
+# failure here must not abort rosetta_dev-scripts setup, and a repo that is
+# not checked out (e.g. a secretless build that only fetched this repo) is
+# simply skipped. comita_docs and rosetta_chronicle_comita-health are
+# docs-only (no package.json) and need no bootstrap.
+install_sibling_repos() {
+  export BUN_INSTALL="${BUN_INSTALL:-$HOME/.bun}"
+  export PATH="$BUN_INSTALL/bin:$PATH"
+
+  local workspace
+  workspace="$(cd "$ROOT/.." && pwd)"
+
+  # comita_admissions — yarn (Classic) workspaces monorepo
+  local admissions="$workspace/comita_admissions"
+  if [[ -f "$admissions/package.json" ]]; then
+    if ensure_cmd yarn; then
+      log 'yarn install (comita_admissions)'
+      if (cd "$admissions" && yarn install --frozen-lockfile); then
+        log 'comita_admissions deps ready'
+      elif (cd "$admissions" && yarn install); then
+        log 'comita_admissions deps ready (lockfile refreshed)'
+      else
+        log 'WARN: comita_admissions yarn install failed — agent can retry'
+      fi
+    else
+      log 'yarn missing — skipping comita_admissions install'
+    fi
+  else
+    log 'comita_admissions not checked out — skipping'
+  fi
+
+  # comita_website — npm + Astro static site
+  local website="$workspace/comita_website"
+  if [[ -f "$website/package.json" ]]; then
+    if ensure_cmd npm; then
+      log 'npm ci (comita_website)'
+      if (cd "$website" && npm ci); then
+        log 'comita_website deps ready'
+      elif (cd "$website" && npm install); then
+        log 'comita_website deps ready (lockfile refreshed)'
+      else
+        log 'WARN: comita_website npm install failed — agent can retry'
+      fi
+    else
+      log 'npm missing — skipping comita_website install'
+    fi
+  else
+    log 'comita_website not checked out — skipping'
+  fi
+}
+
 install_toolchain
 materialize_addi
 install_deps
+install_sibling_repos
 log 'done'
