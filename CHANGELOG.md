@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **team-setup:** `deploy-verify-watch` classifies Deploy Organization
+  frontend / backend slices from the PR file list. Omit `--frontend` /
+  `--backend` unless forcing a slice. Shared + lockfile count as both;
+  unmatched paths fail open to both so a SPA deploy never ships against
+  a stale Lambda. `--classify-dispatch` / `--classify-dispatch-paths`
+  print the chosen slices.
+
 - **team-setup (Comita overlay):** fork templates keep brand / work-intake /
   Slack verify and add Comita drop arm defaults (Addi activate,
   admissions `--base-ref origin/build-env/dev`, `--require-approve`).

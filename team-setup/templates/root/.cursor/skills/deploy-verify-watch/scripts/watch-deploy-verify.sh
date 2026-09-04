@@ -8,14 +8,24 @@
 #     [--activate ~/.config/rosetta/github-app-activate.sh] \
 #     [--workflow "Deploy Organization"] \
 #     [--environment dev] \
-#     [--frontend|--no-frontend] [--backend] [--dns] \
+#     [--frontend|--no-frontend] [--backend|--no-backend] [--dns|--no-dns] \
 #     [--auto-dispatch|--no-auto-dispatch] \
 #     [--dispatch-on-arm] \
 #     [--kickoff] \
 #     Rosetta-Foundation/rosetta_dev-scripts#1
 #
+# Slice flags are optional. With none, each dispatch classifies frontend /
+# backend from the PR file list (shared + lockfile count as both; no match
+# fails open to both). Passing any slice flag switches to explicit mode.
+#
 # Classify only (exit 0 = needs live verify):
 #   bash …/watch-deploy-verify.sh --classify Owner/repo#N
+# Print dispatch slices for a PR:
+#   bash …/watch-deploy-verify.sh --classify-dispatch Owner/repo#N
+# Print slices for newline-separated paths (no gh):
+#   bash …/watch-deploy-verify.sh --classify-dispatch-paths <<'EOF'
+#   packages/app/backend/src/foo.ts
+#   EOF
 #
 # Sentinel (stdout): AGENT_LOOP_WAKE_deploy_verify <json>
 # Pair with Cursor agent loop notify_on_output on ^AGENT_LOOP_WAKE_deploy_verify.
@@ -28,13 +38,17 @@ INTERVAL=30
 ACTIVATE=""
 WORKFLOW="Deploy Organization"
 ENVIRONMENT="dev"
-FRONTEND=1
+# auto = classify slices from PR paths; explicit = honor CLI flags.
+SLICE_MODE=auto
+FRONTEND=0
 BACKEND=0
 DNS=0
 AUTO_DISPATCH=1
 DISPATCH_ON_ARM=0
 KICKOFF=0
 CLASSIFY_ONLY=""
+CLASSIFY_DISPATCH=""
+CLASSIFY_DISPATCH_PATHS=0
 TARGETS=()
 
 while [[ $# -gt 0 ]]; do
@@ -72,19 +86,45 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --frontend)
+      SLICE_MODE=explicit
       FRONTEND=1
       shift
       ;;
     --no-frontend)
+      SLICE_MODE=explicit
       FRONTEND=0
       shift
       ;;
     --backend)
+      SLICE_MODE=explicit
       BACKEND=1
       shift
       ;;
+    --no-backend)
+      SLICE_MODE=explicit
+      BACKEND=0
+      shift
+      ;;
     --dns)
+      SLICE_MODE=explicit
       DNS=1
+      shift
+      ;;
+    --no-dns)
+      SLICE_MODE=explicit
+      DNS=0
+      shift
+      ;;
+    --classify-dispatch)
+      CLASSIFY_DISPATCH="${2:?}"
+      shift 2
+      ;;
+    --classify-dispatch=*)
+      CLASSIFY_DISPATCH="${1#*=}"
+      shift
+      ;;
+    --classify-dispatch-paths)
+      CLASSIFY_DISPATCH_PATHS=1
       shift
       ;;
     --auto-dispatch)
@@ -220,6 +260,126 @@ print(0)
 PY
 }
 
+# Prints frontend<TAB>backend<TAB>dns (0/1). Auto mode reads PR files (or
+# DISPATCH_PATHS). Shared / lockfile count as both. No match fails open to
+# frontend+backend so a UI-only dispatch never ships against a stale Lambda.
+classify_pr_slices() {
+  local repo="${1:-}" num="${2:-}"
+  if [[ "$SLICE_MODE" == "explicit" ]]; then
+    printf '%s\t%s\t%s\n' "$FRONTEND" "$BACKEND" "$DNS"
+    return
+  fi
+  REPO="$repo" NUM="$num" DISPATCH_PATHS="${DISPATCH_PATHS:-}" python3 - <<'PY'
+import json, os, re, subprocess, sys
+
+FRONTEND_RE = re.compile(
+    r"(^|/)("
+    r"packages/app/frontend|"
+    r"packages/app/accounts-frontend|"
+    r"packages/app/care-frontend|"
+    r"packages/app/contracts-frontend|"
+    r"packages/app/shared-ui|"
+    r"packages/promote-admin|"
+    r"constructs/spa-frontend|"
+    r"stacks/frontend|"
+    r"stacks/promote-admin-stack|"
+    r"frontend-app\.ts|"
+    r"organization-domain-config"
+    r")",
+    re.I,
+)
+BACKEND_RE = re.compile(
+    r"(^|/)("
+    r"packages/app/backend|"
+    r"packages/infrastructure/src/functions|"
+    r"packages/infrastructure/src/email-templates|"
+    r"api-app\.ts|"
+    r"backend-app\.ts|"
+    r"stacks/(dns-stack|api-stack|core-stack|api-gateway-stack|"
+    r"lambda-|base-backend-stack|scheduler-stack|database-stack|"
+    r"audit-sink-stack|account-bootstrap-stack|hosted-zones-stack)|"
+    r"packages/infrastructure/package\.json"
+    r")",
+    re.I,
+)
+BOTH_RE = re.compile(
+    r"(^|/)packages/app/shared(/|$)|"
+    r"(^|/)packages/infrastructure/cdk\.json$|"
+    r"^package\.json$|"
+    r"^yarn\.lock$",
+    re.I,
+)
+
+def classify(paths):
+    fe = be = False
+    for raw in paths:
+        path = (raw or "").replace("\\", "/")
+        if BOTH_RE.search(path):
+            fe = be = True
+        if FRONTEND_RE.search(path):
+            fe = True
+        if BACKEND_RE.search(path):
+            be = True
+    if not fe and not be:
+        fe = be = True
+    return fe, be
+
+paths_env = os.environ.get("DISPATCH_PATHS")
+if paths_env:
+    paths = [p for p in paths_env.split("\n") if p.strip()]
+elif os.environ.get("REPO") and os.environ.get("NUM"):
+    try:
+        pr = json.loads(
+            subprocess.check_output(
+                [
+                    "gh",
+                    "pr",
+                    "view",
+                    os.environ["NUM"],
+                    "-R",
+                    os.environ["REPO"],
+                    "--json",
+                    "files",
+                ],
+                text=True,
+                stderr=subprocess.DEVNULL,
+            )
+        )
+        paths = [f.get("path") or "" for f in (pr.get("files") or [])]
+    except Exception:
+        paths = []
+else:
+    paths = []
+
+fe, be = classify(paths)
+print(f"{int(fe)}\t{int(be)}\t0")
+PY
+}
+
+if [[ "$CLASSIFY_DISPATCH_PATHS" -eq 1 ]]; then
+  DISPATCH_PATHS="$(cat)"
+  SLICE_MODE=auto
+  slices=$(classify_pr_slices "" "")
+  IFS=$'\t' read -r fe be dns <<<"$slices"
+  echo "dispatch-slices: frontend=$fe backend=$be dns=$dns (auto)"
+  exit 0
+fi
+
+if [[ -n "$CLASSIFY_DISPATCH" ]]; then
+  activate
+  repo="${CLASSIFY_DISPATCH%%#*}"
+  num="${CLASSIFY_DISPATCH##*#}"
+  if [[ "$repo" == "$CLASSIFY_DISPATCH" || -z "$num" ]]; then
+    echo "watch-deploy-verify: bad --classify-dispatch target (want owner/repo#N)" >&2
+    exit 2
+  fi
+  SLICE_MODE=auto
+  slices=$(classify_pr_slices "$repo" "$num")
+  IFS=$'\t' read -r fe be dns <<<"$slices"
+  echo "dispatch-slices: frontend=$fe backend=$be dns=$dns (auto) $CLASSIFY_DISPATCH"
+  exit 0
+fi
+
 if [[ -n "$CLASSIFY_ONLY" ]]; then
   activate
   repo="${CLASSIFY_ONLY%%#*}"
@@ -238,12 +398,13 @@ if [[ -n "$CLASSIFY_ONLY" ]]; then
 fi
 
 if [[ ${#TARGETS[@]} -eq 0 ]]; then
-  echo "usage: $0 [--interval SECONDS] [--activate PATH] [--workflow NAME] [--environment ENV] [--frontend|--no-frontend] [--backend] [--dns] [--auto-dispatch|--no-auto-dispatch] [--dispatch-on-arm] [--kickoff] owner/repo#N [...]" >&2
+  echo "usage: $0 [--interval SECONDS] [--activate PATH] [--workflow NAME] [--environment ENV] [--frontend|--no-frontend] [--backend|--no-backend] [--dns|--no-dns] [--auto-dispatch|--no-auto-dispatch] [--dispatch-on-arm] [--kickoff] owner/repo#N [...]" >&2
   echo "   or: $0 --classify owner/repo#N" >&2
+  echo "   or: $0 --classify-dispatch owner/repo#N" >&2
   exit 2
 fi
 
-if [[ "$FRONTEND" -eq 0 && "$BACKEND" -eq 0 && "$DNS" -eq 0 ]]; then
+if [[ "$SLICE_MODE" == "explicit" && "$FRONTEND" -eq 0 && "$BACKEND" -eq 0 && "$DNS" -eq 0 ]]; then
   echo "watch-deploy-verify: enable at least one of --frontend / --backend / --dns" >&2
   exit 2
 fi
@@ -367,20 +528,23 @@ PY
 }
 
 dispatch_deploy() {
-  local repo="$1" branch="$2"
+  local repo="$1" branch="$2" num="${3:-}"
+  local fe be dns
+  IFS=$'\t' read -r fe be dns < <(classify_pr_slices "$repo" "$num")
+  echo "watch-deploy-verify: slices frontend=$fe backend=$be dns=$dns ($SLICE_MODE) $repo${num:+#$num}" >&2
   local -a fields=()
   fields+=(-f "environment=${ENVIRONMENT}")
-  if [[ "$FRONTEND" -eq 1 ]]; then
+  if [[ "$fe" -eq 1 ]]; then
     fields+=(-f "frontend=true")
   else
     fields+=(-f "frontend=false")
   fi
-  if [[ "$BACKEND" -eq 1 ]]; then
+  if [[ "$be" -eq 1 ]]; then
     fields+=(-f "backend=true")
   else
     fields+=(-f "backend=false")
   fi
-  if [[ "$DNS" -eq 1 ]]; then
+  if [[ "$dns" -eq 1 ]]; then
     fields+=(-f "dns=true")
   else
     fields+=(-f "dns=false")
@@ -430,8 +594,10 @@ PY
 # stdout: reason|sha|run_id|run_url|branch  (reason may be empty)
 poll_target() {
   local file="$1" repo="$2" num="$3"
+  local fe be dns
+  IFS=$'\t' read -r fe be dns < <(classify_pr_slices "$repo" "$num")
   FILE="$file" REPO="$repo" NUM="$num" WORKFLOW="$WORKFLOW" \
-  AUTO_DISPATCH="$AUTO_DISPATCH" FRONTEND="$FRONTEND" BACKEND="$BACKEND" DNS="$DNS" \
+  AUTO_DISPATCH="$AUTO_DISPATCH" FRONTEND="$fe" BACKEND="$be" DNS="$dns" \
   ENVIRONMENT="$ENVIRONMENT" python3 - <<'PY'
 import json, os, subprocess, time
 
@@ -594,7 +760,7 @@ PY
     fi
   fi
   echo "watch-deploy-verify: dispatching $WORKFLOW ($ENVIRONMENT) for $target @ ${sha:0:12} on $branch" >&2
-  dispatch_deploy "$repo" "$branch"
+  dispatch_deploy "$repo" "$branch" "$num"
   sleep 4
   run_line=$(find_run_for_sha "$repo" "$branch" "$sha" || true)
   IFS='|' read -r run_id status conclusion run_url <<<"${run_line:-|||}"
@@ -613,7 +779,7 @@ PY
 activate
 REMAINING=${#TARGETS[@]}
 TICK=0
-echo "watch-deploy-verify: watching ${TARGETS[*]} every ${INTERVAL}s workflow='$WORKFLOW' env=$ENVIRONMENT auto_dispatch=$AUTO_DISPATCH (activate=${ACTIVATE_SCRIPT:-ambient-gh})" >&2
+echo "watch-deploy-verify: watching ${TARGETS[*]} every ${INTERVAL}s workflow='$WORKFLOW' env=$ENVIRONMENT slices=$SLICE_MODE auto_dispatch=$AUTO_DISPATCH (activate=${ACTIVATE_SCRIPT:-ambient-gh})" >&2
 
 declare -a REPOS NUMS
 i=0

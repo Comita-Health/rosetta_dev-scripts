@@ -56,13 +56,14 @@ When unsure, arm anyway and/or add the `verify-live` label.
 ## Launch template
 
 ```bash
-# From workspace root (paths work after team-setup update-config)
+# From workspace root (paths work after team-setup update-config).
+# Omit --frontend / --backend / --dns so each dispatch classifies slices
+# from the PR file list (shared + lockfile → both; no match → both).
 bash .claude/skills/deploy-verify-watch/scripts/watch-deploy-verify.sh \
   --interval 30 \
   --activate ~/.config/rosetta/github-app-activate.sh \
   --workflow "Deploy Organization" \
   --environment dev \
-  --frontend \
   --dispatch-on-arm \
   --kickoff \
   Rosetta-Foundation/rosetta_dev-scripts#1
