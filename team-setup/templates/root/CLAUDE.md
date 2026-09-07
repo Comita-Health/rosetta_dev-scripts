@@ -80,10 +80,11 @@ Intake (transcripts, Slack, Bret’s Feedback tracker, prompts) is **not** the
 backlog — promote it. GitHub Issues are the engineering ledger (`direct` /
 `bug-spec` / `plan`). PRDs are the product contract; ADRs are decisions that
 must still bind in a year. User-facing sandbox drops write dated
-`docs/releases/` (**Delivered** / **Not verified** / **Verified**) and upsert
-the same smoke lines to Slack **Sandbox verify**. Bret has no GitHub; he
-checks Verified or Failed there. Slack is the live ledger — do not poll it
-from a laptop; do not make Russ relay. Slash: `/watch-stakeholder-verify`
+`docs/releases/` (**Delivered** / **Not verified** / **Verified**) and post
+the same smoke lines as one **#comita-support** thread — root `@channel`,
+one reply per line. Bret has no GitHub; he reacts :white_check_mark: or
+:x: there. Slack is the live ledger — do not poll it from a laptop; do
+not make Russ relay. Slash: `/watch-stakeholder-verify`
 (publish only). DEV hosts are **SB / Sandbox** with stakeholders. When
 the operator linked a Slack thread as the ask, reply **in that thread**
 after the fix is deployed to SB — not on push or CI. Policy:

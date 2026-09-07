@@ -45,8 +45,8 @@ When unsure, arm anyway and/or add the `verify-live` label.
    the cataloging chat), reply **in that same thread** that a new update
    for the issue has been deployed to **SB** (sandbox — the DEV hosts;
    do not say “dev” to stakeholders). No `@channel`. PHI-free. Include
-   the issue URL and host. Do this in addition to Cursor chat and Slack
-   **Sandbox verify** publish. Do **not** reply on git push or CI green.
+   the issue URL and host. Do this in addition to Cursor chat and the
+   **Sandbox verify** thread. Do **not** reply on git push or CI green.
 5. On `deploy_failed`: remediate (logs → fix → push). The watcher re-dispatches
    on the new SHA.
 6. After any fix that invalidates a prior smoke, **do not wait for chat** —
@@ -107,5 +107,5 @@ consumer workspace.
 - Skipping the originating Slack thread when the operator linked it as
   the ask — Cursor chat alone is not enough for those items.
 - Saying “deployed to dev” in Slack; stakeholders call DEV **SB** /
-  **Sandbox**. Slack **Sandbox verify** is Bret’s smoke list — do not
-  mix that `@channel` publish with a thread reply.
+  **Sandbox**. The Slack **Sandbox verify** thread is Bret’s smoke
+  ledger — do not mix its `@channel` root with an operator thread reply.
