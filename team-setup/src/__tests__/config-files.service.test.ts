@@ -85,6 +85,12 @@ describe('layDownRootConfig', () => {
       expect.stringContaining('alwaysApply: true')
     );
     expect(mockWriteFileSync).toHaveBeenCalledWith(
+      path.join('/base', '.cursor', 'rules', 'architecture-hsr.mdc'),
+      expect.stringContaining(
+        'Mandatory Handler / Service / Repository + InversifyJS; substitutability is the goal'
+      )
+    );
+    expect(mockWriteFileSync).toHaveBeenCalledWith(
       path.join('/base', '.cursor', 'rules', 'inline-docs.mdc'),
       expect.stringContaining('TSDoc / JSDoc bar')
     );

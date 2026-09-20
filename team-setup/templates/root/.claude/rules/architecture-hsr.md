@@ -2,6 +2,20 @@
 
 **This pattern is mandatory for all TypeScript code in every Rosetta repo.** Treat a violation the same as a failing test.
 
+## Why this pattern
+
+The Repository layer is an **anti-corruption boundary**. Its job is to make
+the outside world replaceable. The container turns that substitution into
+configuration.
+
+**Acceptance test:** a vendor, datastore, or transport swap must be a new
+Repository plus a changed binding. If the swap requires editing a Service
+or Handler, the boundary is in the wrong place.
+
+A class that is `@injectable()`, uses `Symbol.for` tokens, and still
+returns a vendor SDK type from its public methods **fails this test**.
+Mechanics without substitutability are not compliance.
+
 ## The three layers
 
 Dependency direction is strictly one-way: **Handler → Service → Repository**.
@@ -27,6 +41,16 @@ Hard rules on direction:
 - Injected fields are `private readonly` and **prefixed with an underscore**
   (e.g. `private readonly _usageRepo: IUsageRepository`).
 - Consumers type an injected dependency as its **interface**, never the concrete class.
+- **Bind interfaces, not classes.** `container.bind<IFoo>(TOKENS.Foo).to(Foo)`
+  only. `container.bind(Foo).toSelf()` and `@inject(ConcreteClass)` are
+  violations. A token bound to a concrete class buys testability, not
+  substitutability — the Service still cannot take a different adapter.
+- **No singletons or static accessors.** Ban `private constructor` plus
+  `static getInstance()`, and module-level mutable instances. Lifetime
+  belongs to the container via `inSingletonScope()`.
+- **Config is injected, not read.** No `process.env` inside a Service or
+  Repository method. Env is read at the composition root and injected as
+  a typed config object.
 
 ## Tokens
 
@@ -59,6 +83,10 @@ Hard rules on direction:
 
 - Interfaces are **`I`-prefixed** (`IChronicleService`, `IGitRepository`).
 - **Never use `abstract class`** for contracts — use an interface.
+- **No vendor types in exported signatures.** A Repository may import an
+  SDK; its public contract may not accept or return SDK types. Boundary
+  DTOs live in `src/types.ts`. This is the rule that catches
+  `Promise<VendorSdk.Resource>`.
 
 ## Composition root
 
@@ -69,11 +97,16 @@ Hard rules on direction:
   3. `container.bind<IFoo>(TOKENS.Foo).to(Foo);` for every class
      (`.toConstantValue(x)` for pre-built singletons such as a logger).
   4. Resolve the root Handler with `container.get(TOKENS.RootHandler)` and export the bound entry point.
+- **One composition root per entry point.** `container.get()` anywhere else
+  is a service locator.
 
 ## Where other code goes
 
 - Pure functions live in `src/utils/` — never inline non-trivial pure logic in a handler/service.
 - Boundary/DTO/wire types live in `src/types.ts` — never duplicate them as local interfaces.
+- **There is no fourth layer.** Anything performing I/O is a Repository.
+  A `clients/`, `lib/`, or `integrations/` directory holding a vendor
+  client is a violation — wrap it as a Repository or delete it.
 
 ## Inline documentation (mandatory with the pattern)
 
@@ -116,3 +149,6 @@ Dependencies: `inversify@^7`, `reflect-metadata@^0.2`, `typescript@^7`.
 - `require()` the class-under-test and tokens **after** any module-level `jest.mock()` calls so the
   mocks apply before the class loads.
 - Test class behaviour only — **never** test the container wiring itself.
+- **Substitutability is provable in tests.** Bind a fake adapter to the
+  same token. If a test must `jest.mock` a vendor SDK to isolate a
+  Service, the port is missing.
