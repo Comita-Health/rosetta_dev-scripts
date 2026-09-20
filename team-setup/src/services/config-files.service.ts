@@ -38,7 +38,7 @@ const mirrorClaudeRulesToCursor = (
       const stem = file.replace(/\.md$/, '');
       const description =
         stem === 'architecture-hsr'
-          ? 'Mandatory HSR + InversifyJS: substitutability is the goal (vendor swap = new Repository + binding)'
+          ? 'Mandatory Handler / Service / Repository + InversifyJS; substitutability is the goal'
           : stem === 'code-style'
             ? 'TypeScript and Prettier code style for Rosetta'
             : stem === 'inline-docs'

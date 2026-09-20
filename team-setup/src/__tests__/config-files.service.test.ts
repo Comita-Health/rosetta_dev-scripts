@@ -86,7 +86,9 @@ describe('layDownRootConfig', () => {
     );
     expect(mockWriteFileSync).toHaveBeenCalledWith(
       path.join('/base', '.cursor', 'rules', 'architecture-hsr.mdc'),
-      expect.stringContaining('substitutability is the goal')
+      expect.stringContaining(
+        'Mandatory Handler / Service / Repository + InversifyJS; substitutability is the goal'
+      )
     );
     expect(mockWriteFileSync).toHaveBeenCalledWith(
       path.join('/base', '.cursor', 'rules', 'inline-docs.mdc'),
