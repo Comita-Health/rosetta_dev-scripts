@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **team-setup (watchers):** session-mortal `deploy-verify-watch`,
+  `issue-resolve-watch`, and workspace `pr-checks-watch` claim a
+  per-target lock (`~/.rosetta/locks/watchers/`). A second arm of the
+  same target prints `already armed` and exits 0 — no second poll loop
+  and no second `--dispatch-on-arm` Deploy Organization run. Stale
+  locks (dead PID) are reclaimed. Skills and always-on rules treat that
+  exit as success. Phase 3 of PRD-0020 still owns the daemon conversion.
+
 - **HSR:** substitutability is now a first-class rule — a vendor,
   datastore, or transport swap must be a new Repository plus a changed
   binding. The canonical `architecture-hsr` text names that acceptance
