@@ -1,0 +1,18 @@
+# PR checks watch (default for agent PRs)
+
+When you open or push to a pull request that runs GitHub checks, or the
+user asks to watch CI / PR checks:
+
+- Follow the **`pr-checks-watch`** skill.
+- Arm `.cursor/skills/pr-checks-watch/scripts/watch-pr-checks.sh` in the
+  background with agent wake on `AGENT_LOOP_WAKE_pr_checks`.
+- Prefer `--kickoff` so an already-red rollup remediates immediately.
+- On `checks_failed`: logs → fix in the drop worktree → commit `-s` →
+  push. Up to 3 iterations; then flag the human.
+- On `checks_success`: brief note only. Do **not** merge.
+- Pair with `pr-approve-watch`. Do **not** block the chat on
+  `gh pr checks --watch`.
+- **Chat `notify_on_output` is best-effort.** Drain
+  `AGENT_LOOP_WAKE_pr_checks` from the watcher terminal even when the
+  chat stays quiet; treat “CI failed” / “check watchers” as a nudge to
+  drain immediately.

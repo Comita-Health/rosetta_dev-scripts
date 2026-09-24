@@ -1,0 +1,10 @@
+---
+description: "Background-watch one or more open PRs for GitHub check failures (`owner/repo#N`). On `checks_failed`: read logs, fix, push (do not merge). On `checks_success`: brief note only — Approve remains the proceed signal. Follow the `pr-checks-watch` skill."
+alwaysApply: false
+---
+
+# /watch-pr-checks (Cursor)
+
+Background-watch one or more open PRs for GitHub check failures (`owner/repo#N`). On `checks_failed`: read logs, fix, push (do not merge). On `checks_success`: brief note only — Approve remains the proceed signal. Follow the `pr-checks-watch` skill (`.claude/skills/pr-checks-watch/SKILL.md` or `.cursor/skills/pr-checks-watch/SKILL.md`). Prefer `--kickoff`. Pair with `/watch-pr-approve`.
+
+Note: chat wake notify is best-effort — drain `AGENT_LOOP_WAKE_pr_checks` from the watcher terminal if the chat stays quiet.
