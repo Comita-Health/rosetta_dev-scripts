@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **team-setup:** `deploy-verify-watch` classifies Deploy Organization
+  frontend / backend slices from the PR file list. Omit `--frontend` /
+  `--backend` unless forcing a slice. Shared + lockfile count as both;
+  unmatched paths fail open to both so a SPA deploy never ships against
+  a stale Lambda. `--classify-dispatch` / `--classify-dispatch-paths`
+  print the chosen slices.
 - **team-setup:** add `pr-checks-watch` skill/rule/command — background-watch
   open PRs for GitHub check failures and wake the agent to fix/push (do not
   merge on green). `sdlc-drop --finish` now arms this **and**
