@@ -24,7 +24,11 @@ Live-val: PRD-0026. Engine: `sdlc-workflow drop`.
 
 - A GitHub issue (or a small set) that should land as **one PR**
 - Direct, bug-spec, or plan-artifact grain — still one PR
-- Parallel ships from the same tip: **two drop ids → two worktrees**
+- Same-session related work on a **one-SHA smoke host** (dest /
+  `admit.dev` / Deploy Organization): **one bundle drop**, not sibling
+  PRs from the default branch — see **`sdlc-live-host-bundle`**
+- Unrelated / parallel ships that must land alone: **two drop ids →
+  two worktrees**, each from the default branch
 
 ## When not to use
 
@@ -111,9 +115,30 @@ bunx tsx src/index.ts drop \
 Then arm **`pr-approve-watch`** if the PR is still open. Yield the turn;
 do not block the chat waiting for Approve.
 
+## Live-host bundle (do not steal the smoke host)
+
+A live smoke host serves **one SHA**. `--finish` + deploy on every
+Slack ping replaces the host and hides the last drop.
+
+Same night, same surface, same host:
+
+1. One `--drop-id`. Re-arm is a no-op (same worktree).
+2. New issues are **commits** on that branch. Do not `--finish` until
+   the bundle is the thing you want smoked.
+3. One PR (`Closes #A #B #C`). Deploy that head only.
+4. Unrelated work still arms a **new** drop from the default branch.
+
+Do not open a chain of PRs and later squash them into a mega-PR.
+Stacked PRs (child `--base` parent) are optional when you still want
+per-issue review — deploy **only the tip**, merge bottom-up with
+merge commits, never squash.
+
 ## Anti-patterns
 
 - `decompose` of a drop / PRD-0026 into per-task PRs
+- Sibling drops from dest / default branch that each steal the live
+  smoke host (open the **i** button PR, then the catalog PR, then
+  wonder where the **i** went)
 - Using `run --supervise --detach` for a single inbox issue
 - Treating `--finish` as hands-off orchestration (no implementer, no
   CI wait, no AC roll-up)
