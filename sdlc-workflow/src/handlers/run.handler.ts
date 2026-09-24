@@ -16,6 +16,10 @@ import type { ICloseoutService } from '../services/closeout.service';
 import type { IDigestService } from '../services/digest.service';
 import type { IEnvelopeGateService } from '../services/envelope-gate.service';
 import type { IDaemonConfigRepository } from '../repositories/daemon-config.repository';
+import type {
+  IAdvisoryIssueService,
+  RiskyClassificationSource
+} from '../services/advisory-issue.service';
 import type { IEscalationService } from '../services/escalation.service';
 import type { IGateRemediationService } from '../services/gate-remediation.service';
 import type { IOperatorUnstickService } from '../services/operator-unstick.service';
@@ -296,6 +300,8 @@ export class RunHandler implements IRunHandler {
     private readonly _runQueueRepo: IRunQueueRepository,
     @inject(WORKFLOW_TOKENS.EscalationService)
     private readonly _escalation: IEscalationService,
+    @inject(WORKFLOW_TOKENS.AdvisoryIssueService)
+    private readonly _advisoryIssue: IAdvisoryIssueService,
     @inject(WORKFLOW_TOKENS.RunStateRepository)
     private readonly _runStateRepo: IRunStateRepository,
     @inject(WORKFLOW_TOKENS.SpecDocRepository)
@@ -975,6 +981,18 @@ export class RunHandler implements IRunHandler {
     if (suppressesBlockingEscalate(unstick.kind)) {
       // cleared / risky-proceed: abandon the pass so re-selection / resume
       // can proceed without posting ACTION REQUIRED for this wave.
+      // SPEC-PRD-0025-P1 T-04: risky proceeds also file a non-blocking
+      // advisory issue (distinct from ACTION REQUIRED) and keep moving.
+      // Agent-labeled and engine-classified strategies both take this path.
+      if (unstick.kind === 'risky-proceed') {
+        this.postAdvisoryIssue(
+          input,
+          state,
+          task.id,
+          unstick.detail,
+          unstick.classifiedBy
+        );
+      }
       return true;
     }
     return false;
@@ -1346,6 +1364,63 @@ export class RunHandler implements IRunHandler {
       chalk.gray(`  [cleanup] removing worktree for ${taskId} (background)`)
     );
     this._gitRepo.removeWorktreeAsync(input.repoPath, worktreePath);
+  }
+
+  /**
+   * SPEC-PRD-0025-P1 T-04: file a non-blocking advisory GitHub issue for a
+   * risky unstick proceed. Does not post ACTION REQUIRED, does not emit
+   * exception-ledger entries, and sets escalate tier `advisory-risky`.
+   *
+   * @remarks
+   * Production continue path for both agent-labeled (`risky-proceed`) and
+   * engine-classified (`risky-advisory` / risky-assumption strategy)
+   * outcomes from {@link IOperatorUnstickService}. `classifiedBy` is
+   * attributed from the unstick result — never hardcoded — so advisory
+   * bodies distinguish the two sources.
+   */
+  private postAdvisoryIssue(
+    input: RunTaskInput,
+    state: RunState,
+    taskId: string,
+    decision: string,
+    classifiedBy: RiskyClassificationSource
+  ): void {
+    const evidenceIds = state.verdicts
+      .filter(verdict => verdict.taskId === taskId)
+      .flatMap(verdict => verdict.evidenceIds ?? []);
+    const monitorPath =
+      input.monitorPath ?? path.join(input.runsDir, input.runId, 'monitor.log');
+    let repoSlug: string | undefined;
+    try {
+      repoSlug = originSlug(input.repoPath);
+    } catch {
+      // Missing/non-GitHub origin — advisory still posts with monospace refs.
+    }
+    const refs = collectEscalationRefs({
+      state,
+      taskId,
+      repoSlug,
+      repoPath: input.repoPath
+    });
+    const outcome = this._advisoryIssue.file({
+      runId: input.runId,
+      taskId,
+      decision,
+      classifiedBy,
+      evidenceIds,
+      repoPath: input.repoPath,
+      operator: input.operator,
+      monitorPath,
+      refs,
+      runsDir: input.runsDir,
+      state
+    });
+    const line =
+      outcome.url !== undefined
+        ? `[advisory] ${outcome.title} → ${outcome.url}`
+        : `[advisory] ${outcome.title}`;
+    console.log(chalk.yellow(`  ${line}`));
+    this.noteMonitor(input, line);
   }
 
   /**
@@ -1998,7 +2073,9 @@ export class RunHandler implements IRunHandler {
             : result.status === 'failed'
               ? 'failed'
               : 'completed-unmerged') as
-            'merged' | 'failed' | 'completed-unmerged',
+            | 'merged'
+            | 'failed'
+            | 'completed-unmerged',
           detail: result.mergedSha ?? result.detail
         }));
       }

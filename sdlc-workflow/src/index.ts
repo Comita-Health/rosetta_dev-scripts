@@ -148,6 +148,10 @@ import {
   IOperatorUnstickService
 } from './services/operator-unstick.service';
 import {
+  AdvisoryIssueService,
+  IAdvisoryIssueService
+} from './services/advisory-issue.service';
+import {
   RetryExecutorService,
   IRetryExecutorService
 } from './services/retry-executor.service';
@@ -394,6 +398,9 @@ container
 container
   .bind<IOperatorUnstickService>(WORKFLOW_TOKENS.OperatorUnstickService)
   .to(OperatorUnstickService);
+container
+  .bind<IAdvisoryIssueService>(WORKFLOW_TOKENS.AdvisoryIssueService)
+  .to(AdvisoryIssueService);
 container
   .bind<IRetryExecutorService>(WORKFLOW_TOKENS.RetryExecutorService)
   .to(RetryExecutorService);

@@ -42,6 +42,8 @@ export const WORKFLOW_TOKENS = {
   GateRemediationService: Symbol.for('GateRemediationService'),
   // SPEC-PRD-0025-P1 T-01 (dispatch wiring in T-03)
   OperatorUnstickService: Symbol.for('OperatorUnstickService'),
+  // SPEC-PRD-0025-P1 T-04 — non-blocking advisory issues for risky proceeds
+  AdvisoryIssueService: Symbol.for('AdvisoryIssueService'),
   RetryExecutorService: Symbol.for('RetryExecutorService'),
   HeartbeatService: Symbol.for('HeartbeatService'),
   HeartbeatWatchService: Symbol.for('HeartbeatWatchService'),

@@ -408,8 +408,18 @@ from `run.handler` `remediationRound` — no chat/session) whose prompt
 (`utils/operator-unstick-prompt.ts`) mandates rebase/integration tip,
 out-of-band merge + `record-merge`, and resume via existing engine CLIs —
 not gate-remediation trim-the-diff. Cleared / risky-proceed suppress
-blocking ACTION REQUIRED for that wave; abstain / exhaust /
-authority-bound keep the escalate + issue-state resume path. `cleared`
+blocking ACTION REQUIRED for that wave; a risky proceed also files a
+non-blocking `ADVISORY: SDLC <runId> <taskId> risky proceed` issue via
+`AdvisoryIssueService` (decision + evidence + course-correct; escalate
+tier `advisory-risky`) that Continuity/`BlockerService` must not treat
+as a resume gate. Both agent-labeled `risky-proceed` and engine-classified
+strategies (`OUTCOME: risky-advisory` / risky-assumption →
+`classifiedBy: engine`) take that continue+advisory path — never a
+hardcoded agent attribution. Engine continue requires the explicit
+`OUTCOME:` marker (a bare `risky-advisory` / `risky-proceed` token, or
+prompt-echo restatement on an `OUTCOME: abstained` / exhaust turn, does
+not suppress ACTION REQUIRED). Abstain / exhaust / authority-bound keep
+the escalate + issue-state resume path. `cleared`
 requires durable blocker-clear evidence (disk-reloaded `mergedSha` /
 record-merge, or an explicit `OUTCOME: cleared` marker plus a successful
 tip HEAD move) — never agent text / resume wording alone, a bare
@@ -1018,6 +1028,12 @@ Handler / Service / Repository with InversifyJS (workspace rule):
   skips); cleared/risky-proceed suppress blocking escalate; policy
   rewrites and audit-blind turns always abstain; abstain/exhaust/
   authority-bound keep the ACTION REQUIRED + issue-state resume path.
+- `services/advisory-issue.service.ts` — SPEC-PRD-0025-P1 T-04: non-blocking
+  advisory GitHub issues for risky unstick proceeds (`ADVISORY: SDLC …`
+  title class, distinct from ACTION REQUIRED). Body names the decision,
+  evidence links, and course-correct steps; sets escalate tier
+  `advisory-risky`; does not write exception-ledger / action-required
+  queue / wake-inbox escalate entries.
 - `services/escalation.service.ts` — P3 T-06 / fail-loud T-04: turns
   exception entries into interrupting `action-required` queue items,
   assigned needs-human GitHub issues (`--operator` / `SDLC_OPERATOR`), and

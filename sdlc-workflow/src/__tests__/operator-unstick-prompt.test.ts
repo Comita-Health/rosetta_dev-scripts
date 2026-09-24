@@ -55,8 +55,15 @@ describe('buildOperatorUnstickPrompt (SPEC-PRD-0025-P1 T-02)', () => {
     expect(text).toContain('specs/**');
     expect(text).toMatch(/closeout/i);
     expect(text).toContain('never silent policy rewrite');
-    expect(text).toMatch(/risky-proceed/i);
     expect(text).toContain('will classify those turns as abstained');
+    // Risky OUTCOME markers are documented for continue turns, separate
+    // from the abstain bullet list — so prompt-echo abstains do not need
+    // to restate them next to OUTCOME: abstained.
+    expect(text).toContain('OUTCOME: risky-proceed');
+    expect(text).toContain('OUTCOME: risky-advisory');
+    expect(text).toContain(
+      'Mentioning the words in prose, or restating this guidance while'
+    );
   });
 
   it('instructs the OUTCOME: cleared marker the classifier requires for tip clears', () => {
