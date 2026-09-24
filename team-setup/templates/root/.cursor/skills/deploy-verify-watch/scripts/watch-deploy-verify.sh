@@ -486,9 +486,35 @@ PY
   echo "watch-deploy-verify: $reason → $target (remaining=$remaining)" >&2
 }
 
+release_watch_locks() { :; }
 STATE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/deploy-verify-watch.XXXXXX")
-cleanup() { rm -rf "$STATE_DIR"; }
+cleanup() { rm -rf "$STATE_DIR"; release_watch_locks; }
 trap cleanup EXIT
+
+_WATCH_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "$_WATCH_SCRIPT_DIR/../../_lib/watcher-singleton.sh" ]]; then
+  # shellcheck disable=SC1091
+  source "$_WATCH_SCRIPT_DIR/../../_lib/watcher-singleton.sh"
+elif [[ -f "$_WATCH_SCRIPT_DIR/watcher-singleton.sh" ]]; then
+  # shellcheck disable=SC1091
+  source "$_WATCH_SCRIPT_DIR/watcher-singleton.sh"
+else
+  echo "watch-deploy-verify: missing watcher-singleton.sh" >&2
+  exit 2
+fi
+unset _WATCH_SCRIPT_DIR
+
+claim_watch_targets \
+  "deploy-verify.${WORKFLOW}.${ENVIRONMENT}" \
+  "${TARGETS[@]}"
+for _skipped in "${SKIPPED_TARGETS[@]+"${SKIPPED_TARGETS[@]}"}"; do
+  echo "watch-deploy-verify: already armed ${_skipped} (skipping duplicate; no second deploy dispatch)" >&2
+done
+if [[ ${#CLAIMED_TARGETS[@]} -eq 0 ]]; then
+  echo "watch-deploy-verify: already armed ${TARGETS[*]}; exiting 0" >&2
+  exit 0
+fi
+TARGETS=("${CLAIMED_TARGETS[@]}")
 
 write_state() {
   local file="$1"

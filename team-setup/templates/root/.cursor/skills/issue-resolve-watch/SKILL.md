@@ -30,14 +30,16 @@ Exit when every target has closed (after a `closed` wake).
 1. After taking ownership of an issue (or when the user asks to watch), start
    `.cursor/skills/issue-resolve-watch/scripts/watch-issue-resolve.sh` in the **background** with agent
    `notify_on_output` on `^AGENT_LOOP_WAKE_issue_resolve`.
-2. Do **not** redirect watcher stdout away from the monitored terminal.
-3. On wake: activate the workspace GitHub App, read the issue, **make
+2. **Do not start a second process** for a target that is already armed. The
+   script exits 0 with `already armed`. Treat that as success.
+3. Do **not** redirect watcher stdout away from the monitored terminal.
+4. On wake: activate the workspace GitHub App, read the issue, **make
    progress toward Done-when** (implement, open/land PRs, update checkboxes,
    reply). If blocked, comment the blocker on the issue — do not go idle.
-4. Use `--kickoff` when the agent should start work immediately after arming.
-5. Recreate human-authored issues as Addi (close + create) when the user asks
+5. Use `--kickoff` when the agent should start work immediately after arming.
+6. Recreate human-authored issues as Addi (close + create) when the user asks
    to “re-open as yourself,” same pattern as PR ownership.
-6. **Drain wakes even when chat notify is silent** — see Wake delivery below.
+7. **Drain wakes even when chat notify is silent** — see Wake delivery below.
 
 ## Wake delivery (chat notify is best-effort)
 

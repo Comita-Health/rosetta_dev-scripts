@@ -8,6 +8,10 @@ land as **one PR**, or the user asks to drop / `/sdlc-drop`:
 - Implement as commits in `~/.rosetta/sdlc-drops/<id>/worktree`.
 - `drop --finish` opens the one PR; then arm **`pr-approve-watch`**.
 - Do **not** `decompose` a drop into per-task PRs.
+- Same-session related work on a **one-SHA smoke host** is **one
+  bundle** (one branch, many commits, one PR). Do not steal the host
+  with sibling drops from the default branch — see
+  **`sdlc-live-host-bundle`**.
 - `run` / `decompose` stay the spec-task opt-in for an Accepted
   multi-task spec — see `sdlc-run-supervise`.
 - `--finish` does **not** wait on reviewer, CI, or AC. For `direct` it

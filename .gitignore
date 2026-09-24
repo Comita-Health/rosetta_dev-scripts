@@ -6,3 +6,7 @@ dist
 /.cursor/
 /.vscode/
 team-setup/src/config/local.json
+
+# Python bytecode from the templated verify_slack tests
+__pycache__/
+*.pyc

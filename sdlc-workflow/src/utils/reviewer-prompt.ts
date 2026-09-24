@@ -25,8 +25,9 @@ const buildChecklistSection = (checklist: ReviewChecklist): string[] => [
  * and (when declared) the repo's review checklist — never from
  * implementation-agent conversation state.
  *
- * Includes the workspace documentation bar (TSDoc/JSDoc). `checklist`
- * omitted (undefined) reproduces the pre-checklist prompt byte-for-byte
+ * Includes the workspace documentation bar (TSDoc/JSDoc) and the
+ * architecture bar (substitutability). `checklist` omitted (undefined)
+ * reproduces the pre-checklist prompt byte-for-byte
  * (SPEC-BUG-reviewer-house-bar-P1 T-01 no-regression requirement).
  *
  * @remarks
@@ -97,8 +98,37 @@ export const buildReviewerPrompt = (
     '- Disagree on placeholder noise (`/** Service */`) or missing docs on a new',
     '  HSR class / non-obvious public helper introduced in the diff.',
     '',
+    '## Architecture bar (substitutability)',
+    '',
+    'The Repository layer is an anti-corruption boundary. A vendor,',
+    'datastore, or transport swap must be a new Repository plus a changed',
+    'binding. If the swap requires editing a Service or Handler, disagree —',
+    'the boundary is in the wrong place.',
+    '',
+    '- No vendor SDK types in exported signatures. A Repository may import',
+    '  an SDK; its public contract may not accept or return SDK types.',
+    '  Boundary DTOs live in `types.ts`.',
+    '- There is no fourth layer. Anything performing I/O is a Repository.',
+    '  A `clients/`, `lib/`, or `integrations/` directory holding a vendor',
+    '  client is a violation.',
+    '- No singletons or static accessors (`getInstance()`, module-level',
+    '  mutable instances). Lifetime belongs to the container.',
+    '- Bind interfaces, not classes: `container.bind<IFoo>(TOKENS.Foo).to(Foo)`.',
+    '  `bind(Foo).toSelf()` and `@inject(ConcreteClass)` fail this bar.',
+    '- Config is injected at the composition root. `process.env` inside a',
+    '  Service or Repository method is a fail.',
+    '- One composition root per entry point. `container.get()` elsewhere is',
+    '  a service locator.',
+    '- Substitutability is provable in tests: bind a fake adapter to the',
+    '  same token. If a Service test must `jest.mock` a vendor SDK to',
+    '  isolate the Service, the port is missing.',
+    '- Disagree on a new or changed export that leaks a vendor type, adds a',
+    '  static accessor, or binds a concrete class where an interface token',
+    '  is required.',
+    '',
     'Return your verdict: "concur" only if the diff implements the task',
-    'within the envelope with no correctness, safety, or documentation-bar',
-    'concerns; otherwise "disagree" with every concern cited as a reason.',
+    'within the envelope with no correctness, safety, documentation-bar,',
+    'or architecture-bar concerns; otherwise "disagree" with every concern',
+    'cited as a reason.',
     ...(checklist ? buildChecklistSection(checklist) : [])
   ].join('\n');
