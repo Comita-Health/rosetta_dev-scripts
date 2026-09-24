@@ -39,6 +39,11 @@ When the ask is a GitHub issue (or a small set) that should land as **one PR**:
   `pr-checks-watch`.
 - Slash reminder: `/sdlc-drop`.
 - Do **not** `decompose` a drop into per-task PRs.
+- **Live smoke host = one SHA.** Same-session related work is **one
+  bundle** (one branch, many commits, one PR). Do not `--finish` a
+  sibling drop from the default branch and steal dest / `admit.dev` —
+  see **`sdlc-live-host-bundle`**. Unrelated work still branches from
+  dest.
 
 `--finish` does **not** wait on reviewer, CI, or AC. For `direct` it then
 calls `gh pr merge`. That succeeds when protection does not require a
@@ -90,10 +95,11 @@ Intake (transcripts, Slack, Bret’s Feedback tracker, prompts) is **not** the
 backlog — promote it. GitHub Issues are the engineering ledger (`direct` /
 `bug-spec` / `plan`). PRDs are the product contract; ADRs are decisions that
 must still bind in a year. User-facing sandbox drops write dated
-`docs/releases/` (**Delivered** / **Not verified** / **Verified**) and upsert
-the same smoke lines to Slack **Sandbox verify**. Bret has no GitHub; he
-checks Verified or Failed there. Slack is the live ledger — do not poll it
-from a laptop; do not make Russ relay. Slash: `/watch-stakeholder-verify`
+`docs/releases/` (**Delivered** / **Not verified** / **Verified**) and post
+the same smoke lines as one **#comita-support** thread — root `@channel`,
+one reply per line. Bret has no GitHub; he reacts :white_check_mark: or
+:x: there. Slack is the live ledger — do not poll it from a laptop; do
+not make Russ relay. Slash: `/watch-stakeholder-verify`
 (publish only). DEV hosts are **SB / Sandbox** with stakeholders. When
 the operator linked a Slack thread as the ask, reply **in that thread**
 after the fix is deployed to SB — not on push or CI. Policy:
@@ -183,6 +189,11 @@ Merge stacks bottom-up (parent first). When the parent merges, GitHub automatica
 the child PR onto `main` — no conflict, no rebase. Stacked PRs require merge commits (never
 squash-merge a stack). Unrelated work keeps branching from `main` so PRs stay independently
 mergeable — do not chain by default.
+
+**Live-host bundle is not a stack of PRs.** Same-session dest / SB work
+that must share one smoke SHA is **one drop, one PR** (commits, not
+child PRs). See **`sdlc-live-host-bundle`**. If you do stack for
+per-issue review, deploy **only the tip**.
 
 **Default: do not commit on `main`.** All product work lands via a topic branch + PR.
 

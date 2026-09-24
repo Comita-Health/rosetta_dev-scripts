@@ -26,17 +26,19 @@ Issue routes: `direct` (branch + PR) · `bug-spec` · `plan` (PRD first).
 Do not `decompose` until the PRD is Accepted. Do not PRD a same-day
 deploy bundle.
 
-Bret’s **Feedback** tracker is an inbox. **Sandbox verify** is the
-smoke ledger. Never mix them. No PHI on either list.
+Bret’s **Feedback** tracker is an inbox. The **Sandbox verify** thread
+is the smoke ledger. Never mix them. No PHI on either.
 
 ## Delivery + verify (mandatory for user-facing work)
 
 1. PR body `## Release notes` (feeds prod GitHub Release).
 2. Dated `docs/releases/YYYY-MM-DD.md`: **Delivered**, **Not verified**,
-   **Verified**, **Out**. Slack Status is the live check-off. Promote
+   **Verified**, **Out**. Slack reactions are the live check-off. Promote
    snapshots Verified into git; never delete a line.
-3. Upsert the same Not-verified lines to Slack Sandbox verify. New rows
-   `@channel` **#comita-support** with the list URL and smoke lines.
+3. After the sandbox deploy for that SHA is green, post the same
+   Not-verified lines as one **#comita-support** thread — root message
+   `@channel`, one reply per smoke line, :white_check_mark: / :x: to
+   check off.
 4. Do **not** arm a laptop Slack watcher. Failed lands as a comment on
    the Ship issue (GHA **Sandbox verify**). Do not treat chat “Bret
    approved” as the check-off.

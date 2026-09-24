@@ -8,6 +8,9 @@ wiring), or the user asks to watch deploy-verify:
 - Arm `.cursor/skills/deploy-verify-watch/scripts/watch-deploy-verify.sh` in the background with agent wake on
   `AGENT_LOOP_WAKE_deploy_verify` (use `--dispatch-on-arm` so the current head
   deploys without waiting for another push).
+- **Do not start a second process** if one is already watching that PR.
+  The script exits 0 with `already armed`. Re-arming `--dispatch-on-arm`
+  fires another Deploy Organization run of the same SHA.
 - On `deploy_green`: tell the human to re-smoke; do **not** merge on green
   alone. If the operator **linked a Slack thread** when requesting the
   item, reply in **that thread** that a new update for the issue has been
