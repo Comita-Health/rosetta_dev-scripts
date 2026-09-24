@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **team-setup:** add `pr-checks-watch` skill/rule/command — background-watch
+  open PRs for GitHub check failures and wake the agent to fix/push (do not
+  merge on green). `sdlc-drop --finish` now arms this **and**
+  `pr-approve-watch`. Replaces the blocking `gh pr checks` poll loop in
+  CLAUDE.md. Session-mortal until PRD-0020 Phase 3 absorbs remaining
+  bash watchers.
 - **team-setup (watchers):** session-mortal `deploy-verify-watch`,
   `issue-resolve-watch`, and workspace `pr-checks-watch` claim a
   per-target lock (`~/.rosetta/locks/watchers/`). A second arm of the
