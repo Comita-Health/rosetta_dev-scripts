@@ -9,6 +9,13 @@ multi-repo environment.
 Environment name: **Comita** (dashboard multi-repo). Install is
 `.cursor/install-comita-cloud.sh` via `.cursor/environment.json`.
 
+The install script bootstraps `rosetta_dev-scripts` (bun) and, best-effort,
+the code sibling repos — `comita_admissions` (yarn) and `comita_website`
+(npm) — so a fresh Cloud Agent starts with their dependencies ready. Sibling
+installs are non-fatal: a failure or missing checkout is logged and skipped
+without aborting setup. `comita_docs` and `rosetta_chronicle_comita-health`
+are docs-only and need no bootstrap.
+
 ### Identity — always Addi
 
 Agent-authored commits, branches, PRs, and issue writes use the Comita
@@ -72,5 +79,7 @@ When kicked from an issue comment / automation:
 
 The Comita cloud environment also includes `comita_admissions`,
 `comita_docs`, `comita_website`, and `rosetta_chronicle_comita-health`.
-Coordinate cross-repo changes when the task requires them; open PRs as Addi
-in each affected repo.
+Dependencies for the code repos (`comita_admissions`, `comita_website`) are
+pre-installed by the cloud install script, so `yarn`/`npm` commands work out
+of the box. Coordinate cross-repo changes when the task requires them; open
+PRs as Addi in each affected repo.
