@@ -25,6 +25,7 @@ same heuristics):
 | Signal | Examples |
 | ------ | -------- |
 | Label | `verify-live` or `live-verify` |
+| Branch | any `sdlc/drop/*` head — every drop is smoked on the sandbox |
 | Paths | `accounts-frontend`, `AccountsAuthRedirect`, `accounts-redirect`, `return-to`, `session-expiry`, `deploy-organization.yml`, `frontend-accounts-stack`, `frontend-app.ts` |
 | Title/body | `redirect_uri`, logout, cookie, SSO, Phase 0e, cutover, post-login, `accounts.dev` / `admit.dev` |
 
@@ -42,6 +43,9 @@ When unsure, arm anyway and/or add the `verify-live` label.
 3. Do **not** redirect watcher stdout away from the monitored terminal.
 4. Prefer `--dispatch-on-arm` (or default `--auto-dispatch`) so the **current**
    head gets a deploy without waiting for another push.
+   Exception: when the PR head declares `sandbox.dropDeployWorkflow` in
+   `.sdlc/environments.json`, the repo deploys drop PRs itself and the
+   watcher only watches (no dispatch), whatever flags you pass.
 5. On `deploy_green`: tell the human the SHA/environment is ready to re-smoke;
    do **not** merge on green alone — Approve remains the merge proceed signal
    (`pr-approve-watch`). If the operator **directly linked a Slack

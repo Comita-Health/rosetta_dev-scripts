@@ -8,6 +8,13 @@ land as **one PR**, or the user asks to drop / `/sdlc-drop`:
 - Implement as commits in `~/.rosetta/sdlc-drops/<id>/worktree`.
 - `drop --finish` opens the one PR; then arm **`pr-approve-watch`**
   and **`pr-checks-watch`**.
+- **Every drop is smoked on the sandbox before Approve.** `--finish`
+  prints how: when the repo declares `sandbox.dropDeployWorkflow` in
+  `.sdlc/environments.json`, the repo deploys the PR on every push and
+  posts the result on the PR. Otherwise arm **`deploy-verify-watch`**
+  with `--dispatch-on-arm` right after `--finish`. Either way arm the
+  watcher so `deploy_green` wakes you; it only watches when the repo
+  deploys itself.
 - Do **not** `decompose` a drop into per-task PRs.
 - Same-session related work on a **one-SHA smoke host** is **one
   bundle** (one branch, many commits, one PR). Do not steal the host

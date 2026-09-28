@@ -4,6 +4,7 @@ import os from 'os';
 import path from 'path';
 import { Container } from 'inversify';
 import { DropStateRepository } from '../repositories/drop-state.repository';
+import type { IContractRepository } from '../repositories/contract.repository';
 import type { IGitRepository } from '../repositories/git.repository';
 import type { IPullRequestRepository } from '../repositories/pull-request.repository';
 import { DropService, IDropService } from '../services/drop.service';
@@ -29,6 +30,7 @@ describe('DropService', () => {
   let findByBranch: jest.Mock;
   let create: jest.Mock;
   let merge: jest.Mock;
+  let loadSandbox: jest.Mock;
 
   beforeEach(() => {
     dropsDir = mkdtempSync(path.join(os.tmpdir(), 'sdlc-drop-'));
@@ -41,6 +43,7 @@ describe('DropService', () => {
       number: 9
     });
     merge = jest.fn().mockReturnValue('merge-sha');
+    loadSandbox = jest.fn().mockReturnValue(null);
 
     const container = new Container();
     container
@@ -77,9 +80,10 @@ describe('DropService', () => {
         comment: jest.fn(),
         updateBody: jest.fn()
       });
+    container.bind(WORKFLOW_TOKENS.DropStateRepository).to(DropStateRepository);
     container
-      .bind(WORKFLOW_TOKENS.DropStateRepository)
-      .to(DropStateRepository);
+      .bind<IContractRepository>(WORKFLOW_TOKENS.ContractRepository)
+      .toConstantValue({ loadSandbox, loadVerification: jest.fn() });
     container.bind<IDropService>(WORKFLOW_TOKENS.DropService).to(DropService);
     service = container.get<IDropService>(WORKFLOW_TOKENS.DropService);
   });
@@ -116,9 +120,7 @@ describe('DropService', () => {
     ]);
     expect(opened.prNumber).toBe(9);
     expect(create).toHaveBeenCalledTimes(1);
-    expect(create.mock.calls[0][1].body).toContain(
-      '- [x] T-01: envelope'
-    );
+    expect(create.mock.calls[0][1].body).toContain('- [x] T-01: envelope');
 
     findByBranch.mockReturnValue({
       url: 'https://github.com/org/repo/pull/9',
@@ -126,6 +128,48 @@ describe('DropService', () => {
     });
     service.openPr(dropsDir, '2026-08-15');
     expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it('records that the repo deploys the drop PR to the sandbox itself', () => {
+    loadSandbox.mockReturnValue({
+      deployCommand: 'deploy',
+      healthCommand: 'health',
+      timeoutMinutes: 30,
+      dropDeployWorkflow: 'sandbox-drop-deploy.yml'
+    });
+    service.arm(baseInput(dropsDir));
+    const opened = service.openPr(dropsDir, '2026-08-15');
+    expect(opened.sandbox).toEqual({
+      mode: 'repo-workflow',
+      workflow: 'sandbox-drop-deploy.yml'
+    });
+    expect(loadSandbox).toHaveBeenCalledWith(opened.worktreePath);
+  });
+
+  it('asks the agent to arm the watcher when the sandbox has no drop workflow', () => {
+    loadSandbox.mockReturnValue({
+      deployCommand: 'deploy',
+      healthCommand: 'health',
+      timeoutMinutes: 30
+    });
+    service.arm(baseInput(dropsDir));
+    expect(service.openPr(dropsDir, '2026-08-15').sandbox).toEqual({
+      mode: 'agent-watch'
+    });
+  });
+
+  it('records no sandbox when the repo declares none, including on reuse', () => {
+    service.arm(baseInput(dropsDir));
+    expect(service.openPr(dropsDir, '2026-08-15').sandbox).toEqual({
+      mode: 'none'
+    });
+    findByBranch.mockReturnValue({
+      url: 'https://github.com/org/repo/pull/9',
+      number: 9
+    });
+    expect(service.openPr(dropsDir, '2026-08-15').sandbox).toEqual({
+      mode: 'none'
+    });
   });
 
   it('merges a direct drop on machine gates', () => {
@@ -158,9 +202,9 @@ describe('DropService', () => {
   });
 
   it('refuses an empty issue list and --require-approve merge', () => {
-    expect(() =>
-      service.arm({ ...baseInput(dropsDir), issues: [] })
-    ).toThrow(/at least one issue ref/);
+    expect(() => service.arm({ ...baseInput(dropsDir), issues: [] })).toThrow(
+      /at least one issue ref/
+    );
     service.arm({ ...baseInput(dropsDir), requireApprove: true });
     service.openPr(dropsDir, '2026-08-15');
     expect(() => service.mergeDirect(dropsDir, '2026-08-15')).toThrow(
@@ -253,6 +297,9 @@ describe('DropService', () => {
       }),
       pathFor: jest.fn()
     });
+    container
+      .bind<IContractRepository>(WORKFLOW_TOKENS.ContractRepository)
+      .toConstantValue({ loadSandbox, loadVerification: jest.fn() });
     container.bind<IDropService>(WORKFLOW_TOKENS.DropService).to(DropService);
     const exploding = container.get<IDropService>(WORKFLOW_TOKENS.DropService);
     expect(() => exploding.arm(baseInput(dropsDir))).toThrow(/disk exploded/);

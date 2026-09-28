@@ -37,6 +37,10 @@ When the ask is a GitHub issue (or a small set) that should land as **one PR**:
 - Follow **`sdlc-drop`** — `sdlc-workflow drop` arms one worktree, implement
   as commits, `drop --finish` opens the PR, then `pr-approve-watch` and
   `pr-checks-watch`.
+- **Drops reach the sandbox before Approve.** A repo that declares
+  `sandbox.dropDeployWorkflow` in `.sdlc/environments.json` deploys every
+  drop push itself; otherwise arm `deploy-verify-watch --dispatch-on-arm`.
+  `--finish` prints which. Arm the watcher either way for the green wake.
 - Slash reminder: `/sdlc-drop`.
 - Do **not** `decompose` a drop into per-task PRs.
 - **Live smoke host = one SHA.** Same-session related work is **one

@@ -113,7 +113,28 @@ bunx tsx src/index.ts drop \
 ```
 
 Then arm **`pr-approve-watch`** and **`pr-checks-watch`** if the PR is
-still open. Yield the turn; do not block the chat waiting for Approve or
+still open.
+
+### Sandbox (every drop, before Approve)
+
+`--finish` prints how this PR reaches the sandbox:
+
+- `✓ sandbox: the repo deploys this PR on every push (…)` — the repo
+  declares `sandbox.dropDeployWorkflow` in `.sdlc/environments.json`. It
+  deploys what the branch changed, comments the result on the PR, and sets
+  a `sandbox-deploy` status. Arm **`deploy-verify-watch`** anyway (it only
+  watches here) so `deploy_green` wakes you.
+- `⚠ sandbox: … arm deploy-verify-watch` — arm it now with
+  `--dispatch-on-arm` and no slice flags, so it picks backend / frontend
+  from the PR paths.
+
+```bash
+bash .claude/skills/deploy-verify-watch/scripts/watch-deploy-verify.sh \
+  --interval 30 --activate "$ACTIVATE" --workflow "Deploy Organization" \
+  --environment dev --dispatch-on-arm --kickoff owner/repo#N
+```
+
+Do not tell anyone to smoke until the deploy for the PR head is green. Yield the turn; do not block the chat waiting for Approve or
 CI. Checks-watch remediates red jobs (up to 3 pushes); Approve stays the
 merge proceed signal.
 

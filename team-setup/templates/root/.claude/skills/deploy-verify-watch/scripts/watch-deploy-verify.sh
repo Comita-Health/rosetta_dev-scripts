@@ -214,7 +214,7 @@ def gh_json(args):
 try:
     pr = gh_json([
         "pr", "view", num, "-R", repo,
-        "--json", "title,body,labels,files",
+        "--json", "title,body,labels,files,headRefName",
     ])
 except Exception:
     print(0)
@@ -222,6 +222,11 @@ except Exception:
 
 labels = {(l.get("name") or "").lower() for l in (pr.get("labels") or [])}
 if "verify-live" in labels or "live-verify" in labels:
+    print(1)
+    sys.exit(0)
+
+# Every SDLC drop is smoked on the sandbox before Approve.
+if (pr.get("headRefName") or "").startswith("sdlc/drop/"):
     print(1)
     sys.exit(0)
 
@@ -617,13 +622,42 @@ print(f"{r.get('databaseId')}|{r.get('status')}|{r.get('conclusion') or ''}|{r.g
 PY
 }
 
+# Prints "1" when the repo dispatches its own sandbox deploy for drop PRs
+# (`sandbox.dropDeployWorkflow` in `.sdlc/environments.json` at the PR head).
+# The watcher then only watches: a second dispatch would redeploy the same SHA.
+repo_owns_drop_deploy() {
+  local repo="$1" branch="$2"
+  if [[ "$branch" != sdlc/drop/* ]]; then
+    echo 0
+    return 0
+  fi
+  REPO="$repo" BRANCH="$branch" python3 - <<'PY'
+import base64, json, os, subprocess
+
+try:
+    raw = subprocess.check_output(
+        ["gh", "api", f"repos/{os.environ['REPO']}/contents/.sdlc/environments.json?ref={os.environ['BRANCH']}",
+         "--jq", ".content"],
+        text=True, stderr=subprocess.DEVNULL,
+    )
+    contract = json.loads(base64.b64decode(raw))
+    workflow = ((contract.get("sandbox") or {}).get("dropDeployWorkflow") or "").strip()
+    print(1 if workflow else 0)
+except Exception:
+    print(0)
+PY
+}
+
 # stdout: reason|sha|run_id|run_url|branch  (reason may be empty)
 poll_target() {
   local file="$1" repo="$2" num="$3"
-  local fe be dns
+  local fe be dns auto="$AUTO_DISPATCH"
   IFS=$'\t' read -r fe be dns < <(classify_pr_slices "$repo" "$num")
+  if [[ "$auto" -eq 1 && "$(repo_owns_drop_deploy "$repo" "$(read_field "$file" branch)")" == "1" ]]; then
+    auto=0
+  fi
   FILE="$file" REPO="$repo" NUM="$num" WORKFLOW="$WORKFLOW" \
-  AUTO_DISPATCH="$AUTO_DISPATCH" FRONTEND="$fe" BACKEND="$be" DNS="$dns" \
+  AUTO_DISPATCH="$auto" FRONTEND="$fe" BACKEND="$be" DNS="$dns" \
   ENVIRONMENT="$ENVIRONMENT" python3 - <<'PY'
 import json, os, subprocess, time
 
@@ -753,6 +787,10 @@ maybe_dispatch_arm() {
     return 0
   fi
   if [[ "$AUTO_DISPATCH" -ne 1 && "$DISPATCH_ON_ARM" -ne 1 ]]; then
+    return 0
+  fi
+  if [[ "$(repo_owns_drop_deploy "$repo" "$branch")" == "1" ]]; then
+    echo "watch-deploy-verify: $target — the repo dispatches drop deploys itself; watching only" >&2
     return 0
   fi
   # Skip if a successful deploy already exists for this SHA

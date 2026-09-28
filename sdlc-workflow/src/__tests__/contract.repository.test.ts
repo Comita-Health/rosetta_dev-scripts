@@ -58,6 +58,27 @@ describe('ContractRepository', () => {
     );
   });
 
+  it('loads an optional dropDeployWorkflow and ignores a blank one', () => {
+    writeEnvironments({
+      sandbox: {
+        deployCommand: 'd',
+        healthCommand: 'h',
+        dropDeployWorkflow: ' sandbox-drop-deploy.yml '
+      }
+    });
+    expect(repo.loadSandbox(dir)?.dropDeployWorkflow).toBe(
+      'sandbox-drop-deploy.yml'
+    );
+    writeEnvironments({
+      sandbox: {
+        deployCommand: 'd',
+        healthCommand: 'h',
+        dropDeployWorkflow: ' '
+      }
+    });
+    expect(repo.loadSandbox(dir)).not.toHaveProperty('dropDeployWorkflow');
+  });
+
   it('exposes only the sandbox entry of a full environment configuration', () => {
     writeEnvironments({
       sandbox: { deployCommand: 'd', healthCommand: 'h' },
