@@ -67,7 +67,9 @@ const mirrorClaudeRulesToCursor = (
                                     ? 'Issues are the ledger; PRD vs ADR; Bret verifies on Slack not GitHub'
                                     : stem === 'stakeholder-verify-watch'
                                       ? 'Default: publish sandbox verify to Slack and watch Bret check-off (no GitHub)'
-                                      : `Rosetta rule: ${stem}`;
+                                      : stem === 'architecture-docs'
+                                        ? 'Architecture-affecting changes update the docs repo in the same unit of work'
+                                        : `Rosetta rule: ${stem}`;
       const contents = [
         '---',
         `description: ${yamlDoubleQuoted(description)}`,

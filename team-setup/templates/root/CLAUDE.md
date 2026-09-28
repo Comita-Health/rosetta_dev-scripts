@@ -152,6 +152,14 @@ The full ruleset lives in `.claude/rules/architecture-hsr.md` (Claude Code) and 
 
 Read the architecture rule before writing or reviewing any TypeScript.
 
+## Architecture docs (MANDATORY)
+
+Changes that alter architecture update the docs repo in the same unit
+of work: `rosetta_docs/architecture/` for engine repos, the consumer's
+docs repo for product repos (Comita: `comita_docs/docs/architecture/`).
+The code PR links the docs PR under `## Architecture docs`. Rule:
+`.claude/rules/architecture-docs.md`.
+
 ## Git Workflow
 
 ### Starting work
