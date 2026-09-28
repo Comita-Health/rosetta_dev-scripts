@@ -20,5 +20,8 @@ wiring), or the user asks to watch deploy-verify:
 - On `deploy_failed`: remediate, push; the watcher re-dispatches.
 - After a fix that invalidates a smoke, **do not wait for chat** to redeploy.
 - Pair with `pr-approve-watch` for Approve → comment triage → merge.
-- Heuristics: label `verify-live`, or paths/keywords in the skill; when unsure,
-  arm anyway.
+- Heuristics: label `verify-live`, any `sdlc/drop/*` PR, or paths/keywords
+  in the skill; when unsure, arm anyway.
+- A repo that declares `sandbox.dropDeployWorkflow` in
+  `.sdlc/environments.json` deploys its drop PRs itself. The watcher sees
+  that and only watches, so arming it cannot fire a second deploy.
