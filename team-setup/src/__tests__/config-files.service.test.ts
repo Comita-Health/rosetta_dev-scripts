@@ -47,6 +47,7 @@ describe('layDownRootConfig', () => {
           'architecture-hsr.md',
           'code-style.md',
           'inline-docs.md',
+          'architecture-docs.md',
           'sdlc-drop.md',
           'sdlc-live-host-bundle.md',
           'sdlc-run-supervise.md',
@@ -94,6 +95,16 @@ describe('layDownRootConfig', () => {
     expect(mockWriteFileSync).toHaveBeenCalledWith(
       path.join('/base', '.cursor', 'rules', 'inline-docs.mdc'),
       expect.stringContaining('TSDoc / JSDoc bar')
+    );
+    expect(mockWriteFileSync).toHaveBeenCalledWith(
+      path.join('/base', '.cursor', 'rules', 'architecture-docs.mdc'),
+      expect.stringContaining(
+        'Architecture-affecting changes update the docs repo in the same unit of work'
+      )
+    );
+    expect(mockWriteFileSync).toHaveBeenCalledWith(
+      path.join('/base', '.cursor', 'rules', 'architecture-docs.mdc'),
+      expect.stringContaining('alwaysApply: true')
     );
     expect(mockWriteFileSync).toHaveBeenCalledWith(
       path.join('/base', '.cursor', 'rules', 'sdlc-drop.mdc'),
