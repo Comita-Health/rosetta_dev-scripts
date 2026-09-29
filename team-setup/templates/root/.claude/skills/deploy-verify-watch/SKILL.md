@@ -46,6 +46,10 @@ When unsure, arm anyway and/or add the `verify-live` label.
    Exception: when the PR head declares `sandbox.dropDeployWorkflow` in
    `.sdlc/environments.json`, the repo deploys drop PRs itself and the
    watcher only watches (no dispatch), whatever flags you pass.
+   A run already queued, running, or green for the head SHA (for example a
+   full deploy dispatched by hand) is adopted, not re-dispatched: GitHub
+   keeps one pending run per concurrency group, so a second dispatch would
+   replace it.
 5. On `deploy_green`: tell the human the SHA/environment is ready to re-smoke;
    do **not** merge on green alone — Approve remains the merge proceed signal
    (`pr-approve-watch`). If the operator **directly linked a Slack
