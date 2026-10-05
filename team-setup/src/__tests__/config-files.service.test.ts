@@ -121,7 +121,7 @@ describe('layDownRootConfig', () => {
     );
     expect(mockWriteFileSync).toHaveBeenCalledWith(
       path.join('/base', '.cursor', 'rules', 'stakeholder-verify-watch.mdc'),
-      expect.stringContaining('Bret check-off')
+      expect.stringContaining('do not poll Slack from a laptop')
     );
     expect(mockWriteFileSync).toHaveBeenCalledWith(
       path.join('/base', '.cursor', 'rules', 'command-review.mdc'),
@@ -135,6 +135,39 @@ describe('layDownRootConfig', () => {
       path.join('/base', '.cursor', 'rules', 'command-sdlc-run.mdc'),
       expect.stringContaining('alwaysApply: false')
     );
+  });
+
+  it('mirrors the local-delivery rule and command, and marks CI watchers opt-in', () => {
+    mockExistsSync.mockReturnValue(true);
+    mockReaddirSync.mockImplementation((p: string) => {
+      if (p.endsWith('.cursor')) return ['skills'];
+      if (p.endsWith(`${path.sep}rules`))
+        return [
+          'local-delivery.md',
+          'pr-checks-watch.md',
+          'deploy-verify-watch.md'
+        ];
+      if (p.endsWith(`${path.sep}commands`)) return ['local-deliver.md'];
+      return [];
+    });
+    mockReadFileSync.mockReturnValue('# body\n');
+
+    layDownRootConfig('/base');
+
+    const written = (file: string): string =>
+      mockWriteFileSync.mock.calls.find(
+        (c: string[]) => c[0] === path.join('/base', '.cursor', 'rules', file)
+      )?.[1] ?? '';
+
+    expect(written('local-delivery.mdc')).toContain('alwaysApply: true');
+    expect(written('local-delivery.mdc')).toContain(
+      'Default for ci.mode=local repos: local CI, Addi PR, local reviewer subagent, laptop sandbox deploy'
+    );
+    expect(written('command-local-deliver.mdc')).toContain(
+      'alwaysApply: false'
+    );
+    expect(written('pr-checks-watch.mdc')).toContain('gha-mode repos only');
+    expect(written('deploy-verify-watch.mdc')).toContain('gha-mode repos only');
   });
 
   it('skips CLAUDE.md when source does not exist', () => {

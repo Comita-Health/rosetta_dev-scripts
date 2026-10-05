@@ -102,6 +102,15 @@ Activate the workspace GitHub App so author/committer are Addi.
 
 ## Finish
 
+**Local-mode repos** (`"ci": { "mode": "local" }` in the target repo's
+`.sdlc/environments.json`): follow **`local-delivery`** around this step —
+**arm** with `--require-approve` (stored in `drop.json` at arm; ignored on
+`--finish`) and confirm `jq -e .requireApprove ~/.rosetta/sdlc-drops/<id>/drop.json`
+before finishing, run `ci.command` until green, then run `ci.statusCommand` to post the `local-ci`
+status, run the fresh reviewer subagent, fix findings, and deploy the
+sandbox with `sandbox.localDeployCommand`. Do not arm `pr-checks-watch`
+there.
+
 ```bash
 cd "$ENGINE"
 bunx tsx src/index.ts drop \
@@ -112,10 +121,10 @@ bunx tsx src/index.ts drop \
 # add --require-approve when Approve must remain the proceed signal
 ```
 
-Then arm **`pr-approve-watch`** and **`pr-checks-watch`** if the PR is
-still open. Yield the turn; do not block the chat waiting for Approve or
-CI. Checks-watch remediates red jobs (up to 3 pushes); Approve stays the
-merge proceed signal.
+Then arm **`pr-approve-watch`** if the PR is still open (plus
+**`pr-checks-watch`** in gha-mode repos). Yield the turn; do not block
+the chat waiting for Approve or CI. Checks-watch remediates red jobs (up
+to 3 pushes); Approve stays the merge proceed signal.
 
 ## Live-host bundle (do not steal the smoke host)
 

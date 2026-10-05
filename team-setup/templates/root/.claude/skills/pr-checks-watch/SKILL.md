@@ -1,12 +1,16 @@
 ---
 name: pr-checks-watch
 description: >-
-  Background-watch open PRs for GitHub check failures, then wake the agent
+  Gha-mode repos only (no `ci.mode: local`). Background-watch open PRs for GitHub check failures, then wake the agent
   to read logs, fix, and push. Use after drop --finish, after pushing to an
   agent PR, or when the user asks to watch CI / PR checks.
 ---
 
 # PR checks watch (CI failures)
+
+> **Gha-mode repos only.** Repos whose `.sdlc/environments.json` sets
+> `ci.mode: local` run checks on the laptop — use `local-delivery` and do
+> not arm this watcher there (it waits on Actions that no longer run per PR).
 
 **Drop `--finish` does not wait on CI.** Arm this watcher so a red check
 wakes the agent without a chat nudge. Pair with `pr-approve-watch`
@@ -31,17 +35,19 @@ except `kickoff`.
    the user asks to watch checks), start
    `.cursor/skills/pr-checks-watch/scripts/watch-pr-checks.sh` in the
    **background** with agent `notify_on_output` on `^AGENT_LOOP_WAKE_pr_checks`.
-2. Do **not** redirect watcher stdout away from the monitored terminal.
-3. Do **not** block the chat with a foreground `sleep` / `gh pr checks --watch`
+2. **Do not start a second process** for a target that is already armed. The
+   script exits 0 with `already armed`. Treat that as success.
+3. Do **not** redirect watcher stdout away from the monitored terminal.
+4. Do **not** block the chat with a foreground `sleep` / `gh pr checks --watch`
    loop. That is this watcher's job.
-4. On `checks_failed`: activate Addi, `gh run view --log-failed` (or the
+5. On `checks_failed`: activate Addi, `gh run view --log-failed` (or the
    check annotation), fix in the drop worktree, commit `-s`, push. The
    watcher re-fires on the new SHA if it goes red again.
-5. Repeat up to **3** fix iterations per SHA lineage. After 3, comment the
+6. Repeat up to **3** fix iterations per SHA lineage. After 3, comment the
    failure on the PR and flag the human — do not loop silently.
-6. On `checks_success`: brief note only. Do **not** merge. Approve stays
+7. On `checks_success`: brief note only. Do **not** merge. Approve stays
    the proceed signal (`pr-approve-watch` / GHA merge-on-approve).
-7. **Drain wakes even when chat notify is silent** — see Wake delivery.
+8. **Drain wakes even when chat notify is silent** — see Wake delivery.
 
 ## Wake delivery (chat notify is best-effort)
 

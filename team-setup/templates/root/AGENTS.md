@@ -16,8 +16,8 @@ truth for workflow, git conventions, and architecture pointers.
 | Project brief        | `CLAUDE.md`                                                                                                                                       | `CLAUDE.md` + this `AGENTS.md`                                                         |
 | Architecture / style | `.claude/rules/`                                                                                                                                  | `.cursor/rules/*.mdc` (mirrored on setup)                                              |
 | Permissions          | `.claude/settings.json`                                                                                                                           | `.cursor/cli.json`                                                                     |
-| Slash-style prompts  | `.claude/commands/` (`/review`, `/add-repo`, `/sdlc-status`, `/prd-portfolio`, `/sdlc-drop`, `/sdlc-run`, `/watch-pr-approve`, `/watch-pr-checks`, `/watch-stakeholder-verify`, `/write-prd`, `/write-bug-spec`) | Matching `.cursor/rules/command-*.mdc` — ask the agent to follow them                  |
-| Agent skills         | `.claude/skills/`                                                                                                                                 | `.cursor/skills/` (e.g. `sdlc-drop`, `pr-approve-watch`, `pr-checks-watch`, `sdlc-run-supervise`, `sdlc-prd-progress`) |
+| Slash-style prompts  | `.claude/commands/` (`/review`, `/add-repo`, `/sdlc-status`, `/prd-portfolio`, `/sdlc-drop`, `/sdlc-run`, `/watch-pr-approve`, `/watch-pr-checks`, `/local-deliver`, `/watch-stakeholder-verify`, `/write-prd`, `/write-bug-spec`) | Matching `.cursor/rules/command-*.mdc` — ask the agent to follow them                  |
+| Agent skills         | `.claude/skills/`                                                                                                                                 | `.cursor/skills/` (e.g. `sdlc-drop`, `local-delivery`, `pr-approve-watch`, `pr-checks-watch`, `sdlc-run-supervise`, `sdlc-prd-progress`) |
 
 ## Quick start
 
@@ -54,18 +54,27 @@ AI assistance. Git hooks and Conventional Commits apply regardless of agent.
 - **Watched issues drive to resolution** — see `issue-resolve-watch`
   (`/watch-issue-resolve`); arm after taking ownership (recreate as Addi when
   asked).
-- **Live-verify PRs redeploy on push** — see `deploy-verify-watch`
-  (`/watch-deploy-verify`); arm for auth/multi-SPA/deploy-path PRs so each head
-  SHA dispatches a host deploy and wakes for human re-smoke before Approve.
+- **Local delivery where `ci.mode: local`** — see `local-delivery`
+  (`/local-deliver`): local CI incl. CDK snapshot comparison, `local-ci`
+  commit status, fresh reviewer subagent, laptop sandbox deploy
+  (`LOCAL_DEPLOY_GREEN`), then `pr-approve-watch`. Expired AWS session →
+  run the workspace SSO login (Comita:
+  `aws sso login --profile "${COMITA_SSO_PROFILE:-bakerorgrwat}"`; set
+  `COMITA_SSO_PROFILE` / `AWS_PROFILE` for your own profiles).
+- **Live-verify PRs redeploy on push (gha-mode repos only)** — see
+  `deploy-verify-watch` (`/watch-deploy-verify`); arm for
+  auth/multi-SPA/deploy-path PRs so each head SHA dispatches a host deploy
+  and wakes for human re-smoke before Approve.
 - **PRs and issues as Addi** — activate the workspace GitHub App before
   `gh pr create` / `gh issue create`; never open them as the human `gh` user
   (humans must Approve Addi PRs). See `addi-authorship`.
 - **Human PR feedback on the PR** — arm `pr-approve-watch` for Approve **and**
   Request changes (`/watch-pr-approve`); prefer GitHub reviews over chat for
   in-flight agent work.
-- **PR check failures wake the agent** — arm `pr-checks-watch` after
-  `drop --finish` or any push that starts CI (`/watch-pr-checks`). Fix and
-  push; do not merge on green. Do not block the chat on `gh pr checks --watch`.
+- **PR check failures wake the agent (gha-mode repos only)** — arm
+  `pr-checks-watch` after `drop --finish` or any push that starts CI
+  (`/watch-pr-checks`). Fix and push; do not merge on green. Do not block
+  the chat on `gh pr checks --watch`.
 - **Stakeholder sandbox smoke lives on Slack** — `stakeholder-verify-watch`
   (`/watch-stakeholder-verify`, publish only). Do not poll Slack from a
   laptop. Bret has no GitHub. Do not mix with his

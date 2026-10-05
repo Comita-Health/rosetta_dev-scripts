@@ -47,6 +47,8 @@ is the smoke ledger. Never mix them. No PHI on either.
    **deployed to SB** (DEV hosts; stakeholders say Sandbox / SB, not
    “dev”), reply **in that same thread** that a new update for the
    issue has been deployed to SB. No `@channel`. PHI-free. Not on push
-   or CI green — only `deploy_green` for the SHA that contains the fix.
+   or CI green — only a green sandbox deploy (`LOCAL_DEPLOY_GREEN`, or
+   a successful Deploy Organization dispatch) for the SHA that contains
+   the fix.
 
 Promote to prod only after sandbox Verified. Re-smoke prod as new rows.

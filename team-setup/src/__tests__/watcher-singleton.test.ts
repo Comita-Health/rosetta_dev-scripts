@@ -61,7 +61,9 @@ release_watch_locks
       '.cursor/skills/deploy-verify-watch/scripts/watch-deploy-verify.sh',
       '.claude/skills/deploy-verify-watch/scripts/watch-deploy-verify.sh',
       '.cursor/skills/issue-resolve-watch/scripts/watch-issue-resolve.sh',
-      '.claude/skills/issue-resolve-watch/scripts/watch-issue-resolve.sh'
+      '.claude/skills/issue-resolve-watch/scripts/watch-issue-resolve.sh',
+      '.cursor/skills/pr-checks-watch/scripts/watch-pr-checks.sh',
+      '.claude/skills/pr-checks-watch/scripts/watch-pr-checks.sh'
     ];
     for (const rel of scripts) {
       const source = readFileSync(path.join(TEMPLATES, rel), 'utf8');

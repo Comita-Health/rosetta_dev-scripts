@@ -1,5 +1,5 @@
 ---
-description: "Turn a bug report / repro discussion into a minimal Approved spec that runs through the same `sdlc-workflow run` machine as a feature, skipping PRD/decompose. Copy `rosetta_docs/product/BUG-SPEC-TEMPLATE.md` verbatim. Use only for non-trivial or blast-radius-sensitive bugs — fix trivial one-liners directly instead."
+description: "Turn a bug report / repro discussion into a minimal Approved spec that runs through the same `sdlc-workflow run` machine as a feature — without going through a PRD or `decompose`."
 alwaysApply: false
 ---
 
