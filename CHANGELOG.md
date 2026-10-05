@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **team-setup:** add the `local-delivery` skill, rule, `/local-deliver`
+  command, and independent reviewer prompt for repos whose
+  `.sdlc/environments.json` sets `ci.mode: local` (laptop CI + laptop
+  sandbox deploy; Actions runs PR Checks daily). Contract keys:
+  `ci.command`, `ci.statusCommand`, `ci.reviewChecklist`,
+  `sandbox.localDeployCommand`. `pr-checks-watch` and
+  `deploy-verify-watch` are now gha-mode only; `sdlc-drop` wraps
+  `--finish` in the local loop (always `--require-approve`) for local-mode
+  repos. Tracked `templates/root/.cursor/rules/*.mdc` are regenerated and
+  test-pinned to the `.claude/` source.
 - **team-setup:** `deploy-verify-watch` classifies Deploy Organization
   frontend / backend slices from the PR file list. Omit `--frontend` /
   `--backend` unless forcing a slice. Shared + lockfile count as both;
@@ -11,7 +21,8 @@
 - **team-setup:** add `pr-checks-watch` skill/rule/command — background-watch
   open PRs for GitHub check failures and wake the agent to fix/push (do not
   merge on green). `sdlc-drop --finish` now arms this **and**
-  `pr-approve-watch`. Replaces the blocking `gh pr checks` poll loop in
+  `pr-approve-watch` (gha-mode repos; local-mode repos use
+  `local-delivery`). Replaces the blocking `gh pr checks` poll loop in
   CLAUDE.md. Session-mortal until PRD-0020 Phase 3 absorbs remaining
   bash watchers.
 - **team-setup (watchers):** session-mortal `deploy-verify-watch`,

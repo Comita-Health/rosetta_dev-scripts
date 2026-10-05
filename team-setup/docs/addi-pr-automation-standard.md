@@ -46,12 +46,14 @@ Inbound (start merge-on-approve):
    Payload: `{ "pr_number": <n> }`. Emitted by the Addi App **webhook bridge**
    (`team-setup/addi-merge-webhook/`) when it receives `pull_request_review`
    with `state=approved`.
-2. **`workflow_run`** on successful `CI` / `DCO` — retries Approved Addi
-   PRs after green checks (Approve-then-CI). Local-mode repos (`ci.mode:
-   local`) no longer run PR Checks per push: the merge step additionally
-   requires a `local-ci` commit status on the PR head, posted by the
-   laptop's local CI, and a missing status is "not ready" (retried on the
-   next poll), never a failure.
+2. **`workflow_run`** on successful `CI` / `PR Checks` / `DCO` — retries
+   Approved Addi PRs after green checks (Approve-then-CI). Local-mode repos
+   (`ci.mode: local`) no longer run PR Checks per push, so they list only
+   `CI` / `DCO`, and their merge step additionally requires a `local-ci`
+   commit status on the PR head (posted by `ci.statusCommand`); a missing or
+   failed status is "not ready" (retried on the next poll), never a red run.
+   Reference implementation: `comita_admissions`
+   `.github/workflows/addi-merge-on-approve.yml`.
 3. **`pull_request_review` / `submitted`** — best-effort; sometimes does not
    start a run.
 4. **`schedule` every 10 minutes** — last-resort poll (GitHub may delay or skip

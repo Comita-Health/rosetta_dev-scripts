@@ -1,7 +1,7 @@
 ---
 name: deploy-verify-watch
 description: >-
-  Background-watch live-verify PRs: classify auth/multi-SPA/deploy changes,
+  Gha-mode repos only (no `ci.mode: local`). Background-watch live-verify PRs: classify auth/multi-SPA/deploy changes,
   auto-dispatch Deploy Organization (or configured workflow) on each new head
   SHA, and wake the agent when the deploy finishes so a human can re-smoke
   before Approve/merge. Use when opening or pushing to PRs that need host

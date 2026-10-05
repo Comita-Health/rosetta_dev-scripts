@@ -23,7 +23,8 @@ Slack poller.
 
 Do **not** use Bret’s **Feedback** tracker for this — that list is an
 inbox of asks, not a smoke ledger. Operator-linked Slack threads get a
-separate SB-deploy **thread reply** (`deploy-verify-watch`); that is
+separate SB-deploy **thread reply** (`local-delivery` step g, or
+`deploy-verify-watch` in gha-mode repos); that is
 not this thread and not `@channel`.
 
 This replaced the paid Slack **Lists** model. Do not reintroduce
@@ -38,7 +39,8 @@ Policy: `comita_docs/docs/runbooks/work-intake-and-verification.md`.
 - When opening / pushing a `verify-live` PR that needs Bret smoke.
 - When the operator says to publish stakeholder verify.
 
-Pair with `deploy-verify-watch` and `pr-approve-watch`. A
+Pair with `local-delivery` (local-mode repos) or `deploy-verify-watch`
+(gha-mode repos), and `pr-approve-watch`. A
 :white_check_mark: is **not** GitHub Approve and is **not**
 promote-to-prod.
 
@@ -63,7 +65,9 @@ promote-to-prod.
 
 ## Publish
 
-Publishing is **hosted** — the `notify-sandbox-landed` job in Deploy
+In local-mode repos the laptop deploy publishes: the final head's
+`sandbox.localDeployCommand --publish-verify` (release notes committed
+first). In gha-mode repos publishing is **hosted** — the `notify-sandbox-landed` job in Deploy
 Organization runs it once the sandbox deploy is green. Run it by hand
 only to backfill:
 

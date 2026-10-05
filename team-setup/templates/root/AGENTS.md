@@ -58,7 +58,9 @@ AI assistance. Git hooks and Conventional Commits apply regardless of agent.
   (`/local-deliver`): local CI incl. CDK snapshot comparison, `local-ci`
   commit status, fresh reviewer subagent, laptop sandbox deploy
   (`LOCAL_DEPLOY_GREEN`), then `pr-approve-watch`. Expired AWS session →
-  run the workspace SSO login (Comita: `aws sso login --profile bakerorgrwat`).
+  run the workspace SSO login (Comita:
+  `aws sso login --profile "${COMITA_SSO_PROFILE:-bakerorgrwat}"`; set
+  `COMITA_SSO_PROFILE` / `AWS_PROFILE` for your own profiles).
 - **Live-verify PRs redeploy on push (gha-mode repos only)** — see
   `deploy-verify-watch` (`/watch-deploy-verify`); arm for
   auth/multi-SPA/deploy-path PRs so each head SHA dispatches a host deploy

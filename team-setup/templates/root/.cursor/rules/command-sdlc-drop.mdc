@@ -1,8 +1,8 @@
 ---
-description: "Arm an `sdlc-workflow` drop (one worktree + one PR) for inbox / direct work, implement as commits in that worktree, then `drop --finish` and arm `pr-approve-watch` plus `pr-checks-watch`. Follow the `sdlc-drop` skill (`.claude/skills/sdlc-drop/SKILL.md` or `.cursor/skills/sdlc-drop/SKILL.md`). Keep `run` / `decompose` as the spec-task opt-in."
+description: "Arm an `sdlc-workflow` drop (one worktree + one PR) for inbox / direct work, implement as commits in that worktree, then `drop --finish` and arm `pr-approve-watch`. In local-mode repos (`ci.mode: local` in `.sdlc/environments.json`) follow `local-delivery` around the finish (local CI, `local-ci` status, reviewer subagent, laptop sandbox deploy); arm `pr-checks-watch` only in gha-mode repos. Follow the `sdlc-drop` skill (`.claude/skills/sdlc-drop/SKILL.md` or `.cursor/skills/sdlc-drop/SKILL.md`). Same-session related work on a one-SHA smoke host is one bundle (`sdlc-live-host-bundle`) — do not steal the sandbox with sibling drops. Keep `run` / `decompose` as the spec-task opt-in."
 alwaysApply: false
 ---
 
 # /sdlc-drop (Cursor)
 
-Arm an `sdlc-workflow` drop (one worktree + one PR) for inbox / direct work, implement as commits in that worktree, then `drop --finish` and arm `pr-approve-watch` plus `pr-checks-watch`. Follow the `sdlc-drop` skill (`.claude/skills/sdlc-drop/SKILL.md` or `.cursor/skills/sdlc-drop/SKILL.md`). Keep `run` / `decompose` as the spec-task opt-in.
+Arm an `sdlc-workflow` drop (one worktree + one PR) for inbox / direct work, implement as commits in that worktree, then `drop --finish` and arm `pr-approve-watch`. In local-mode repos (`ci.mode: local` in `.sdlc/environments.json`) follow `local-delivery` around the finish (local CI, `local-ci` status, reviewer subagent, laptop sandbox deploy); arm `pr-checks-watch` only in gha-mode repos. Follow the `sdlc-drop` skill (`.claude/skills/sdlc-drop/SKILL.md` or `.cursor/skills/sdlc-drop/SKILL.md`). Same-session related work on a one-SHA smoke host is one bundle (`sdlc-live-host-bundle`) — do not steal the sandbox with sibling drops. Keep `run` / `decompose` as the spec-task opt-in.

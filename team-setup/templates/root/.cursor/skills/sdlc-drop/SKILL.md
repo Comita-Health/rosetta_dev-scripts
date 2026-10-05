@@ -104,9 +104,11 @@ Activate the workspace GitHub App so author/committer are Addi.
 
 **Local-mode repos** (`"ci": { "mode": "local" }` in the target repo's
 `.sdlc/environments.json`): follow **`local-delivery`** around this step —
-run the local CI command until green before `--finish`, then post the
-`local-ci` status, run the fresh reviewer subagent, fix findings, and
-deploy the sandbox from the laptop. Do not arm `pr-checks-watch` there.
+run `ci.command` until green before `--finish`, **always pass
+`--require-approve`**, then run `ci.statusCommand` to post the `local-ci`
+status, run the fresh reviewer subagent, fix findings, and deploy the
+sandbox with `sandbox.localDeployCommand`. Do not arm `pr-checks-watch`
+there.
 
 ```bash
 cd "$ENGINE"

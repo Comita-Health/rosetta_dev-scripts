@@ -161,7 +161,7 @@ describe('layDownRootConfig', () => {
 
     expect(written('local-delivery.mdc')).toContain('alwaysApply: true');
     expect(written('local-delivery.mdc')).toContain(
-      'Default delivery loop: local CI, Addi PR, local reviewer subagent, laptop sandbox deploy'
+      'Default for ci.mode=local repos: local CI, Addi PR, local reviewer subagent, laptop sandbox deploy'
     );
     expect(written('command-local-deliver.mdc')).toContain(
       'alwaysApply: false'

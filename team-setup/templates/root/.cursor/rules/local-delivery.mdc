@@ -1,3 +1,8 @@
+---
+description: "Default for ci.mode=local repos: local CI, Addi PR, local reviewer subagent, laptop sandbox deploy"
+alwaysApply: true
+---
+
 # Local delivery (default for local-mode repos)
 
 When a repo's `.sdlc/environments.json` sets `"ci": { "mode": "local" }`,

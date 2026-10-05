@@ -1,7 +1,7 @@
 ---
 name: pr-checks-watch
 description: >-
-  Background-watch open PRs for GitHub check failures, then wake the agent
+  Gha-mode repos only (no `ci.mode: local`). Background-watch open PRs for GitHub check failures, then wake the agent
   to read logs, fix, and push. Use after drop --finish, after pushing to an
   agent PR, or when the user asks to watch CI / PR checks.
 ---

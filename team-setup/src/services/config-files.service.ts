@@ -60,7 +60,7 @@ const mirrorClaudeRulesToCursor = (
                             : stem === 'pr-checks-watch'
                               ? 'Opt-in (gha-mode repos only): watch agent PRs for GitHub check failures; fix and push, do not merge on green'
                               : stem === 'local-delivery'
-                                ? 'Default delivery loop: local CI, Addi PR, local reviewer subagent, laptop sandbox deploy'
+                                ? 'Default for ci.mode=local repos: local CI, Addi PR, local reviewer subagent, laptop sandbox deploy'
                                 : stem === 'addi-authorship'
                                   ? 'Mandatory: open PRs and issues as Addi (GitHub App), never as the human gh user'
                                   : stem === 'comita-brand-spelling'
