@@ -33,7 +33,7 @@ except `kickoff`.
 
 1. After `drop --finish` / `gh pr create` / a push that starts CI (or when
    the user asks to watch checks), start
-   `.claude/skills/pr-checks-watch/scripts/watch-pr-checks.sh` in the
+   `.cursor/skills/pr-checks-watch/scripts/watch-pr-checks.sh` in the
    **background** with agent `notify_on_output` on `^AGENT_LOOP_WAKE_pr_checks`.
 2. **Do not start a second process** for a target that is already armed. The
    script exits 0 with `already armed`. Treat that as success.
@@ -66,7 +66,7 @@ AGENT_LOOP_WAKE_pr_checks {"reason":"checks_failed",...}
 ## Launch template
 
 ```bash
-bash .claude/skills/pr-checks-watch/scripts/watch-pr-checks.sh \
+bash .cursor/skills/pr-checks-watch/scripts/watch-pr-checks.sh \
   --interval 30 \
   --activate ~/.config/comita/github-app-activate.sh \
   --kickoff \
