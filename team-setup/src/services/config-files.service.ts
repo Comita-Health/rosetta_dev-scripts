@@ -68,7 +68,7 @@ const mirrorClaudeRulesToCursor = (
                                     : stem === 'work-intake'
                                       ? 'Issues are the ledger; PRD vs ADR; Bret verifies on Slack not GitHub'
                                       : stem === 'stakeholder-verify-watch'
-                                        ? 'Default: publish sandbox verify to Slack and watch Bret check-off (no GitHub)'
+                                        ? 'Default: publish sandbox verify to a Slack thread; do not poll Slack from a laptop'
                                         : `Rosetta rule: ${stem}`;
       const contents = [
         '---',

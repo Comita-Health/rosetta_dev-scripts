@@ -1,7 +1,8 @@
 # SDLC live-host bundle (one smoke SHA)
 
-A **live smoke host** (the repo's sandbox deploy — `sandbox.deployCommand`
-from the laptop, or a Deploy Organization dispatch — `admit.dev` / SB)
+A **live smoke host** (the repo's sandbox deploy — `sandbox.localDeployCommand`
+from the laptop in local-mode repos, or a Deploy Organization dispatch —
+`admit.dev` / SB)
 serves **one SHA**. Each PR deploy replaces the host. Sibling drops from the
 default branch steal the host — yesterday’s **i** button, today’s catalog
 editor, never both.

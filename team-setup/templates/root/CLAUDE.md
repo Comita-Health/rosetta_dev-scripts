@@ -88,17 +88,18 @@ sets `"ci": { "mode": "local" }` test and deploy from the laptop. Actions
 runs their full suite once a day and deploys prod on promote. Follow
 **`local-delivery`** for every PR there:
 
-1. Plan, then TDD commits.
-2. `ci.command` until green — includes the CDK snapshot (synth)
-   comparison. Never auto-update snapshots.
-3. Open the PR as Addi (`drop --finish --require-approve`), then run
-   `ci.statusCommand` so the head has a `local-ci` commit status
-   (merge-on-approve requires it). Repeat after every push.
-4. A **fresh** reviewer subagent reviews `gh pr diff`; fix blockers and
-   majors; at most 2 rounds, then ask.
-5. Deploy the sandbox from the laptop (`sandbox.localDeployCommand`); wait
-   for `LOCAL_DEPLOY_GREEN`. Exit 3 is a tripped guard — stop and ask.
-6. Arm `pr-approve-watch`.
+- **a–b.** Arm the drop with `--require-approve` (the engine only reads it
+  at arm), plan, then TDD commits.
+- **c.** `ci.command` until green — includes the CDK snapshot (synth)
+  comparison. Never auto-update snapshots.
+- **d.** Open the PR as Addi, then run `ci.statusCommand` so the head has a
+  `local-ci` commit status (merge-on-approve requires it; docs-only PRs
+  too). Repeat after every push.
+- **e–f.** A **fresh** reviewer subagent reviews `gh pr diff`; fix blockers
+  and majors; at most 2 rounds, then ask.
+- **g.** Deploy the sandbox from the laptop (`sandbox.localDeployCommand`);
+  wait for `LOCAL_DEPLOY_GREEN`. Exit 3 is a tripped guard — stop and ask.
+- Then arm `pr-approve-watch`.
 
 When an AWS step reports an expired session, start the workspace SSO
 login in a background shell (Comita:

@@ -121,7 +121,7 @@ describe('layDownRootConfig', () => {
     );
     expect(mockWriteFileSync).toHaveBeenCalledWith(
       path.join('/base', '.cursor', 'rules', 'stakeholder-verify-watch.mdc'),
-      expect.stringContaining('Bret check-off')
+      expect.stringContaining('do not poll Slack from a laptop')
     );
     expect(mockWriteFileSync).toHaveBeenCalledWith(
       path.join('/base', '.cursor', 'rules', 'command-review.mdc'),

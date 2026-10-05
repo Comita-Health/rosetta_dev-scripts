@@ -1,5 +1,5 @@
 ---
-description: "Default: publish sandbox verify to Slack and watch Bret check-off (no GitHub)"
+description: "Default: publish sandbox verify to a Slack thread; do not poll Slack from a laptop"
 alwaysApply: true
 ---
 
