@@ -10,6 +10,8 @@ GitHub checks, or the user asks to watch CI / PR checks:
 - Follow the **`pr-checks-watch`** skill.
 - Arm `.cursor/skills/pr-checks-watch/scripts/watch-pr-checks.sh` in the
   background with agent wake on `AGENT_LOOP_WAKE_pr_checks`.
+- **Do not start a second process** if one is already watching that PR.
+  The script exits 0 with `already armed`.
 - Prefer `--kickoff` so an already-red rollup remediates immediately.
 - On `checks_failed`: logs → fix in the drop worktree → commit `-s` →
   push. Up to 3 iterations; then flag the human.

@@ -33,19 +33,21 @@ except `kickoff`.
 
 1. After `drop --finish` / `gh pr create` / a push that starts CI (or when
    the user asks to watch checks), start
-   `.cursor/skills/pr-checks-watch/scripts/watch-pr-checks.sh` in the
+   `.claude/skills/pr-checks-watch/scripts/watch-pr-checks.sh` in the
    **background** with agent `notify_on_output` on `^AGENT_LOOP_WAKE_pr_checks`.
-2. Do **not** redirect watcher stdout away from the monitored terminal.
-3. Do **not** block the chat with a foreground `sleep` / `gh pr checks --watch`
+2. **Do not start a second process** for a target that is already armed. The
+   script exits 0 with `already armed`. Treat that as success.
+3. Do **not** redirect watcher stdout away from the monitored terminal.
+4. Do **not** block the chat with a foreground `sleep` / `gh pr checks --watch`
    loop. That is this watcher's job.
-4. On `checks_failed`: activate Addi, `gh run view --log-failed` (or the
+5. On `checks_failed`: activate Addi, `gh run view --log-failed` (or the
    check annotation), fix in the drop worktree, commit `-s`, push. The
    watcher re-fires on the new SHA if it goes red again.
-5. Repeat up to **3** fix iterations per SHA lineage. After 3, comment the
+6. Repeat up to **3** fix iterations per SHA lineage. After 3, comment the
    failure on the PR and flag the human — do not loop silently.
-6. On `checks_success`: brief note only. Do **not** merge. Approve stays
+7. On `checks_success`: brief note only. Do **not** merge. Approve stays
    the proceed signal (`pr-approve-watch` / GHA merge-on-approve).
-7. **Drain wakes even when chat notify is silent** — see Wake delivery.
+8. **Drain wakes even when chat notify is silent** — see Wake delivery.
 
 ## Wake delivery (chat notify is best-effort)
 
@@ -64,7 +66,7 @@ AGENT_LOOP_WAKE_pr_checks {"reason":"checks_failed",...}
 ## Launch template
 
 ```bash
-bash .cursor/skills/pr-checks-watch/scripts/watch-pr-checks.sh \
+bash .claude/skills/pr-checks-watch/scripts/watch-pr-checks.sh \
   --interval 30 \
   --activate ~/.config/comita/github-app-activate.sh \
   --kickoff \
