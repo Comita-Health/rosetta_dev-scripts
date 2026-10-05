@@ -102,6 +102,12 @@ Activate the workspace GitHub App so author/committer are Addi.
 
 ## Finish
 
+**Local-mode repos** (`"ci": { "mode": "local" }` in the target repo's
+`.sdlc/environments.json`): follow **`local-delivery`** around this step —
+run the local CI command until green before `--finish`, then post the
+`local-ci` status, run the fresh reviewer subagent, fix findings, and
+deploy the sandbox from the laptop. Do not arm `pr-checks-watch` there.
+
 ```bash
 cd "$ENGINE"
 bunx tsx src/index.ts drop \
@@ -112,10 +118,10 @@ bunx tsx src/index.ts drop \
 # add --require-approve when Approve must remain the proceed signal
 ```
 
-Then arm **`pr-approve-watch`** and **`pr-checks-watch`** if the PR is
-still open. Yield the turn; do not block the chat waiting for Approve or
-CI. Checks-watch remediates red jobs (up to 3 pushes); Approve stays the
-merge proceed signal.
+Then arm **`pr-approve-watch`** if the PR is still open (plus
+**`pr-checks-watch`** in gha-mode repos). Yield the turn; do not block
+the chat waiting for Approve or CI. Checks-watch remediates red jobs (up
+to 3 pushes); Approve stays the merge proceed signal.
 
 ## Live-host bundle (do not steal the smoke host)
 

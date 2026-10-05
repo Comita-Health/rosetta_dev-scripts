@@ -1,6 +1,11 @@
-# Deploy verify watch (live smoke before land)
+# Deploy verify watch (gha-mode repos only)
 
-When you open or push to a PR that needs **live host verification** before
+Only for repos whose `.sdlc/environments.json` has no `ci` block or
+`ci.mode == "gha"`. Local-mode repos deploy the sandbox from the laptop
+(`local-delivery` step g) — do not arm this watcher or dispatch the deploy
+workflow there.
+
+When you open or push to a PR in a gha-mode repo that needs **live host verification** before
 merge (auth/logout/`redirect_uri`, cookie SSO, multi-SPA cutover, Deploy Org
 wiring), or the user asks to watch deploy-verify:
 

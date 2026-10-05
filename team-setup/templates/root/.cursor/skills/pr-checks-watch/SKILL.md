@@ -8,6 +8,10 @@ description: >-
 
 # PR checks watch (CI failures)
 
+> **Gha-mode repos only.** Repos whose `.sdlc/environments.json` sets
+> `ci.mode: local` run checks on the laptop — use `local-delivery` and do
+> not arm this watcher there (it waits on Actions that no longer run per PR).
+
 **Drop `--finish` does not wait on CI.** Arm this watcher so a red check
 wakes the agent without a chat nudge. Pair with `pr-approve-watch`
 (Approve / Request changes) — green checks are not permission to merge.

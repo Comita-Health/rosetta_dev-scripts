@@ -10,6 +10,10 @@ description: >-
 
 # Deploy verify watch (live smoke before land)
 
+> **Gha-mode repos only.** Repos whose `.sdlc/environments.json` sets
+> `ci.mode: local` deploy the sandbox from the laptop (`local-delivery`
+> step g) — do not arm this watcher or dispatch the deploy workflow there.
+
 **Some PRs cannot be trusted on CI alone.** Auth handoffs, logout/`redirect_uri`,
 cookie SSO, multi-SPA cutovers, and Deploy Org wiring need a real **dev** host
 smoke after each push — before Approve/merge.

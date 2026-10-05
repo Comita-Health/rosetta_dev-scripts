@@ -35,8 +35,9 @@ conflict, philosophy wins.
 When the ask is a GitHub issue (or a small set) that should land as **one PR**:
 
 - Follow **`sdlc-drop`** — `sdlc-workflow drop` arms one worktree, implement
-  as commits, `drop --finish` opens the PR, then `pr-approve-watch` and
-  `pr-checks-watch`.
+  as commits, `drop --finish` opens the PR, then `pr-approve-watch`. In
+  local-mode repos (`ci.mode: local`) the **`local-delivery`** loop wraps
+  the finish; `pr-checks-watch` is for gha-mode repos only.
 - Slash reminder: `/sdlc-drop`.
 - Do **not** `decompose` a drop into per-task PRs.
 - **Live smoke host = one SHA.** Same-session related work is **one
@@ -80,14 +81,36 @@ default branch after GHA merges. Otherwise merge as Addi, then pull. Do **not**
 treat chat "approved" as the proceed signal. Slash: `/watch-pr-approve`. See
 `rosetta_dev-scripts/team-setup/docs/addi-pr-automation-standard.md`.
 
-## PR checks watch (CI failures)
+## Local delivery (default where `ci.mode: local`)
 
-When you open or push to an agent PR: follow **`pr-checks-watch`** — arm the
-background checks watcher, wake on `AGENT_LOOP_WAKE_pr_checks`. After
-`sdlc-drop --finish`, arm this **and** `pr-approve-watch`. On red: logs →
-fix → push (up to 3 iterations). On green: brief note only; do **not**
-merge. Do **not** block the chat on `gh pr checks --watch`. Slash:
-`/watch-pr-checks`.
+GitHub Actions minutes cost money, so repos whose `.sdlc/environments.json`
+sets `"ci": { "mode": "local" }` test and deploy from the laptop. Actions
+runs their full suite once a day and deploys prod on promote. Follow
+**`local-delivery`** for every PR there:
+
+1. Plan, then TDD commits.
+2. Local CI (`ci.command`) until green — includes the CDK snapshot
+   (synth) comparison. Never auto-update snapshots.
+3. Open the PR as Addi; re-run CI with `--post-status` so the head has a
+   `local-ci` commit status (merge-on-approve requires it).
+4. A **fresh** reviewer subagent reviews `gh pr diff`; fix blockers and
+   majors; at most 2 rounds, then ask.
+5. Deploy the sandbox from the laptop (`sandbox.deployCommand`); wait for
+   `LOCAL_DEPLOY_GREEN`. Exit 3 is a tripped guard — stop and ask.
+6. Arm `pr-approve-watch`.
+
+When an AWS step reports an expired session, run the workspace SSO login
+in the background (Comita: `aws sso login --profile bakerorgrwat`; set
+`COMITA_SSO_PROFILE` for yours) and tell the human a browser sign-in is
+waiting. Slash: `/local-deliver`.
+
+## PR checks watch (gha-mode repos only)
+
+In repos **without** `ci.mode: local`, after opening or pushing to an agent
+PR: follow **`pr-checks-watch`** — arm the background checks watcher, wake
+on `AGENT_LOOP_WAKE_pr_checks`. On red: logs → fix → push (up to 3
+iterations). On green: brief note only; do **not** merge. Do **not** block
+the chat on `gh pr checks --watch`. Slash: `/watch-pr-checks`.
 
 ## Work intake and stakeholder verify
 
@@ -294,7 +317,12 @@ After opening or pushing to a PR, GitHub Copilot posts an automated review (typi
 
 ### PR checks review cycle
 
-After pushing to a PR, required status checks (CI) run automatically. **Arm
+**Local-mode repos** (`ci.mode: local`): checks do not run in Actions per
+push. Run the local CI command before every push and post the `local-ci`
+status after it (see **Local delivery** above). Up to **3** fix attempts
+on the same failure, then flag for human review.
+
+**Gha-mode repos:** required status checks run automatically. **Arm
 `pr-checks-watch` instead of blocking the chat on a poll loop.** The
 watcher wakes on `checks_failed` / `checks_success`. On failure: retrieve
 logs (`gh run view {run-id} --log-failed`), fix, commit, push; the watcher

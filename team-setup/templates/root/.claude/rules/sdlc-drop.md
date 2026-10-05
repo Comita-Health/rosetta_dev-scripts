@@ -6,8 +6,11 @@ land as **one PR**, or the user asks to drop / `/sdlc-drop`:
 - Follow the **`sdlc-drop`** skill.
 - Arm `sdlc-workflow drop --drop-id … --repo … --issues owner/repo#N`.
 - Implement as commits in `~/.rosetta/sdlc-drops/<id>/worktree`.
+- In local-mode repos (`ci.mode: local`) follow **`local-delivery`**:
+  local CI before `--finish`, then post the `local-ci` status, run the
+  reviewer subagent, and deploy the sandbox from the laptop.
 - `drop --finish` opens the one PR; then arm **`pr-approve-watch`**
-  and **`pr-checks-watch`**.
+  (and **`pr-checks-watch`** only in gha-mode repos).
 - Do **not** `decompose` a drop into per-task PRs.
 - Same-session related work on a **one-SHA smoke host** is **one
   bundle** (one branch, many commits, one PR). Do not steal the host

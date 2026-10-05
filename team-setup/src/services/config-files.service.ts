@@ -56,18 +56,20 @@ const mirrorClaudeRulesToCursor = (
                         : stem === 'issue-resolve-watch'
                           ? 'Default: watch owned GitHub issues toward resolution (Done-when → close)'
                           : stem === 'deploy-verify-watch'
-                            ? 'Default: live-verify PRs auto-dispatch deploy on push; re-smoke before Approve'
+                            ? 'Opt-in (gha-mode repos only): live-verify PRs auto-dispatch the deploy workflow; re-smoke before Approve'
                             : stem === 'pr-checks-watch'
-                              ? 'Default: background-watch agent PRs for GitHub check failures; fix and push, do not merge on green'
-                              : stem === 'addi-authorship'
-                                ? 'Mandatory: open PRs and issues as Addi (GitHub App), never as the human gh user'
-                                : stem === 'comita-brand-spelling'
-                                  ? 'Spell the product Comita; Kamita is pronunciation only'
-                                  : stem === 'work-intake'
-                                    ? 'Issues are the ledger; PRD vs ADR; Bret verifies on Slack not GitHub'
-                                    : stem === 'stakeholder-verify-watch'
-                                      ? 'Default: publish sandbox verify to Slack and watch Bret check-off (no GitHub)'
-                                      : `Rosetta rule: ${stem}`;
+                              ? 'Opt-in (gha-mode repos only): watch agent PRs for GitHub check failures; fix and push, do not merge on green'
+                              : stem === 'local-delivery'
+                                ? 'Default delivery loop: local CI, Addi PR, local reviewer subagent, laptop sandbox deploy'
+                                : stem === 'addi-authorship'
+                                  ? 'Mandatory: open PRs and issues as Addi (GitHub App), never as the human gh user'
+                                  : stem === 'comita-brand-spelling'
+                                    ? 'Spell the product Comita; Kamita is pronunciation only'
+                                    : stem === 'work-intake'
+                                      ? 'Issues are the ledger; PRD vs ADR; Bret verifies on Slack not GitHub'
+                                      : stem === 'stakeholder-verify-watch'
+                                        ? 'Default: publish sandbox verify to Slack and watch Bret check-off (no GitHub)'
+                                        : `Rosetta rule: ${stem}`;
       const contents = [
         '---',
         `description: ${yamlDoubleQuoted(description)}`,

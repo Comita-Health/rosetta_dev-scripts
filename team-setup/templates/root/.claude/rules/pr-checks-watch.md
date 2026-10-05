@@ -1,7 +1,11 @@
-# PR checks watch (default for agent PRs)
+# PR checks watch (gha-mode repos only)
 
-When you open or push to a pull request that runs GitHub checks, or the
-user asks to watch CI / PR checks:
+Only for repos whose `.sdlc/environments.json` has no `ci` block or
+`ci.mode == "gha"`. Local-mode repos run checks on the laptop — follow
+`local-delivery` and do not arm this watcher there.
+
+When you open or push to a pull request in a gha-mode repo that runs
+GitHub checks, or the user asks to watch CI / PR checks:
 
 - Follow the **`pr-checks-watch`** skill.
 - Arm `.cursor/skills/pr-checks-watch/scripts/watch-pr-checks.sh` in the

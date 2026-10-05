@@ -19,7 +19,8 @@ which path owns what.
 | Stacked PR (`pull.stack` set), Approved + mergeable                       | **GHA (gold)**                 | `PUT .../merge-async` with `merge_method=merge` (sync `gh pr merge` fails)      |
 | Stack blocked because a **lower** PR is CONFLICTING                       | **Agent / human**              | Fix bottom-up; GHA comments only — does not auto-resolve conflicts              |
 | Human **Requests changes**                                                | **Agent / `pr-approve-watch`** | Fix, push, reply; **do not merge** until Approve                                |
-| Required GitHub checks fail                                               | **Agent / `pr-checks-watch`**  | Logs → fix → push (up to 3); **do not merge** on green                          |
+| Required GitHub checks fail (gha-mode repos)                              | **Agent / `pr-checks-watch`**  | Logs → fix → push (up to 3); **do not merge** on green                          |
+| Local-mode repo (`ci.mode: local`): per-PR checks                         | **Agent / `local-delivery`**   | Local CI on the laptop posts the `local-ci` status; GHA merge requires it       |
 | Review-comment triage (Copilot / human threads)                           | **Agent / `pr-approve-watch`** | Reply + resolve; GHA does not triage comments                                   |
 | Agent opens a PR                                                          | **Addi identity**              | `addi-github-identity` / `addi-authorship` — activate App before `gh pr create` |
 | Consumer **Jira ticket → code → PR → merge** (no human Approve)           | **`process-ticket.yml`**       | Separate automation; keep. Not replaceable by merge-on-approve                  |
@@ -45,8 +46,12 @@ Inbound (start merge-on-approve):
    Payload: `{ "pr_number": <n> }`. Emitted by the Addi App **webhook bridge**
    (`team-setup/addi-merge-webhook/`) when it receives `pull_request_review`
    with `state=approved`.
-2. **`workflow_run`** on successful `CI` / `PR Checks` — retries Approved Addi
-   PRs after green checks (Approve-then-CI).
+2. **`workflow_run`** on successful `CI` / `DCO` — retries Approved Addi
+   PRs after green checks (Approve-then-CI). Local-mode repos (`ci.mode:
+   local`) no longer run PR Checks per push: the merge step additionally
+   requires a `local-ci` commit status on the PR head, posted by the
+   laptop's local CI, and a missing status is "not ready" (retried on the
+   next poll), never a failure.
 3. **`pull_request_review` / `submitted`** — best-effort; sometimes does not
    start a run.
 4. **`schedule` every 10 minutes** — last-resort poll (GitHub may delay or skip
