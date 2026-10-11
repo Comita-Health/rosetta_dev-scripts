@@ -46,6 +46,8 @@ AI assistance. Git hooks and Conventional Commits apply regardless of agent.
   bundle**, not sibling PRs (`sdlc-live-host-bundle`). `run` /
   `decompose` stay the spec-task opt-in.
 - Conventional Commits are enforced by husky `commit-msg` in every Rosetta repo.
+- **Architecture changes update the docs repo** in the same unit of work — see
+  `architecture-docs`.
 - **No “Made with Cursor” (or similar) in commits or PR descriptions** — see
   `.claude/rules/no-tool-attribution.md` / `.cursor/rules/no-tool-attribution.mdc`.
 - **Spell the product Comita** (pronounced “Kamita”) — see
