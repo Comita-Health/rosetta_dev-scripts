@@ -65,13 +65,15 @@ const mirrorClaudeRulesToCursor = (
                                   ? 'Mandatory: open PRs and issues as Addi (GitHub App), never as the human gh user'
                                   : stem === 'comita-brand-spelling'
                                     ? 'Spell the product Comita; Kamita is pronunciation only'
-                                    : stem === 'work-intake'
-                                      ? 'Issues are the ledger; PRD vs ADR; Bret verifies on Slack not GitHub'
-                                      : stem === 'stakeholder-verify-watch'
-                                        ? 'Default: publish sandbox verify to a Slack thread; do not poll Slack from a laptop'
-                                        : stem === 'architecture-docs'
-                                          ? 'Architecture-affecting changes update the docs repo in the same unit of work'
-                                          : `Rosetta rule: ${stem}`;
+                                    : stem === 'comita-theme'
+                                      ? 'One Comita theme and button set across every product SPA'
+                                      : stem === 'work-intake'
+                                        ? 'Issues are the ledger; PRD vs ADR; Bret verifies on Slack not GitHub'
+                                        : stem === 'stakeholder-verify-watch'
+                                          ? 'Default: publish sandbox verify to a Slack thread; do not poll Slack from a laptop'
+                                          : stem === 'architecture-docs'
+                                            ? 'Architecture-affecting changes update the docs repo in the same unit of work'
+                                            : `Rosetta rule: ${stem}`;
       const contents = [
         '---',
         `description: ${yamlDoubleQuoted(description)}`,
