@@ -703,8 +703,36 @@ else:
     if sha and sha != prev_sha and prev_sha:
         reason = "head_pushed"
 
+    def list_runs():
+        try:
+            return gh_json([
+                "run", "list", "-R", repo,
+                "--workflow", workflow,
+                "--branch", branch,
+                "--limit", "15",
+                "--json", "databaseId,headSha,status,conclusion,url,event",
+            ])
+        except Exception:
+            return []
+
+    runs = list_runs()
+    active = {"queued", "in_progress", "pending", "waiting", "requested"}
+    # GitHub keeps one pending run per concurrency group: a second dispatch
+    # replaces a queued one (for example a full deploy someone started by
+    # hand). Adopt a queued, running, or green run for this SHA instead.
+    adoptable = any(
+        r.get("headSha") == sha
+        and (
+            r.get("status") in active
+            or (r.get("status") == "completed" and r.get("conclusion") == "success")
+        )
+        for r in runs
+    )
+
     # Auto-dispatch on new SHA (or never dispatched)
-    if auto and sha and branch and dispatched_sha != sha:
+    if auto and sha and branch and dispatched_sha != sha and adoptable:
+        dispatched_sha = sha
+    elif auto and sha and branch and dispatched_sha != sha:
         fields = [
             "workflow", "run", workflow, "-R", repo, "--ref", branch,
             "-f", f"environment={os.environ.get('ENVIRONMENT') or 'dev'}",
@@ -720,20 +748,9 @@ else:
             time.sleep(3)
             # Prefer deploy_dispatched over head_pushed when both apply.
             reason = "deploy_dispatched"
+            runs = list_runs()
         except Exception:
             pass
-
-    # Resolve run for current SHA
-    try:
-        runs = gh_json([
-            "run", "list", "-R", repo,
-            "--workflow", workflow,
-            "--branch", branch,
-            "--limit", "15",
-            "--json", "databaseId,headSha,status,conclusion,url,event",
-        ])
-    except Exception:
-        runs = []
 
     match = None
     for r in runs:
