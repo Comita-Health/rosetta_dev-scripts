@@ -10,6 +10,7 @@ describe('buildReviewerPrompt', () => {
     );
 
     expect(prompt).toContain('## Documentation bar (TSDoc / JSDoc)');
+    expect(prompt).toContain('## Architecture docs bar');
     expect(prompt).toContain('@injectable()');
     expect(prompt).toContain('non-obvious platform/auth/session/entitlement');
     expect(prompt).toContain('documentation-bar');

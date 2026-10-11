@@ -42,14 +42,24 @@ export class DropHandler implements IDropHandler {
       return state;
     }
 
-    state = this._dropService.openPr(
-      input.dropsDir,
-      state.dropId,
-      input.tasks
-    );
+    state = this._dropService.openPr(input.dropsDir, state.dropId, input.tasks);
     console.log(
       chalk.green(`  ✓ PR ${state.prUrl ?? '(unknown)'} (one PR per drop)`)
     );
+    const sandbox = state.sandbox;
+    if (sandbox?.mode === 'repo-workflow') {
+      console.log(
+        chalk.green(
+          `  ✓ sandbox: the repo deploys this PR on every push (${sandbox.workflow}); the result posts on the PR`
+        )
+      );
+    } else if (sandbox?.mode === 'agent-watch') {
+      console.log(
+        chalk.yellow(
+          '  ⚠ sandbox: this repo does not deploy drop PRs itself — arm deploy-verify-watch with --dispatch-on-arm now'
+        )
+      );
+    }
 
     if (state.envelope !== undefined) {
       const verdict = await this._envelopeGate.evaluate({
@@ -62,9 +72,7 @@ export class DropHandler implements IDropHandler {
         console.log(chalk.yellow(`  ⚠ ${note}`));
       }
       if (verdict.outcome !== 'pass') {
-        console.log(
-          chalk.red(`  ✗ envelope: ${verdict.reasons.join('; ')}`)
-        );
+        console.log(chalk.red(`  ✗ envelope: ${verdict.reasons.join('; ')}`));
         return state;
       }
     }

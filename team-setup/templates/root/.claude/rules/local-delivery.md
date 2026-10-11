@@ -12,11 +12,18 @@ Actions. Actions runs the full suite daily and deploys prod on promote.
 - Every PR in a local-mode repo needs `local-ci` on its head, docs-only too.
 - Merge-on-approve requires the `local-ci` commit status on the PR head.
   Run `ci.statusCommand` after every push.
-- The sandbox deploys from the laptop. Wait for `LOCAL_DEPLOY_GREEN` /
-  `LOCAL_DEPLOY_FAILED`. Exit 3 is a tripped guard — stop and ask.
-- Expired AWS session: start the workspace SSO login in a background shell
-  (Comita: `aws sso login --profile "${COMITA_SSO_PROFILE:-bakerorgrwat}"`)
-  and tell the human a browser sign-in is waiting.
+- Local CI (`ci.statusCommand`) and the sandbox deploy
+  (`sandbox.localDeployCommand`) each run in a **background subagent**.
+  Do not block the chat on them (no shell-await, no sleep loop, no
+  polling). End the turn after launch. On the completion notice: CI red
+  → fix and relaunch (max 3); CI green is not a merge; deploy green →
+  tell the operator the sandbox SHA. Exit 3 is a tripped guard — stop
+  and ask.
+- Expired AWS session: the deploy subagent starts the workspace SSO
+  login (Comita:
+  `aws sso login --profile "${COMITA_SSO_PROFILE:-bakerorgrwat}"`) and
+  tells the human a browser sign-in is waiting. The main thread does
+  not poll.
 - Do **not** arm `pr-checks-watch` or `deploy-verify-watch`, and do not
   dispatch the deploy workflow, in local-mode repos.
 - Reviewer findings: fix blockers and majors; at most 2 rounds, then ask.

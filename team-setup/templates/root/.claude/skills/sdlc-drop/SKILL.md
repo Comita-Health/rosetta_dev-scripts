@@ -106,10 +106,9 @@ Activate the workspace GitHub App so author/committer are Addi.
 `.sdlc/environments.json`): follow **`local-delivery`** around this step —
 **arm** with `--require-approve` (stored in `drop.json` at arm; ignored on
 `--finish`) and confirm `jq -e .requireApprove ~/.rosetta/sdlc-drops/<id>/drop.json`
-before finishing, run `ci.command` until green, then run `ci.statusCommand` to post the `local-ci`
-status, run the fresh reviewer subagent, fix findings, and deploy the
-sandbox with `sandbox.localDeployCommand`. Do not arm `pr-checks-watch`
-there.
+before finishing. Local CI, the reviewer, and the sandbox deploy each
+launch as a **background subagent** — do not block the chat waiting on
+them. Do not arm `pr-checks-watch` there.
 
 ```bash
 cd "$ENGINE"
@@ -122,9 +121,30 @@ bunx tsx src/index.ts drop \
 ```
 
 Then arm **`pr-approve-watch`** if the PR is still open (plus
-**`pr-checks-watch`** in gha-mode repos). Yield the turn; do not block
-the chat waiting for Approve or CI. Checks-watch remediates red jobs (up
-to 3 pushes); Approve stays the merge proceed signal.
+**`pr-checks-watch`** in gha-mode repos).
+
+### Sandbox (every drop, before Approve)
+
+`--finish` prints how this PR reaches the sandbox:
+
+- `✓ sandbox: the repo deploys this PR on every push (…)` — the repo
+  declares `sandbox.dropDeployWorkflow` in `.sdlc/environments.json`. It
+  deploys what the branch changed, comments the result on the PR, and sets
+  a `sandbox-deploy` status. Arm **`deploy-verify-watch`** anyway (it only
+  watches here) so `deploy_green` wakes you.
+- `⚠ sandbox: … arm deploy-verify-watch` — arm it now with
+  `--dispatch-on-arm` and no slice flags, so it picks backend / frontend
+  from the PR paths.
+
+```bash
+bash .claude/skills/deploy-verify-watch/scripts/watch-deploy-verify.sh \
+  --interval 30 --activate "$ACTIVATE" --workflow "Deploy Organization" \
+  --environment dev --dispatch-on-arm --kickoff owner/repo#N
+```
+
+Do not tell anyone to smoke until the deploy for the PR head is green. Yield the turn; do not block the chat waiting for Approve or
+CI. Checks-watch remediates red jobs (up to 3 pushes); Approve stays the
+merge proceed signal.
 
 ## Live-host bundle (do not steal the smoke host)
 
