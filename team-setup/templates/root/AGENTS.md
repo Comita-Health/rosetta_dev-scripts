@@ -55,12 +55,14 @@ AI assistance. Git hooks and Conventional Commits apply regardless of agent.
   (`/watch-issue-resolve`); arm after taking ownership (recreate as Addi when
   asked).
 - **Local delivery where `ci.mode: local`** — see `local-delivery`
-  (`/local-deliver`): local CI incl. CDK snapshot comparison, `local-ci`
-  commit status, fresh reviewer subagent, laptop sandbox deploy
-  (`LOCAL_DEPLOY_GREEN`), then `pr-approve-watch`. Expired AWS session →
-  run the workspace SSO login (Comita:
-  `aws sso login --profile "${COMITA_SSO_PROFILE:-bakerorgrwat}"`; set
-  `COMITA_SSO_PROFILE` / `AWS_PROFILE` for your own profiles).
+  (`/local-deliver`): local CI and the sandbox deploy each run in a
+  **background subagent** (do not block the chat). CDK snapshot
+  comparison, `local-ci` commit status, fresh reviewer subagent (also
+  background), then `pr-approve-watch`. On the deploy notice,
+  `LOCAL_DEPLOY_GREEN` is the cue to tell the operator the SHA. Expired
+  AWS session → the deploy subagent runs the workspace SSO login
+  (Comita: `aws sso login --profile "${COMITA_SSO_PROFILE:-bakerorgrwat}"`;
+  set `COMITA_SSO_PROFILE` / `AWS_PROFILE` for your own profiles).
 - **Live-verify PRs redeploy on push (gha-mode repos only)** — see
   `deploy-verify-watch` (`/watch-deploy-verify`); arm for
   auth/multi-SPA/deploy-path PRs so each head SHA dispatches a host deploy

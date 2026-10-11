@@ -106,10 +106,9 @@ Activate the workspace GitHub App so author/committer are Addi.
 `.sdlc/environments.json`): follow **`local-delivery`** around this step —
 **arm** with `--require-approve` (stored in `drop.json` at arm; ignored on
 `--finish`) and confirm `jq -e .requireApprove ~/.rosetta/sdlc-drops/<id>/drop.json`
-before finishing, run `ci.command` until green, then run `ci.statusCommand` to post the `local-ci`
-status, run the fresh reviewer subagent, fix findings, and deploy the
-sandbox with `sandbox.localDeployCommand`. Do not arm `pr-checks-watch`
-there.
+before finishing. Local CI, the reviewer, and the sandbox deploy each
+launch as a **background subagent** — do not block the chat waiting on
+them. Do not arm `pr-checks-watch` there.
 
 ```bash
 cd "$ENGINE"
