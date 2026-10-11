@@ -1,7 +1,7 @@
 ---
 name: deploy-verify-watch
 description: >-
-  Background-watch live-verify PRs: classify auth/multi-SPA/deploy changes,
+  Gha-mode repos only (no `ci.mode: local`). Background-watch live-verify PRs: classify auth/multi-SPA/deploy changes,
   auto-dispatch Deploy Organization (or configured workflow) on each new head
   SHA, and wake the agent when the deploy finishes so a human can re-smoke
   before Approve/merge. Use when opening or pushing to PRs that need host
@@ -9,6 +9,10 @@ description: >-
 ---
 
 # Deploy verify watch (live smoke before land)
+
+> **Gha-mode repos only.** Repos whose `.sdlc/environments.json` sets
+> `ci.mode: local` deploy the sandbox from the laptop (`local-delivery`
+> step g) — do not arm this watcher or dispatch the deploy workflow there.
 
 **Some PRs cannot be trusted on CI alone.** Auth handoffs, logout/`redirect_uri`,
 cookie SSO, multi-SPA cutovers, and Deploy Org wiring need a real **dev** host
