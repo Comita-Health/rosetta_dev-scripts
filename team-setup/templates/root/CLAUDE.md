@@ -90,21 +90,26 @@ runs their full suite once a day and deploys prod on promote. Follow
 
 - **a–b.** Arm the drop with `--require-approve` (the engine only reads it
   at arm), plan, then TDD commits.
-- **c.** `ci.command` until green — includes the CDK snapshot (synth)
-  comparison. Never auto-update snapshots.
-- **d.** Open the PR as Addi, then run `ci.statusCommand` so the head has a
-  `local-ci` commit status (merge-on-approve requires it; docs-only PRs
-  too). Repeat after every push.
-- **e–f.** A **fresh** reviewer subagent reviews `gh pr diff`; fix blockers
-  and majors; at most 2 rounds, then ask.
-- **g.** Deploy the sandbox from the laptop (`sandbox.localDeployCommand`);
-  wait for `LOCAL_DEPLOY_GREEN`. Exit 3 is a tripped guard — stop and ask.
+- **c.** Launch `ci.statusCommand` in a **background subagent** — includes
+  the CDK snapshot (synth) comparison. Never auto-update snapshots. Do
+  not block the chat on the run.
+- **d.** Open the PR as Addi. The CI subagent posts the `local-ci` status
+  (merge-on-approve requires it; docs-only PRs too). Repeat after every
+  push, again in a background subagent.
+- **e–f.** A **fresh** reviewer subagent, also in the background, reviews
+  `gh pr diff`; on its notice, fix blockers and majors; at most 2 rounds,
+  then ask.
+- **g.** Launch the sandbox deploy in another background subagent
+  (`sandbox.localDeployCommand`). On its notice: `LOCAL_DEPLOY_GREEN` →
+  tell the operator the SHA. Exit 3 is a tripped guard — stop and ask.
 - Then arm `pr-approve-watch`.
 
-When an AWS step reports an expired session, start the workspace SSO
-login in a background shell (Comita:
+End the turn after launching a CI, review, or deploy subagent so the
+operator can keep talking. The completion notice is the proceed signal.
+When an AWS step reports an expired session, the deploy subagent starts
+the workspace SSO login (Comita:
 `aws sso login --profile "${COMITA_SSO_PROFILE:-bakerorgrwat}"` — set
-`COMITA_SSO_PROFILE` / `AWS_PROFILE` to your own profiles) and tell the
+`COMITA_SSO_PROFILE` / `AWS_PROFILE` to your own profiles) and tells the
 human a browser sign-in is waiting. Slash: `/local-deliver`.
 
 ## PR checks watch (gha-mode repos only)
