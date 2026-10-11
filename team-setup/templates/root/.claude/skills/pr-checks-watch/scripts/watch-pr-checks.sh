@@ -148,9 +148,33 @@ PY
   echo "watch-pr-checks: NOTE chat notify is best-effort; drain AGENT_LOOP_WAKE_pr_checks from this terminal if the chat stays quiet." >&2
 }
 
+release_watch_locks() { :; }
 STATE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/pr-checks-watch.XXXXXX")
-cleanup() { rm -rf "$STATE_DIR"; }
+cleanup() { rm -rf "$STATE_DIR"; release_watch_locks; }
 trap cleanup EXIT
+
+_WATCH_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "$_WATCH_SCRIPT_DIR/../../_lib/watcher-singleton.sh" ]]; then
+  # shellcheck disable=SC1091
+  source "$_WATCH_SCRIPT_DIR/../../_lib/watcher-singleton.sh"
+elif [[ -f "$_WATCH_SCRIPT_DIR/watcher-singleton.sh" ]]; then
+  # shellcheck disable=SC1091
+  source "$_WATCH_SCRIPT_DIR/watcher-singleton.sh"
+else
+  echo "watch-pr-checks: missing watcher-singleton.sh" >&2
+  exit 2
+fi
+unset _WATCH_SCRIPT_DIR
+
+claim_watch_targets "pr-checks" "${TARGETS[@]}"
+for _skipped in "${SKIPPED_TARGETS[@]+"${SKIPPED_TARGETS[@]}"}"; do
+  echo "watch-pr-checks: already armed ${_skipped} (skipping duplicate)" >&2
+done
+if [[ ${#CLAIMED_TARGETS[@]} -eq 0 ]]; then
+  echo "watch-pr-checks: already armed ${TARGETS[*]}; exiting 0" >&2
+  exit 0
+fi
+TARGETS=("${CLAIMED_TARGETS[@]}")
 
 write_state() {
   printf '%s\n' "$1" >"$2"
