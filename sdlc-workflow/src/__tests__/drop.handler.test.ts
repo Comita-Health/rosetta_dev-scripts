@@ -48,9 +48,11 @@ describe('DropHandler', () => {
 
   beforeEach(() => {
     arm = jest.fn().mockReturnValue(armed());
-    openPr = jest.fn().mockReturnValue(
-      armed({ prUrl: 'https://github.com/org/repo/pull/9', prNumber: 9 })
-    );
+    openPr = jest
+      .fn()
+      .mockReturnValue(
+        armed({ prUrl: 'https://github.com/org/repo/pull/9', prNumber: 9 })
+      );
     mergeDirect = jest.fn().mockReturnValue(
       armed({
         prUrl: 'https://github.com/org/repo/pull/9',
@@ -91,6 +93,36 @@ describe('DropHandler', () => {
     expect(openPr).toHaveBeenCalled();
     expect(mergeDirect).toHaveBeenCalled();
     expect(state.mergedSha).toBe('merge-sha');
+  });
+
+  it('says the repo deploys the PR, or asks the agent to arm the watcher', async () => {
+    const log = jest.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      openPr.mockReturnValue(
+        armed({
+          prNumber: 9,
+          sandbox: {
+            mode: 'repo-workflow',
+            workflow: 'sandbox-drop-deploy.yml'
+          }
+        })
+      );
+      await handler.run(input({ finish: true }));
+      expect(log.mock.calls.flat().join('\n')).toContain(
+        'the repo deploys this PR on every push (sandbox-drop-deploy.yml)'
+      );
+
+      log.mockClear();
+      openPr.mockReturnValue(
+        armed({ prNumber: 9, sandbox: { mode: 'agent-watch' } })
+      );
+      await handler.run(input({ finish: true }));
+      expect(log.mock.calls.flat().join('\n')).toContain(
+        'arm deploy-verify-watch'
+      );
+    } finally {
+      log.mockRestore();
+    }
   });
 
   it('prints unknown when the opened PR has no URL', async () => {

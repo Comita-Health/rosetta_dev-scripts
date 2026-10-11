@@ -232,6 +232,12 @@ export interface SandboxContract {
    * (SPEC-PRD-0022-P1 T-03). Absent → ledger-only race avoidance.
    */
   deployWorkflow?: string;
+  /**
+   * Workflow the repo runs on drop PRs to deploy them to the sandbox
+   * itself (e.g. `sandbox-drop-deploy.yml`). Present → `drop --finish`
+   * and the deploy watcher watch instead of dispatching a second deploy.
+   */
+  dropDeployWorkflow?: string;
 }
 
 /** The repo-owned verification contract: `.sdlc/verification.json`. */
@@ -798,8 +804,20 @@ export interface DropState {
   prNumber?: number;
   mergedSha?: string;
   envelope?: Envelope;
+  /** How the drop PR reaches the sandbox; set when the PR is opened. */
+  sandbox?: DropSandbox;
   updatedAt: string;
 }
+
+/**
+ * `repo-workflow`: the repo deploys drop PRs itself (`workflow` names it).
+ * `agent-watch`: the repo has a sandbox but no drop workflow; the agent must
+ * arm deploy-verify-watch. `none`: the repo declares no sandbox.
+ */
+export type DropSandbox =
+  | { mode: 'repo-workflow'; workflow: string }
+  | { mode: 'agent-watch' }
+  | { mode: 'none' };
 
 export type WorkflowErrorCode =
   | 'PRD_NOT_FOUND'

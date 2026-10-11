@@ -1,10 +1,17 @@
 import path from 'path';
 import { inject, injectable } from 'inversify';
+import type { IContractRepository } from '../repositories/contract.repository';
 import type { IGitRepository } from '../repositories/git.repository';
 import type { IPullRequestRepository } from '../repositories/pull-request.repository';
 import type { IDropStateRepository } from '../repositories/drop-state.repository';
 import { WORKFLOW_TOKENS } from '../tokens';
-import { DropInput, DropState, DropTask, WorkflowError } from '../types';
+import {
+  DropInput,
+  DropSandbox,
+  DropState,
+  DropTask,
+  WorkflowError
+} from '../types';
 import {
   dropBranchName,
   parseIssueRef,
@@ -23,6 +30,13 @@ export interface IDropService {
  * Two drops from the same tip get distinct worktrees. Merge for
  * `direct` does not wait on a human Approve; protection that still
  * requires a person fails loud.
+ *
+ * @remarks
+ * Opening the PR also records how it reaches the sandbox, from the
+ * repo's `.sdlc/environments.json` in the drop worktree. The engine does
+ * not deploy a drop itself: a repo that declares `dropDeployWorkflow`
+ * deploys on every push, and any other sandbox needs the agent to arm
+ * deploy-verify-watch.
  */
 @injectable()
 export class DropService implements IDropService {
@@ -32,7 +46,9 @@ export class DropService implements IDropService {
     @inject(WORKFLOW_TOKENS.PullRequestRepository)
     private readonly _prRepo: IPullRequestRepository,
     @inject(WORKFLOW_TOKENS.DropStateRepository)
-    private readonly _dropStateRepo: IDropStateRepository
+    private readonly _dropStateRepo: IDropStateRepository,
+    @inject(WORKFLOW_TOKENS.ContractRepository)
+    private readonly _contracts: IContractRepository
   ) {}
 
   arm(input: DropInput): DropState {
@@ -53,12 +69,7 @@ export class DropService implements IDropService {
     const branch = dropBranchName(dropId);
     const worktreePath = path.join(input.dropsDir, dropId, 'worktree');
     const baseSha = this._gitRepo.resolveSha(input.repoPath, input.baseRef);
-    this._gitRepo.addWorktree(
-      input.repoPath,
-      worktreePath,
-      branch,
-      baseSha
-    );
+    this._gitRepo.addWorktree(input.repoPath, worktreePath, branch, baseSha);
 
     const state: DropState = {
       dropId,
@@ -77,13 +88,10 @@ export class DropService implements IDropService {
     return state;
   }
 
-  openPr(
-    dropsDir: string,
-    dropId: string,
-    tasks: DropTask[] = []
-  ): DropState {
+  openPr(dropsDir: string, dropId: string, tasks: DropTask[] = []): DropState {
     const state = this._dropStateRepo.load(dropsDir, dropId);
     this._gitRepo.push(state.worktreePath, state.branch);
+    const sandbox = this.sandboxFor(state.worktreePath);
 
     const existing = this._prRepo.findByBranch(
       state.worktreePath,
@@ -95,6 +103,7 @@ export class DropService implements IDropService {
         tasks: tasks.length > 0 ? tasks : state.tasks,
         prUrl: existing.url,
         prNumber: existing.number,
+        sandbox,
         updatedAt: new Date().toISOString()
       };
       this._dropStateRepo.write(dropsDir, reused);
@@ -111,10 +120,22 @@ export class DropService implements IDropService {
       tasks: tasks.length > 0 ? tasks : state.tasks,
       prUrl: created.url,
       prNumber: created.number,
+      sandbox,
       updatedAt: new Date().toISOString()
     };
     this._dropStateRepo.write(dropsDir, next);
     return next;
+  }
+
+  private sandboxFor(worktreePath: string): DropSandbox {
+    const contract = this._contracts.loadSandbox(worktreePath);
+    if (contract === null) {
+      return { mode: 'none' };
+    }
+    if (contract.dropDeployWorkflow !== undefined) {
+      return { mode: 'repo-workflow', workflow: contract.dropDeployWorkflow };
+    }
+    return { mode: 'agent-watch' };
   }
 
   mergeDirect(dropsDir: string, dropId: string): DropState {
@@ -134,21 +155,16 @@ export class DropService implements IDropService {
       );
     }
     if (state.prNumber === undefined) {
-      throw new WorkflowError(
-        'drop has no PR to merge',
-        'DROP_INVALID',
-        [state.dropId]
-      );
+      throw new WorkflowError('drop has no PR to merge', 'DROP_INVALID', [
+        state.dropId
+      ]);
     }
     if (state.mergedSha !== undefined) {
       return state;
     }
 
     try {
-      const mergedSha = this._prRepo.merge(
-        state.worktreePath,
-        state.prNumber
-      );
+      const mergedSha = this._prRepo.merge(state.worktreePath, state.prNumber);
       const next: DropState = {
         ...state,
         mergedSha,
@@ -189,8 +205,7 @@ export class DropService implements IDropService {
       tasks.length > 0
         ? tasks
             .map(
-              task =>
-                `- [${task.done ? 'x' : ' '}] ${task.id}: ${task.title}`
+              task => `- [${task.done ? 'x' : ' '}] ${task.id}: ${task.title}`
             )
             .join('\n')
         : '- [ ] (commits on this branch are the drop tasks)';

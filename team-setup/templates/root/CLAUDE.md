@@ -38,6 +38,10 @@ When the ask is a GitHub issue (or a small set) that should land as **one PR**:
   as commits, `drop --finish` opens the PR, then `pr-approve-watch`. In
   local-mode repos (`ci.mode: local`) the **`local-delivery`** loop wraps
   the finish; `pr-checks-watch` is for gha-mode repos only.
+- **Drops reach the sandbox before Approve.** A repo that declares
+  `sandbox.dropDeployWorkflow` in `.sdlc/environments.json` deploys every
+  drop push itself; otherwise arm `deploy-verify-watch --dispatch-on-arm`.
+  `--finish` prints which. Arm the watcher either way for the green wake.
 - Slash reminder: `/sdlc-drop`.
 - Do **not** `decompose` a drop into per-task PRs.
 - **Live smoke host = one SHA.** Same-session related work is **one
