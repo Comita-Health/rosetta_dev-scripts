@@ -35,9 +35,16 @@ conflict, philosophy wins.
 When the ask is a GitHub issue (or a small set) that should land as **one PR**:
 
 - Follow **`sdlc-drop`** — `sdlc-workflow drop` arms one worktree, implement
-  as commits, `drop --finish` opens the PR, then `pr-approve-watch`.
+  as commits, `drop --finish` opens the PR, then `pr-approve-watch`. In
+  local-mode repos (`ci.mode: local`) the **`local-delivery`** loop wraps
+  the finish; `pr-checks-watch` is for gha-mode repos only.
 - Slash reminder: `/sdlc-drop`.
 - Do **not** `decompose` a drop into per-task PRs.
+- **Live smoke host = one SHA.** Same-session related work is **one
+  bundle** (one branch, many commits, one PR). Do not `--finish` a
+  sibling drop from the default branch and steal dest / `admit.dev` —
+  see **`sdlc-live-host-bundle`**. Unrelated work still branches from
+  dest.
 
 `--finish` does **not** wait on reviewer, CI, or AC. For `direct` it then
 calls `gh pr merge`. That succeeds when protection does not require a
@@ -74,16 +81,51 @@ default branch after GHA merges. Otherwise merge as Addi, then pull. Do **not**
 treat chat "approved" as the proceed signal. Slash: `/watch-pr-approve`. See
 `rosetta_dev-scripts/team-setup/docs/addi-pr-automation-standard.md`.
 
+## Local delivery (default where `ci.mode: local`)
+
+GitHub Actions minutes cost money, so repos whose `.sdlc/environments.json`
+sets `"ci": { "mode": "local" }` test and deploy from the laptop. Actions
+runs their full suite once a day and deploys prod on promote. Follow
+**`local-delivery`** for every PR there:
+
+- **a–b.** Arm the drop with `--require-approve` (the engine only reads it
+  at arm), plan, then TDD commits.
+- **c.** `ci.command` until green — includes the CDK snapshot (synth)
+  comparison. Never auto-update snapshots.
+- **d.** Open the PR as Addi, then run `ci.statusCommand` so the head has a
+  `local-ci` commit status (merge-on-approve requires it; docs-only PRs
+  too). Repeat after every push.
+- **e–f.** A **fresh** reviewer subagent reviews `gh pr diff`; fix blockers
+  and majors; at most 2 rounds, then ask.
+- **g.** Deploy the sandbox from the laptop (`sandbox.localDeployCommand`);
+  wait for `LOCAL_DEPLOY_GREEN`. Exit 3 is a tripped guard — stop and ask.
+- Then arm `pr-approve-watch`.
+
+When an AWS step reports an expired session, start the workspace SSO
+login in a background shell (Comita:
+`aws sso login --profile "${COMITA_SSO_PROFILE:-bakerorgrwat}"` — set
+`COMITA_SSO_PROFILE` / `AWS_PROFILE` to your own profiles) and tell the
+human a browser sign-in is waiting. Slash: `/local-deliver`.
+
+## PR checks watch (gha-mode repos only)
+
+In repos **without** `ci.mode: local`, after opening or pushing to an agent
+PR: follow **`pr-checks-watch`** — arm the background checks watcher, wake
+on `AGENT_LOOP_WAKE_pr_checks`. On red: logs → fix → push (up to 3
+iterations). On green: brief note only; do **not** merge. Do **not** block
+the chat on `gh pr checks --watch`. Slash: `/watch-pr-checks`.
+
 ## Work intake and stakeholder verify
 
 Intake (transcripts, Slack, Bret’s Feedback tracker, prompts) is **not** the
 backlog — promote it. GitHub Issues are the engineering ledger (`direct` /
 `bug-spec` / `plan`). PRDs are the product contract; ADRs are decisions that
 must still bind in a year. User-facing sandbox drops write dated
-`docs/releases/` (**Delivered** / **Not verified** / **Verified**) and upsert
-the same smoke lines to Slack **Sandbox verify**. Bret has no GitHub; he
-checks Verified or Failed there. Slack is the live ledger — do not poll it
-from a laptop; do not make Russ relay. Slash: `/watch-stakeholder-verify`
+`docs/releases/` (**Delivered** / **Not verified** / **Verified**) and post
+the same smoke lines as one **#comita-support** thread — root `@channel`,
+one reply per line. Bret has no GitHub; he reacts :white_check_mark: or
+:x: there. Slack is the live ledger — do not poll it from a laptop; do
+not make Russ relay. Slash: `/watch-stakeholder-verify`
 (publish only). DEV hosts are **SB / Sandbox** with stakeholders. When
 the operator linked a Slack thread as the ask, reply **in that thread**
 after the fix is deployed to SB — not on push or CI. Policy:
@@ -173,6 +215,11 @@ Merge stacks bottom-up (parent first). When the parent merges, GitHub automatica
 the child PR onto `main` — no conflict, no rebase. Stacked PRs require merge commits (never
 squash-merge a stack). Unrelated work keeps branching from `main` so PRs stay independently
 mergeable — do not chain by default.
+
+**Live-host bundle is not a stack of PRs.** Same-session dest / SB work
+that must share one smoke SHA is **one drop, one PR** (commits, not
+child PRs). See **`sdlc-live-host-bundle`**. If you do stack for
+per-issue review, deploy **only the tip**.
 
 **Default: do not commit on `main`.** All product work lands via a topic branch + PR.
 
@@ -273,16 +320,17 @@ After opening or pushing to a PR, GitHub Copilot posts an automated review (typi
 
 ### PR checks review cycle
 
-After pushing to a PR, required status checks (CI) run automatically. **You must monitor and fix failing checks.** This cycle runs in parallel with the Copilot review cycle.
+**Local-mode repos** (`ci.mode: local`): checks do not run in Actions per
+push. Run the local CI command before every push and post the `local-ci`
+status after it (see **Local delivery** above). Up to **3** fix attempts
+on the same failure, then flag for human review.
 
-1. Poll `gh run list --branch {branch} --limit 5 --json status,conclusion,name,databaseId` every 30 seconds until all runs reach a terminal state (`completed`, `cancelled`, `failure`), up to 15 minutes.
-2. If all checks pass, the cycle is done.
-3. If any check fails:
-   a. Retrieve logs: `gh run view {run-id} --log-failed`
-   b. Diagnose the failure — read the error output and identify the root cause.
-   c. Fix the issue locally, commit with an appropriate message (e.g. `fix(<scope>): correct type error caught by CI`), and push.
-   d. Return to step 1 — poll the new run.
-4. Repeat until all checks pass, up to **3 iterations**. If checks still fail after 3 fix attempts, flag for human review with a summary of what was tried and what remains broken.
+**Gha-mode repos:** required status checks run automatically. **Arm
+`pr-checks-watch` instead of blocking the chat on a poll loop.** The
+watcher wakes on `checks_failed` / `checks_success`. On failure: retrieve
+logs (`gh run view {run-id} --log-failed`), fix, commit, push; the watcher
+re-fires on the next SHA. Repeat up to **3 iterations**, then flag for
+human review. Do **not** merge on green.
 
 ### Cleaning up
 
