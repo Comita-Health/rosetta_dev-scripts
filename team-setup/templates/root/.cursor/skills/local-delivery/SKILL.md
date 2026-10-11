@@ -65,11 +65,12 @@ make. One drop = one PR; tasks are commits.
 **b. TDD commits.** For each commit: failing test → run it red → implement →
 run it green → `git commit -s`. Conventional Commits, Addi identity.
 
-**c. Local CI.** Run `$CI` until green. It covers commit messages, guards,
-lint, unit tests, builds, and the CDK snapshot tests (the synth comparison).
+**c. Local CI.** Launch `$CI_STATUS` in a background subagent (see
+**Background runners**). It covers commit messages, guards, lint, unit
+tests, builds, and the CDK snapshot tests (the synth comparison).
 Snapshot drift stops it: update snapshots only for an intended stack change,
-review the `.snap` diff, and commit it on its own. Long runs go in the
-background; wait with the shell-await tool, never `sleep`.
+review the `.snap` diff, and commit it on its own. Do not wait for the run
+in this turn.
 
 **d. Open the PR.** Local-mode drops are **armed** with
 `--require-approve` — the engine stores it in
@@ -77,14 +78,17 @@ background; wait with the shell-await tool, never `sleep`.
 `--finish`. Before finishing, confirm
 `jq -e .requireApprove ~/.rosetta/sdlc-drops/<id>/drop.json` prints `true`;
 if not, open the PR yourself (push + `gh pr create` as Addi) instead of
-`--finish`, which would merge immediately. Then run `bash -c "$CI_STATUS"` so
-the pushed head gets its `local-ci` status. Replace the PR body with the repo's template
+`--finish`, which would merge immediately. Then launch a background CI
+subagent for `bash -c "$CI_STATUS"` so the pushed head gets its `local-ci`
+status. Do not wait in this turn. Replace the PR body with the repo's template
 (Local CI, CDK synth comparison, Local review, Sandbox, Release notes,
 Architecture docs) via `gh api -X PATCH repos/<o>/<r>/pulls/<n> -F body=@file`.
 
-**e. Independent review.** Launch a **fresh** subagent (Cursor Task tool,
-`subagent_type: generalPurpose`; Claude Code Task tool) with
-`reviewer-prompt.md` filled in:
+**e. Independent review.** Launch a **fresh** subagent in the **background**
+(Cursor Task tool, `subagent_type: generalPurpose`, `run_in_background: true`;
+Claude Code Task tool, backgrounded) with `reviewer-prompt.md` filled in.
+Do not wait for the verdict in the launch turn. When its completion notice
+arrives, post the review comment and continue **f**. Fill in:
 
 - `{{CHECKOUT_PATH}}`: the worktree with the PR head checked out
 - `{{PR_URL}}` and `{{GH_PR_DIFF}}`: the full `gh pr diff <n>`, or tell the
@@ -101,27 +105,32 @@ findings.
 
 **f. Fix.** Fix every `blocker` and `major`; fix a `minor` when it takes
 under 10 minutes; `nit` is optional. Write a failing test first when the
-finding is a bug. Commit, `git push`, run `$CI_STATUS` (posts the new
-status), and reply on the review comment with the fix SHAs. Round 2 is a
+finding is a bug. Commit, `git push`, launch a new background CI subagent
+for `$CI_STATUS` (posts the new status), and reply on the review comment
+with the fix SHAs. Round 2 is a
 **new** fresh subagent. If blockers or majors remain after round 2, stop and
 ask the human.
 
-**g. Deploy to the sandbox.** Run the deploy in the background and wait for
-its last line (up to 45 minutes):
+**g. Deploy to the sandbox.** After that SHA has `local-ci` success, launch
+a background deploy subagent (see **Background runners**). Do not wait in
+the launch turn. The command:
 
 ```bash
 bash -c "$DEPLOY --groups auto"   # final head: bash -c "$DEPLOY --groups all --publish-verify"
 ```
 
+When the deploy subagent's completion notice arrives:
+
 - `LOCAL_DEPLOY_GREEN` → tell the human the sandbox is ready to re-smoke. If
   the operator linked a Slack thread as the ask, reply **in that thread** that
   a new update has been deployed to the sandbox (no `@channel`, PHI-free).
-- `LOCAL_DEPLOY_FAILED` → read the deploy's log, fix, push, run
-  `bash -c "$CI_STATUS"`, re-run the deploy (max 3).
+- `LOCAL_DEPLOY_FAILED` → read the deploy's log, fix, push, launch a new
+  CI subagent, then a new deploy subagent (max 3).
 - Exit `2` → preflight refused, not a code failure: commit or clean the tree,
-  push, post `local-ci`, or wait for the other deploy, then retry.
-- A CDK context notice → commit that file on the branch, push, post
-  `local-ci` again.
+  push, launch CI again, or wait until the other deploy's subagent finishes,
+  then retry.
+- A CDK context notice → commit that file on the branch, push, launch CI
+  again.
 - Exit `3` → a guard tripped (for example an env var would be blanked, or the
   diff destroys or replaces a stateful resource). Stop and ask the human.
 - Pass `--publish-verify` only on the final head, after the dated release
@@ -130,18 +139,53 @@ bash -c "$DEPLOY --groups auto"   # final head: bash -c "$DEPLOY --groups all --
 Then arm **`pr-approve-watch`**. Approve is still the proceed signal; do not
 merge from the agent when merge-on-approve is enabled.
 
-## AWS sign-in
+## Background runners
 
-When an AWS step reports an expired session, start the workspace's SSO login
-in a **background** shell — Comita workspaces:
-`aws sso login --profile "${COMITA_SSO_PROFILE:-bakerorgrwat}"` — and tell
-the human in one line that a browser sign-in is waiting. Then run a bounded
-background check and wait on it with the shell-await tool:
+Local CI and the sandbox deploy take many minutes. Each one runs in its
+**own background subagent** so this chat stays free, the same way GitHub
+Actions runs a check or a deploy off to the side while the operator keeps
+talking.
+
+Cursor: Task tool, `subagent_type: generalPurpose`, `run_in_background: true`.
+Claude Code: background the Task tool. One subagent per job. After launch,
+tell the operator what is running (CI or deploy, SHA, checkout) in one or
+two sentences and **end the turn** unless they already asked for something
+else. Do not poll. The completion notice is the proceed signal.
+
+The subagent runs the command and reports the result. It does not edit,
+commit, push, or open a PR. Give it the checkout path, the exact command,
+and this return shape: exit code, the GREEN/FAILED line, the SHA, and on
+failure the step name plus the last error lines (and the log path).
+
+**Local CI.** From the PR checkout, HEAD already pushed:
 
 ```bash
-for _ in $(seq 40); do aws sts get-caller-identity --profile "${AWS_PROFILE:-comita-dev}" >/dev/null 2>&1 && break; sleep 15; done
-``` The product
-scripts start the sign-in themselves when they can.
+bash -c "$CI_STATUS"
+```
+
+**Sandbox deploy.** Only after that SHA has `local-ci` success. Same
+checkout. The subagent owns an expired AWS session: it starts SSO, says a
+browser sign-in is waiting, and waits there.
+
+```bash
+bash -c "$DEPLOY --groups auto"
+```
+
+A red CI notice comes back to the main agent: read the log, fix, push,
+launch another CI subagent. Up to 3 tries on the same failure, then ask.
+A green CI notice is not a merge. Continue review or launch the deploy
+subagent. A green deploy notice is the cue to tell the operator the
+sandbox SHA and what to re-smoke.
+
+## AWS sign-in
+
+When an AWS step reports an expired session, the **deploy subagent** starts
+the workspace SSO login and tells the operator, in one line, that a browser
+sign-in is waiting. The main thread does not poll for the session.
+
+Comita: `aws sso login --profile "${COMITA_SSO_PROFILE:-bakerorgrwat}"`.
+The product scripts start the sign-in themselves when they can. The
+subagent may wait on the session; the chat stays open.
 
 ## Anti-patterns
 
@@ -154,3 +198,7 @@ scripts start the sign-in themselves when they can.
 - `--publish-verify` on every redeploy (duplicate Slack threads).
 - Arming a local-mode drop without `--require-approve` (finish-time flags
   do not change it).
+- Blocking the operator chat on local CI, sandbox deploy, review, or SSO
+  (shell-await, sleep loops, or polling the subagent). Those waits belong
+  to the background subagent. End the turn after launch so the operator
+  can keep talking.

@@ -8,11 +8,17 @@ land as **one PR**, or the user asks to drop / `/sdlc-drop`:
 - Implement as commits in `~/.rosetta/sdlc-drops/<id>/worktree`.
 - In local-mode repos (`ci.mode: local`) **arm** with
   `--require-approve` (it only counts at arm) and follow
-  **`local-delivery`**: local CI before `--finish`, then post the
-  `local-ci` status, run the reviewer subagent, and deploy the sandbox
-  from the laptop.
+  **`local-delivery`**: local CI, the reviewer, and the sandbox deploy
+  each run in a background subagent. Do not block the chat on them.
 - `drop --finish` opens the one PR; then arm **`pr-approve-watch`**
   (and **`pr-checks-watch`** only in gha-mode repos).
+- **Every drop is smoked on the sandbox before Approve.** `--finish`
+  prints how: when the repo declares `sandbox.dropDeployWorkflow` in
+  `.sdlc/environments.json`, the repo deploys the PR on every push and
+  posts the result on the PR. Otherwise arm **`deploy-verify-watch`**
+  with `--dispatch-on-arm` right after `--finish`. Either way arm the
+  watcher so `deploy_green` wakes you; it only watches when the repo
+  deploys itself.
 - Do **not** `decompose` a drop into per-task PRs.
 - Same-session related work on a **one-SHA smoke host** is **one
   bundle** (one branch, many commits, one PR). Do not steal the host

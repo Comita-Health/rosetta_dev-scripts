@@ -34,6 +34,11 @@ const readJson = (file: string): Record<string, unknown> | null => {
   }
 };
 
+const trimmedString = (value: unknown): string | undefined =>
+  typeof value === 'string' && value.trim().length > 0
+    ? value.trim()
+    : undefined;
+
 @injectable()
 export class ContractRepository implements IContractRepository {
   loadSandbox(repoPath: string): SandboxContract | null {
@@ -55,11 +60,8 @@ export class ContractRepository implements IContractRepository {
         'CONTRACT_MALFORMED'
       );
     }
-    const deployWorkflow =
-      typeof sandbox.deployWorkflow === 'string' &&
-      sandbox.deployWorkflow.trim().length > 0
-        ? sandbox.deployWorkflow.trim()
-        : undefined;
+    const deployWorkflow = trimmedString(sandbox.deployWorkflow);
+    const dropDeployWorkflow = trimmedString(sandbox.dropDeployWorkflow);
 
     return {
       deployCommand: sandbox.deployCommand,
@@ -68,7 +70,8 @@ export class ContractRepository implements IContractRepository {
         typeof sandbox.timeoutMinutes === 'number'
           ? sandbox.timeoutMinutes
           : DEFAULT_TIMEOUT_MINUTES,
-      ...(deployWorkflow === undefined ? {} : { deployWorkflow })
+      ...(deployWorkflow === undefined ? {} : { deployWorkflow }),
+      ...(dropDeployWorkflow === undefined ? {} : { dropDeployWorkflow })
     };
   }
 

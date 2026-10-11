@@ -38,6 +38,10 @@ When the ask is a GitHub issue (or a small set) that should land as **one PR**:
   as commits, `drop --finish` opens the PR, then `pr-approve-watch`. In
   local-mode repos (`ci.mode: local`) the **`local-delivery`** loop wraps
   the finish; `pr-checks-watch` is for gha-mode repos only.
+- **Drops reach the sandbox before Approve.** A repo that declares
+  `sandbox.dropDeployWorkflow` in `.sdlc/environments.json` deploys every
+  drop push itself; otherwise arm `deploy-verify-watch --dispatch-on-arm`.
+  `--finish` prints which. Arm the watcher either way for the green wake.
 - Slash reminder: `/sdlc-drop`.
 - Do **not** `decompose` a drop into per-task PRs.
 - **Live smoke host = one SHA.** Same-session related work is **one
@@ -90,21 +94,26 @@ runs their full suite once a day and deploys prod on promote. Follow
 
 - **a–b.** Arm the drop with `--require-approve` (the engine only reads it
   at arm), plan, then TDD commits.
-- **c.** `ci.command` until green — includes the CDK snapshot (synth)
-  comparison. Never auto-update snapshots.
-- **d.** Open the PR as Addi, then run `ci.statusCommand` so the head has a
-  `local-ci` commit status (merge-on-approve requires it; docs-only PRs
-  too). Repeat after every push.
-- **e–f.** A **fresh** reviewer subagent reviews `gh pr diff`; fix blockers
-  and majors; at most 2 rounds, then ask.
-- **g.** Deploy the sandbox from the laptop (`sandbox.localDeployCommand`);
-  wait for `LOCAL_DEPLOY_GREEN`. Exit 3 is a tripped guard — stop and ask.
+- **c.** Launch `ci.statusCommand` in a **background subagent** — includes
+  the CDK snapshot (synth) comparison. Never auto-update snapshots. Do
+  not block the chat on the run.
+- **d.** Open the PR as Addi. The CI subagent posts the `local-ci` status
+  (merge-on-approve requires it; docs-only PRs too). Repeat after every
+  push, again in a background subagent.
+- **e–f.** A **fresh** reviewer subagent, also in the background, reviews
+  `gh pr diff`; on its notice, fix blockers and majors; at most 2 rounds,
+  then ask.
+- **g.** Launch the sandbox deploy in another background subagent
+  (`sandbox.localDeployCommand`). On its notice: `LOCAL_DEPLOY_GREEN` →
+  tell the operator the SHA. Exit 3 is a tripped guard — stop and ask.
 - Then arm `pr-approve-watch`.
 
-When an AWS step reports an expired session, start the workspace SSO
-login in a background shell (Comita:
+End the turn after launching a CI, review, or deploy subagent so the
+operator can keep talking. The completion notice is the proceed signal.
+When an AWS step reports an expired session, the deploy subagent starts
+the workspace SSO login (Comita:
 `aws sso login --profile "${COMITA_SSO_PROFILE:-bakerorgrwat}"` — set
-`COMITA_SSO_PROFILE` / `AWS_PROFILE` to your own profiles) and tell the
+`COMITA_SSO_PROFILE` / `AWS_PROFILE` to your own profiles) and tells the
 human a browser sign-in is waiting. Slash: `/local-deliver`.
 
 ## PR checks watch (gha-mode repos only)
@@ -177,6 +186,14 @@ The full ruleset lives in `.claude/rules/architecture-hsr.md` (Claude Code) and 
 - Each class file co-locates its `interface IFoo` and `@injectable() class Foo implements IFoo`.
 
 Read the architecture rule before writing or reviewing any TypeScript.
+
+## Architecture docs (MANDATORY)
+
+Changes that alter architecture update the docs repo in the same unit
+of work: `rosetta_docs/architecture/` for engine repos, the consumer's
+docs repo for product repos (Comita: `comita_docs/docs/architecture/`).
+The code PR links the docs PR under `## Architecture docs`. Rule:
+`.claude/rules/architecture-docs.md`.
 
 ## Git Workflow
 
