@@ -1,8 +1,18 @@
 #!/usr/bin/env python3
-"""Slack Sandbox-verify list: publish, status, failed-notify, promote snapshot.
+"""Sandbox-verify check-off: publish, status, failed-notify, promote snapshot.
 
-Slack Status is the live check-off ledger. Git is written at publish and
-again at promote. Do not poll Slack from a laptop. PHI-free rows only.
+Each sandbox drop gets **one thread** in #comita-support: a root message
+naming the release date, ship, host and SHA, then one reply per smoke line.
+The stakeholder reacts on a reply -- :white_check_mark: verified, :x: failed.
+Reactions are the live ledger; git is written at publish and again at promote.
+
+This replaces the Slack Lists ("Sandbox verify" list) model, which needed a
+paid Slack plan. Threads, replies and reactions are free.
+
+A later workflow run re-finds a drop's thread by scanning channel history for
+the root message's marker (`sv:<release-stem>:<ship>`), so nothing has to be
+committed back to the branch from CI. Do not poll Slack from a laptop.
+PHI-free rows only.
 """
 
 from __future__ import annotations
@@ -13,6 +23,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -21,12 +32,27 @@ from typing import Any
 SLACK_API = "https://slack.com/api"
 GITHUB_API = "https://api.github.com"
 SANDBOX_HOSTS = ("admit.dev", "care.dev", "contracts.dev")
-FAILED_STATUSES = frozenset({"failed", "fail", "blocked"})
-VERIFIED_STATUSES = frozenset({"verified", "done"})
-PENDING_STATUSES = frozenset({"not_verified", "not verified", ""})
 # Public channel the bot already joins. Override with
 # COMITA_VERIFY_NOTIFY_CHANNEL_ID (id or #name).
 DEFAULT_NOTIFY_CHANNEL = "#comita-support"
+
+VERIFIED_REACTIONS = frozenset(
+    {"white_check_mark", "heavy_check_mark", "ballot_box_with_check"}
+)
+FAILED_REACTIONS = frozenset(
+    {"x", "negative_squared_cross_mark", "no_entry", "no_entry_sign"}
+)
+
+STATUS_VERIFIED = "verified"
+STATUS_FAILED = "failed"
+STATUS_PENDING = "not_verified"
+
+# How many pages of channel history to scan looking for drop roots. Slack
+# caps `limit` at 200; 10 pages is roughly a quarter of #comita-support.
+MAX_HISTORY_PAGES = 10
+
+# Slack rate-limits chat.postMessage to about one call per second.
+POST_INTERVAL_SECONDS = 1.1
 
 
 def die(message: str, code: int = 2) -> None:
@@ -34,7 +60,9 @@ def die(message: str, code: int = 2) -> None:
     raise SystemExit(code)
 
 
-def slack_post(method: str, token: str, payload: dict[str, Any]) -> dict[str, Any]:
+def slack_call(
+    method: str, token: str, payload: dict[str, Any]
+) -> dict[str, Any]:
     req = urllib.request.Request(
         f"{SLACK_API}/{method}",
         data=json.dumps(payload).encode("utf-8"),
@@ -52,6 +80,10 @@ def slack_post(method: str, token: str, payload: dict[str, Any]) -> dict[str, An
     if body.get("ok") is not True:
         die(f"{method} failed: {body.get('error', body)}")
     return body
+
+
+# Back-compat alias: the old name is still the one used in docs and tests.
+slack_post = slack_call
 
 
 def gh_request(
@@ -94,6 +126,15 @@ def host_from_text(text: str, default: str) -> str:
     return default
 
 
+# Release notes settled on `## Not verified` (H2) on 2026-08-22; the two files
+# older than that use `### Not verified`, and a handful use `## Verify on ...`.
+# Accept all three. `## Verified` must NOT match -- that is the section end.
+NOT_VERIFIED_HEADING_RE = re.compile(
+    r"^#{2,3}\s+(?:not\s+verified|verify)(?:\s+.*)?$", re.I
+)
+VERIFIED_HEADING_RE = re.compile(r"^#{2,3}\s+verified\s*$", re.I)
+
+
 def parse_not_verified(markdown: str) -> list[dict[str, str]]:
     """Extract `- [ ]` smoke lines from the Not verified / Verify section."""
     lines = markdown.splitlines()
@@ -113,18 +154,10 @@ def parse_not_verified(markdown: str) -> list[dict[str, str]]:
 
     for raw in lines:
         stripped = raw.strip()
-        if stripped.startswith("### Not verified") or stripped.startswith(
-            "## Verify"
-        ):
+        if NOT_VERIFIED_HEADING_RE.match(stripped):
             in_section = True
             continue
-        if in_section and (
-            stripped.startswith("### Verified")
-            or (
-                stripped.startswith("## ")
-                and not stripped.startswith("## Verify")
-            )
-        ):
+        if in_section and stripped.startswith("#"):
             flush()
             break
         if in_section is False:
@@ -144,17 +177,11 @@ def parse_not_verified(markdown: str) -> list[dict[str, str]]:
     return items
 
 
-def require_env() -> tuple[str, str]:
+def require_slack() -> str:
     token = os.environ.get("SLACK_BOT_TOKEN", "").strip()
-    list_id = os.environ.get("COMITA_VERIFY_SLACK_LIST_ID", "").strip()
     if not token:
         die("SLACK_BOT_TOKEN is unset")
-    if not list_id:
-        die(
-            "COMITA_VERIFY_SLACK_LIST_ID is unset. Create the Slack list "
-            "once, put the id in ~/.config/comita/slack.env and GitHub vars."
-        )
-    return token, list_id
+    return token
 
 
 def require_github() -> tuple[str, str]:
@@ -170,164 +197,34 @@ def require_github() -> tuple[str, str]:
     return token, repo
 
 
-def col_map() -> dict[str, str]:
-    """Column ids from env; display names only as a last-resort fallback."""
-    return {
-        "item": os.environ.get("COMITA_VERIFY_COL_ITEM", "Item"),
-        "host": os.environ.get("COMITA_VERIFY_COL_HOST", "Host"),
-        "status": os.environ.get("COMITA_VERIFY_COL_STATUS", "Status"),
-        "ship": os.environ.get("COMITA_VERIFY_COL_SHIP", "Ship"),
-        "notes": os.environ.get("COMITA_VERIFY_COL_NOTES", "Notes"),
-    }
-
-
-def rich_text(text: str) -> list[dict[str, Any]]:
-    """Slack Lists text cells take a rich_text block, not a plain string."""
-    return [
-        {
-            "type": "rich_text",
-            "elements": [
-                {
-                    "type": "rich_text_section",
-                    "elements": [{"type": "text", "text": text}],
-                }
-            ],
-        }
-    ]
-
-
-def item_fields(
-    cols: dict[str, str],
-    *,
-    item: str,
-    host: str,
-    ship: str,
-    status: str = "not_verified",
-) -> list[dict[str, Any]]:
-    """initial_fields for slackLists.items.create (column_id + typed values)."""
-    fields: list[dict[str, Any]] = [
-        {"column_id": cols["item"], "rich_text": rich_text(item)},
-        {"column_id": cols["host"], "select": [host]},
-        {"column_id": cols["status"], "select": [status]},
-    ]
-    if ship:
-        fields.append({"column_id": cols["ship"], "rich_text": rich_text(ship)})
-    return fields
-
-
-def field_text(field: dict[str, Any]) -> str:
-    """Best-effort display text from a Slack Lists field object."""
-    text = field.get("text")
-    if isinstance(text, str) and text.strip():
-        return text.strip()
-    val = field.get("value")
-    if isinstance(val, str) and val.strip():
-        return val.strip()
-    if isinstance(val, dict):
-        for key in ("text", "name", "label", "value"):
-            inner = val.get(key)
-            if isinstance(inner, str) and inner.strip():
-                return inner.strip()
-    select = field.get("select")
-    if isinstance(select, str) and select.strip():
-        return select.strip()
-    if isinstance(select, list) and select:
-        first = select[0]
-        if isinstance(first, str) and first.strip():
-            return first.strip()
-        if isinstance(first, dict):
-            for key in ("name", "label", "value", "text"):
-                inner = first.get(key)
-                if isinstance(inner, str) and inner.strip():
-                    return inner.strip()
-    return ""
-
-
-def flatten_fields(entry: dict[str, Any]) -> dict[str, str]:
-    """Map Slack field key/column_id (lowercased) to display text."""
-    raw = entry.get("fields") or entry.get("columns") or []
-    out: dict[str, str] = {}
-    if isinstance(raw, dict):
-        for key, value in raw.items():
-            text = value if isinstance(value, str) else field_text({"value": value})
-            if text:
-                out[str(key).lower()] = text
-        return out
-    if isinstance(raw, list):
-        for field in raw:
-            if not isinstance(field, dict):
-                continue
-            text = field_text(field)
-            if not text:
-                continue
-            for key in (field.get("key"), field.get("column_id")):
-                if key:
-                    out[str(key).lower()] = text
-    return out
-
-
-def pick_field(flat: dict[str, str], *names: str) -> str:
-    for name in names:
-        if not name:
-            continue
-        hit = flat.get(name.lower())
-        if hit:
-            return hit
-        for key, value in flat.items():
-            if name.lower() in key:
-                return value
-    return ""
-
-
-def item_status(entry: dict[str, Any]) -> tuple[str, str, str]:
-    """Return (item_text, status_lower, notes)."""
-    row = item_row(entry)
-    return row["item"], row["status"], row["notes"]
-
-
-def item_row(entry: dict[str, Any]) -> dict[str, str]:
-    cols = col_map()
-    flat = flatten_fields(entry)
-    item = pick_field(flat, cols["item"], "name", "item", "title").strip()
-    status = pick_field(flat, cols["status"], "status").strip().lower()
-    notes = pick_field(flat, cols["notes"], "notes", "note").strip()
-    ship = pick_field(flat, cols["ship"], "ship").strip()
-    host = pick_field(flat, cols["host"], "host").strip().lower()
-    return {
-        "item": item,
-        "status": status,
-        "notes": notes,
-        "ship": ship,
-        "host": host,
-    }
-
-
-def list_rows(token: str, list_id: str) -> list[dict[str, str]]:
-    data = slack_post(
-        "slackLists.items.list",
-        token,
-        {"list_id": list_id, "limit": 200},
-    )
-    rows: list[dict[str, str]] = []
-    for entry in data.get("items", data.get("records", [])):
-        row = item_row(entry)
-        if row["item"]:
-            rows.append(row)
-    return rows
-
-
 def normalize_item(text: str) -> str:
     return " ".join(text.split())
 
 
+def match_key(text: str) -> str:
+    """Compare smoke lines across markdown and Slack mrkdwn renderings.
+
+    The same line is written `**bold**` in git and `*bold*` in Slack, so
+    emphasis and code punctuation are stripped before comparing. Never use
+    this for display -- it is lossy on purpose.
+    """
+    stripped = re.sub(r"[*_`~]+", "", text)
+    stripped = stripped.replace("\u2192", "->")
+    return " ".join(stripped.split()).strip().lower()
+
+
+def to_mrkdwn(text: str) -> str:
+    """Render a markdown smoke line the way Slack expects it."""
+    return re.sub(r"\*\*(.+?)\*\*", r"*\1*", text)
+
+
 def ship_issue(ship: str) -> str | None:
-    match = re.search(r"(\d+)", ship)
+    match = re.search(r"(\d+)", ship or "")
     return match.group(1) if match else None
 
 
 def failed_comment_key(ship: str, item: str) -> str:
-    digest = hashlib.sha256(f"{ship}\n{item}".encode("utf-8")).hexdigest()[:16]
-    return digest
+    return hashlib.sha256(f"{ship}\n{item}".encode("utf-8")).hexdigest()[:16]
 
 
 def failed_marker(key: str) -> str:
@@ -335,21 +232,219 @@ def failed_marker(key: str) -> str:
 
 
 def failed_comment_body(row: dict[str, str]) -> str:
-    ship = ship_issue(row["ship"]) or row["ship"] or "unknown"
+    ship = ship_issue(row.get("ship", "")) or row.get("ship") or "unknown"
     key = failed_comment_key(ship, row["item"])
-    notes_line = f"\n\nNotes: {row['notes']}" if row["notes"] else ""
-    host = row["host"] or "unknown host"
+    host = row.get("host") or "unknown host"
+    link = row.get("permalink") or ""
+    link_line = f"\n\n{link}" if link else ""
     return (
         f"{failed_marker(key)}\n"
         f"Sandbox verify **Failed** on `{host}` (ship #{ship}).\n\n"
-        f"{row['item']}{notes_line}\n\n"
-        "Do not promote. Fix, redeploy, set Slack Status back to Not verified."
+        f"{row['item']}{link_line}\n\n"
+        "Do not promote. Fix, redeploy, then clear the :x: reaction."
     )
 
 
+# ---------------------------------------------------------------------------
+# Slack thread model
+# ---------------------------------------------------------------------------
+
+
+def notify_channel() -> str:
+    """#comita-support unless COMITA_VERIFY_NOTIFY_CHANNEL_ID is set."""
+    return (
+        os.environ.get("COMITA_VERIFY_NOTIFY_CHANNEL_ID", "").strip()
+        or DEFAULT_NOTIFY_CHANNEL
+    )
+
+
+def resolve_channel(token: str, channel: str) -> str:
+    """Accept a channel id or #name; history/replies need the id."""
+    if not channel.startswith("#"):
+        return channel
+    wanted = channel[1:].strip().lower()
+    cursor = ""
+    for _ in range(MAX_HISTORY_PAGES):
+        payload: dict[str, Any] = {
+            "limit": 200,
+            "exclude_archived": True,
+            "types": "public_channel,private_channel",
+        }
+        if cursor:
+            payload["cursor"] = cursor
+        body = slack_call("conversations.list", token, payload)
+        for entry in body.get("channels") or []:
+            if str(entry.get("name", "")).lower() == wanted:
+                return str(entry.get("id"))
+        cursor = (body.get("response_metadata") or {}).get("next_cursor", "")
+        if not cursor:
+            break
+    die(f"could not resolve channel {channel}")
+    raise AssertionError("unreachable")
+
+
+def release_stem(path: str | Path) -> str:
+    return Path(path).stem
+
+
+def thread_marker(stem: str, ship: str) -> str:
+    """Stable key used to re-find a drop's root message in channel history."""
+    return f"sv:{stem}:{ship}".strip()
+
+
+MARKER_RE = re.compile(r"sv:([0-9A-Za-z._\-]+):(\d*)")
+
+
+def root_message_text(
+    *,
+    stem: str,
+    ship: str,
+    host: str,
+    sha: str = "",
+    title: str = "",
+    count: int = 0,
+) -> str:
+    ship_label = (ship or "").strip()
+    if ship_label and not ship_label.startswith("#"):
+        ship_label = f"#{ship_label}"
+    noun = "line" if count == 1 else "lines"
+    head = f"<!channel> *Sandbox verify — {stem}*"
+    if ship_label:
+        head += f"  (ship {ship_label})"
+    lines = [head]
+    detail = " ".join(part for part in (f"`{sha[:7]}`" if sha else "", title) if part)
+    lines.append(f"{host} is live" + (f" on {detail}" if detail else ""))
+    lines.append("")
+    lines.append(
+        f"{count} {noun} to smoke below — react on each one: "
+        ":white_check_mark: verified, :x: failed."
+    )
+    lines.append("")
+    lines.append(f"`{thread_marker(stem, ship)}`")
+    return "\n".join(lines)
+
+
+def find_root(
+    token: str, channel: str, marker: str
+) -> dict[str, Any] | None:
+    """Locate a drop's root message by its marker, newest history first."""
+    needle = marker.lower()
+    cursor = ""
+    for _ in range(MAX_HISTORY_PAGES):
+        payload: dict[str, Any] = {"channel": channel, "limit": 200}
+        if cursor:
+            payload["cursor"] = cursor
+        body = slack_call("conversations.history", token, payload)
+        for msg in body.get("messages") or []:
+            if needle in str(msg.get("text", "")).lower():
+                return msg
+        if not body.get("has_more"):
+            return None
+        cursor = (body.get("response_metadata") or {}).get("next_cursor", "")
+        if not cursor:
+            return None
+    return None
+
+
+def find_all_roots(token: str, channel: str) -> list[dict[str, Any]]:
+    """Every sandbox-verify root message in recent channel history."""
+    roots: list[dict[str, Any]] = []
+    cursor = ""
+    for _ in range(MAX_HISTORY_PAGES):
+        payload: dict[str, Any] = {"channel": channel, "limit": 200}
+        if cursor:
+            payload["cursor"] = cursor
+        body = slack_call("conversations.history", token, payload)
+        for msg in body.get("messages") or []:
+            if MARKER_RE.search(str(msg.get("text", ""))):
+                roots.append(msg)
+        if not body.get("has_more"):
+            break
+        cursor = (body.get("response_metadata") or {}).get("next_cursor", "")
+        if not cursor:
+            break
+    return roots
+
+
+def thread_replies(
+    token: str, channel: str, thread_ts: str
+) -> list[dict[str, Any]]:
+    messages: list[dict[str, Any]] = []
+    cursor = ""
+    for _ in range(MAX_HISTORY_PAGES):
+        payload: dict[str, Any] = {
+            "channel": channel,
+            "ts": thread_ts,
+            "limit": 200,
+        }
+        if cursor:
+            payload["cursor"] = cursor
+        body = slack_call("conversations.replies", token, payload)
+        messages.extend(body.get("messages") or [])
+        if not body.get("has_more"):
+            break
+        cursor = (body.get("response_metadata") or {}).get("next_cursor", "")
+        if not cursor:
+            break
+    # The first message is the root itself.
+    return [m for m in messages if str(m.get("ts")) != str(thread_ts)]
+
+
+def reaction_status(message: dict[str, Any]) -> str:
+    """Failed wins over verified so a re-smoke never silently promotes."""
+    names = {
+        str(r.get("name", "")).split("::", 1)[0]
+        for r in message.get("reactions") or []
+    }
+    if names & FAILED_REACTIONS:
+        return STATUS_FAILED
+    if names & VERIFIED_REACTIONS:
+        return STATUS_VERIFIED
+    return STATUS_PENDING
+
+
+def row_from_reply(
+    message: dict[str, Any], *, stem: str, ship: str
+) -> dict[str, str]:
+    item = normalize_item(str(message.get("text", "")))
+    return {
+        "item": item,
+        "status": reaction_status(message),
+        "host": host_from_text(item, "admit.dev"),
+        "ship": ship,
+        "stem": stem,
+        "ts": str(message.get("ts", "")),
+        "permalink": str(message.get("permalink", "")),
+    }
+
+
+def read_thread_rows(
+    token: str, channel: str, root: dict[str, Any]
+) -> list[dict[str, str]]:
+    match = MARKER_RE.search(str(root.get("text", "")))
+    stem = match.group(1) if match else ""
+    ship = match.group(2) if match else ""
+    replies = thread_replies(token, channel, str(root.get("ts")))
+    return [row_from_reply(m, stem=stem, ship=ship) for m in replies]
+
+
+def read_all_rows(token: str, channel: str) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for root in find_all_roots(token, channel):
+        rows.extend(read_thread_rows(token, channel, root))
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# Release-note rewriting (promote snapshot)
+# ---------------------------------------------------------------------------
+
+PLACEHOLDER_RE = re.compile(r"^_\(.*none yet.*\)_\s*$", re.I)
+
+
 def check_off_verified(markdown: str, verified_texts: set[str]) -> str:
-    """Flip `- [ ]` to `- [x]` when the smoke line matches a Slack Verified item."""
-    normalized = {normalize_item(text) for text in verified_texts}
+    """Flip `- [ ]` to `- [x]` when the smoke line was reacted verified."""
+    normalized = {match_key(text) for text in verified_texts}
     if not normalized:
         return markdown
     lines = markdown.splitlines(keepends=True)
@@ -363,7 +458,7 @@ def check_off_verified(markdown: str, verified_texts: set[str]) -> str:
             pending_parts = []
             return
         text = " ".join(part.strip() for part in pending_parts if part.strip())
-        if normalize_item(text) in normalized:
+        if match_key(text) in normalized:
             idx = pending_idxs[0]
             lines[idx] = lines[idx].replace("- [ ]", "- [x]", 1)
         pending_idxs = []
@@ -371,18 +466,10 @@ def check_off_verified(markdown: str, verified_texts: set[str]) -> str:
 
     for i, raw in enumerate(lines):
         stripped = raw.strip()
-        if stripped.startswith("### Not verified") or stripped.startswith(
-            "## Verify"
-        ):
+        if NOT_VERIFIED_HEADING_RE.match(stripped):
             in_section = True
             continue
-        if in_section and (
-            stripped.startswith("### Verified")
-            or (
-                stripped.startswith("## ")
-                and not stripped.startswith("## Verify")
-            )
-        ):
+        if in_section and stripped.startswith("#"):
             flush()
             break
         if in_section is False:
@@ -400,73 +487,144 @@ def check_off_verified(markdown: str, verified_texts: set[str]) -> str:
     return "".join(lines)
 
 
-def notify_channel() -> str:
-    """#comita-support unless COMITA_VERIFY_NOTIFY_CHANNEL_ID is set."""
-    return (
-        os.environ.get("COMITA_VERIFY_NOTIFY_CHANNEL_ID", "").strip()
-        or DEFAULT_NOTIFY_CHANNEL
+def _heading_index(lines: list[str], pattern: re.Pattern[str]) -> int | None:
+    for i, raw in enumerate(lines):
+        if pattern.match(raw.strip()):
+            return i
+    return None
+
+
+def _checkbox_blocks(
+    lines: list[str], start: int, end: int
+) -> list[dict[str, Any]]:
+    """Checkbox items between start (inclusive) and end (exclusive)."""
+    blocks: list[dict[str, Any]] = []
+    pending_idxs: list[int] = []
+    pending_parts: list[str] = []
+
+    def flush() -> None:
+        nonlocal pending_idxs, pending_parts
+        if not pending_idxs:
+            pending_parts = []
+            return
+        text = " ".join(part.strip() for part in pending_parts if part.strip())
+        blocks.append(
+            {
+                "idxs": list(pending_idxs),
+                "text": text,
+                "lines": [lines[i] for i in pending_idxs],
+            }
+        )
+        pending_idxs = []
+        pending_parts = []
+
+    for i in range(start, end):
+        raw = lines[i]
+        stripped = raw.strip()
+        if stripped.startswith("- [ ]") or stripped.startswith("- [x]"):
+            flush()
+            pending_idxs = [i]
+            if stripped.startswith("- [x]"):
+                body = stripped[len("- [x]") :].strip()
+            else:
+                body = stripped[len("- [ ]") :].strip()
+            pending_parts = [body]
+        elif pending_idxs and stripped.startswith("- ["):
+            flush()
+        elif (
+            pending_idxs
+            and raw[:1].isspace()
+            and not stripped.startswith("- ")
+        ):
+            pending_idxs.append(i)
+            pending_parts.append(stripped)
+        elif pending_idxs and stripped.startswith("#"):
+            flush()
+    flush()
+    return blocks
+
+
+def move_verified_lines(markdown: str, verified_texts: set[str]) -> str:
+    """Move reacted-verified smoke lines into Verified. Never delete a line."""
+    normalized = {match_key(text) for text in verified_texts}
+    if not normalized:
+        return markdown
+    lines = markdown.splitlines(keepends=True)
+    not_idx = _heading_index(lines, NOT_VERIFIED_HEADING_RE)
+    verified_idx = _heading_index(lines, VERIFIED_HEADING_RE)
+    if not_idx is None or verified_idx is None or verified_idx <= not_idx:
+        return check_off_verified(markdown, verified_texts)
+
+    heading_level = len(lines[verified_idx]) - len(
+        lines[verified_idx].lstrip("#")
     )
+    after_idx = len(lines)
+    for i in range(verified_idx + 1, len(lines)):
+        stripped = lines[i].strip()
+        if not stripped.startswith("#"):
+            continue
+        level = len(stripped) - len(stripped.lstrip("#"))
+        if level <= heading_level:
+            after_idx = i
+            break
+
+    blocks = _checkbox_blocks(lines, not_idx + 1, verified_idx)
+    move_idxs: set[int] = set()
+    moved_lines: list[str] = []
+    for block in blocks:
+        if match_key(block["text"]) not in normalized:
+            continue
+        first = block["lines"][0].replace("- [ ]", "- [x]", 1)
+        moved_lines.append(first if first.endswith("\n") else first + "\n")
+        for extra in block["lines"][1:]:
+            moved_lines.append(extra if extra.endswith("\n") else extra + "\n")
+        move_idxs.update(block["idxs"])
+
+    if not moved_lines:
+        return markdown
+
+    keep_verified: list[str] = []
+    for raw in lines[verified_idx + 1 : after_idx]:
+        if PLACEHOLDER_RE.match(raw.strip()):
+            continue
+        keep_verified.append(raw)
+    while keep_verified and keep_verified[0].strip() == "":
+        keep_verified.pop(0)
+    while keep_verified and keep_verified[-1].strip() == "":
+        keep_verified.pop()
+
+    heading = lines[verified_idx]
+    if not heading.endswith("\n"):
+        heading += "\n"
+    new_verified = [heading, "\n"]
+    if keep_verified:
+        new_verified.extend(keep_verified)
+        if not new_verified[-1].endswith("\n"):
+            new_verified[-1] += "\n"
+        new_verified.append("\n")
+    new_verified.extend(moved_lines)
+    if not new_verified[-1].endswith("\n"):
+        new_verified[-1] += "\n"
+
+    rebuilt: list[str] = []
+    rebuilt.extend(lines[: not_idx + 1])
+    for i in range(not_idx + 1, verified_idx):
+        if i not in move_idxs:
+            rebuilt.append(lines[i])
+    rebuilt.extend(new_verified)
+    if after_idx < len(lines):
+        if rebuilt and rebuilt[-1].strip() != "" and lines[after_idx].strip():
+            rebuilt.append("\n")
+        rebuilt.extend(lines[after_idx:])
+    result = "".join(rebuilt)
+    if markdown.endswith("\n") and not result.endswith("\n"):
+        result += "\n"
+    return result
 
 
-def slack_list_url(token: str, list_id: str) -> str:
-    team = os.environ.get("COMITA_SLACK_TEAM_ID", "").strip()
-    if not team:
-        body = slack_post("auth.test", token, {})
-        team = str(body.get("team_id") or "").strip()
-    if team:
-        return f"https://app.slack.com/lists/{team}/{list_id}"
-    return f"https://app.slack.com/lists/{list_id}"
-
-
-def new_items_notice(
-    *,
-    ship: str,
-    list_url: str,
-    rows: list[dict[str, str]],
-) -> str:
-    """Channel ping body: @channel, ship, new smoke lines, list URL."""
-    count = len(rows)
-    noun = "item" if count == 1 else "items"
-    ship_label = ship.strip()
-    if ship_label and not ship_label.startswith("#"):
-        ship_label = f"#{ship_label}"
-    lines = [f"<!channel> {count} new sandbox verify {noun} to smoke."]
-    if ship_label:
-        lines.append(f"Ship: {ship_label}")
-    lines.append("")
-    for row in rows:
-        host = row.get("host") or "sandbox"
-        item = normalize_item(row.get("item") or "")
-        lines.append(f"• [{host}] {item}")
-    if list_url:
-        lines.append("")
-        lines.append(list_url)
-    return "\n".join(lines)
-
-
-def notify_new_items(
-    token: str,
-    *,
-    channel: str,
-    list_url: str,
-    ship: str,
-    rows: list[dict[str, str]],
-) -> None:
-    """Post @channel in #comita-support when new list rows were created."""
-    if not rows:
-        return
-    slack_post(
-        "chat.postMessage",
-        token,
-        {
-            "channel": channel,
-            "text": new_items_notice(
-                ship=ship, list_url=list_url, rows=rows
-            ),
-            "unfurl_links": False,
-            "unfurl_media": False,
-        },
-    )
+# ---------------------------------------------------------------------------
+# Commands
+# ---------------------------------------------------------------------------
 
 
 def cmd_parse(args: argparse.Namespace) -> None:
@@ -483,55 +641,106 @@ def cmd_parse(args: argparse.Namespace) -> None:
 def cmd_publish(args: argparse.Namespace) -> None:
     text = Path(args.file).read_text(encoding="utf-8")
     rows = parse_not_verified(text)
+    stem = release_stem(args.file)
     print(f"sandbox-verify: {len(rows)} Not-verified line(s) in {args.file}")
     for row in rows:
         print(f"  [{row['host']}] {row['item']}")
     if args.dry_run:
         return
-    token, list_id = require_env()
-    existing = list_rows(token, list_id)
-    known = {(normalize_item(row["item"]), row["host"]) for row in existing}
-    cols = col_map()
-    created_rows: list[dict[str, str]] = []
-    for row in rows:
-        key = (normalize_item(row["item"]), row["host"])
-        if key in known:
-            continue
-        slack_post(
-            "slackLists.items.create",
+    if not rows:
+        print("sandbox-verify: nothing to publish")
+        return
+
+    token = require_slack()
+    channel = resolve_channel(token, notify_channel())
+    marker = thread_marker(stem, args.ship)
+    root = find_root(token, channel, marker)
+
+    if root is None:
+        host = rows[0]["host"] if rows else "admit.dev"
+        body = slack_call(
+            "chat.postMessage",
             token,
             {
-                "list_id": list_id,
-                "initial_fields": item_fields(
-                    cols,
-                    item=row["item"],
-                    host=row["host"],
+                "channel": channel,
+                "text": root_message_text(
+                    stem=stem,
                     ship=args.ship,
+                    host=host,
+                    sha=str(getattr(args, "sha", "") or ""),
+                    title=str(getattr(args, "title", "") or ""),
+                    count=len(rows),
                 ),
+                "unfurl_links": False,
+                "unfurl_media": False,
             },
         )
-        created_rows.append(row)
-        known.add(key)
-    created = len(created_rows)
-    print(
-        f"sandbox-verify: created {created}, already present {len(rows) - created}"
-    )
-    if created_rows:
-        channel = notify_channel()
-        url = slack_list_url(token, list_id)
-        notify_new_items(
+        thread_ts = str(body.get("ts"))
+        print(f"sandbox-verify: opened thread {thread_ts} in {channel}")
+        existing_keys: set[str] = set()
+    else:
+        thread_ts = str(root.get("ts"))
+        print(f"sandbox-verify: reusing thread {thread_ts} in {channel}")
+        existing_keys = {
+            match_key(row["item"])
+            for row in read_thread_rows(token, channel, root)
+        }
+
+    posted = 0
+    for row in rows:
+        if match_key(row["item"]) in existing_keys:
+            continue
+        slack_call(
+            "chat.postMessage",
             token,
-            channel=channel,
-            list_url=url,
-            ship=args.ship,
-            rows=created_rows,
+            {
+                "channel": channel,
+                "thread_ts": thread_ts,
+                "text": to_mrkdwn(row["item"]),
+                "unfurl_links": False,
+                "unfurl_media": False,
+            },
         )
-        print(f"sandbox-verify: notified {channel} ({created} new item(s))")
+        existing_keys.add(match_key(row["item"]))
+        posted += 1
+        time.sleep(POST_INTERVAL_SECONDS)
+
+    print(
+        f"sandbox-verify: posted {posted}, already present {len(rows) - posted}"
+    )
+
+    if posted == 0 and root is not None:
+        sha = str(getattr(args, "sha", "") or "")
+        title = str(getattr(args, "title", "") or "")
+        detail = " ".join(
+            part for part in (f"`{sha[:7]}`" if sha else "", title) if part
+        )
+        slack_call(
+            "chat.postMessage",
+            token,
+            {
+                "channel": channel,
+                "thread_ts": thread_ts,
+                "text": "Redeployed"
+                + (f" on {detail}" if detail else "")
+                + " — same smoke lines, please re-check.",
+                "unfurl_links": False,
+                "unfurl_media": False,
+            },
+        )
+        print("sandbox-verify: noted redeploy in thread (no channel ping)")
 
 
 def cmd_status(args: argparse.Namespace) -> None:
-    token, list_id = require_env()
-    rows = list_rows(token, list_id)
+    token = require_slack()
+    channel = resolve_channel(token, notify_channel())
+    if args.file:
+        stem = release_stem(args.file)
+        marker = thread_marker(stem, args.ship)
+        root = find_root(token, channel, marker)
+        rows = read_thread_rows(token, channel, root) if root else []
+    else:
+        rows = read_all_rows(token, channel)
     json.dump({"count": len(rows), "items": rows}, sys.stdout, indent=2)
     sys.stdout.write("\n")
     if args.fail_on_pending:
@@ -539,17 +748,18 @@ def cmd_status(args: argparse.Namespace) -> None:
             row
             for row in rows
             if row["host"] in SANDBOX_HOSTS
-            and row["status"] not in VERIFIED_STATUSES
+            and row["status"] != STATUS_VERIFIED
         ]
         if pending:
-            die(f"{len(pending)} sandbox row(s) are not Verified", 1)
+            die(f"{len(pending)} sandbox row(s) are not verified", 1)
 
 
 def cmd_failed_notify(args: argparse.Namespace) -> None:
-    token, list_id = require_env()
+    token = require_slack()
     gh_token, repo = require_github()
-    rows = list_rows(token, list_id)
-    failed = [row for row in rows if row["status"] in FAILED_STATUSES]
+    channel = resolve_channel(token, notify_channel())
+    rows = read_all_rows(token, channel)
+    failed = [row for row in rows if row["status"] == STATUS_FAILED]
     owner, name = repo.split("/", 1)
     commented = 0
     skipped = 0
@@ -597,64 +807,33 @@ def release_files(releases_dir: Path) -> list[Path]:
 
 
 def cmd_snapshot(args: argparse.Namespace) -> None:
-    token, list_id = require_env()
-    rows = list_rows(token, list_id)
-    verified = {
-        row["item"] for row in rows if row["status"] in VERIFIED_STATUSES
-    }
+    token = require_slack()
+    channel = resolve_channel(token, notify_channel())
+    rows = read_all_rows(token, channel)
+    verified = {row["item"] for row in rows if row["status"] == STATUS_VERIFIED}
     pending = [
         row
         for row in rows
-        if row["host"] in SANDBOX_HOSTS
-        and row["status"] not in VERIFIED_STATUSES
+        if row["host"] in SANDBOX_HOSTS and row["status"] != STATUS_VERIFIED
     ]
     if args.require_sandbox_verified and pending:
         for row in pending:
             print(
-                f"  still {row['status'] or 'unknown'} [{row['host']}] {row['item']}",
+                f"  still {row['status']} [{row['host']}] {row['item']}",
                 file=sys.stderr,
             )
-        die(f"{len(pending)} sandbox row(s) are not Verified", 1)
+        die(f"{len(pending)} sandbox row(s) are not verified", 1)
 
     releases_dir = Path(args.releases_dir)
     changed = 0
     for path in release_files(releases_dir):
         original = path.read_text(encoding="utf-8")
-        updated = check_off_verified(original, verified)
+        updated = move_verified_lines(original, verified)
         if updated != original:
             path.write_text(updated, encoding="utf-8")
             changed += 1
             print(f"sandbox-verify: snapshot updated {path}")
     print(f"sandbox-verify: snapshot files changed {changed}")
-
-    if args.upsert_prod:
-        cols = col_map()
-        known = {(normalize_item(row["item"]), row["host"]) for row in rows}
-        created = 0
-        for row in rows:
-            if row["status"] not in VERIFIED_STATUSES:
-                continue
-            if row["host"] == "prod":
-                continue
-            key = (normalize_item(row["item"]), "prod")
-            if key in known:
-                continue
-            slack_post(
-                "slackLists.items.create",
-                token,
-                {
-                    "list_id": list_id,
-                    "initial_fields": item_fields(
-                        cols,
-                        item=row["item"],
-                        host="prod",
-                        ship=row["ship"],
-                    ),
-                },
-            )
-            known.add(key)
-            created += 1
-        print(f"sandbox-verify: upserted {created} prod row(s)")
 
 
 def main() -> None:
@@ -666,41 +845,46 @@ def main() -> None:
     p_parse.add_argument("--ship", default="")
     p_parse.set_defaults(func=cmd_parse)
 
-    p_pub = sub.add_parser("publish", help="Upsert Not-verified rows to Slack")
+    p_pub = sub.add_parser(
+        "publish", help="Post a drop's smoke lines as a Slack thread"
+    )
     p_pub.add_argument("--file", required=True)
     p_pub.add_argument("--ship", required=True)
     p_pub.add_argument("--dry-run", action="store_true")
+    p_pub.add_argument("--sha", default="", help="Deployed git SHA")
+    p_pub.add_argument(
+        "--title", default="", help="PHI-free commit subject for the root message"
+    )
     p_pub.set_defaults(func=cmd_publish)
 
-    p_status = sub.add_parser("status", help="Print live Slack rows as JSON")
+    p_status = sub.add_parser("status", help="Print live thread rows as JSON")
+    p_status.add_argument(
+        "--file", default="", help="Limit to one release note's thread"
+    )
+    p_status.add_argument("--ship", default="")
     p_status.add_argument(
         "--fail-on-pending",
         action="store_true",
-        help="Exit 1 if any sandbox host row is not Verified",
+        help="Exit 1 if any sandbox host row is not verified",
     )
     p_status.set_defaults(func=cmd_status)
 
     p_fail = sub.add_parser(
         "failed-notify",
-        help="Comment Ship issues for new Slack Failed rows (GHA)",
+        help="Comment Ship issues for new :x: reactions (GHA)",
     )
     p_fail.add_argument("--dry-run", action="store_true")
     p_fail.set_defaults(func=cmd_failed_notify)
 
     p_snap = sub.add_parser(
         "snapshot",
-        help="Check off git release lines from Slack Verified (promote)",
+        help="Check off git release lines from :white_check_mark: (promote)",
     )
     p_snap.add_argument("--releases-dir", default="docs/releases")
     p_snap.add_argument(
         "--require-sandbox-verified",
         action="store_true",
-        help="Fail if any admit.dev/care.dev/contracts.dev row is not Verified",
-    )
-    p_snap.add_argument(
-        "--upsert-prod",
-        action="store_true",
-        help="Create prod host copies of Verified sandbox rows",
+        help="Fail if any admit.dev/care.dev/contracts.dev row is not verified",
     )
     p_snap.set_defaults(func=cmd_snapshot)
 

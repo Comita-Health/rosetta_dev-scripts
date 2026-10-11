@@ -17,6 +17,20 @@ describe('buildReviewerPrompt', () => {
     expect(prompt).toContain('specs/**');
   });
 
+  it('includes the architecture bar for substitutability', () => {
+    const prompt = buildReviewerPrompt(
+      makeTask(),
+      makeEnvelope(),
+      'diff --git a/src/a.ts b/src/a.ts\n+added line'
+    );
+
+    expect(prompt).toContain('## Architecture bar (substitutability)');
+    expect(prompt).toContain('new Repository plus a changed');
+    expect(prompt).toContain('architecture-bar');
+    expect(prompt).toContain('No vendor SDK types in exported signatures');
+    expect(prompt).toContain('There is no fourth layer');
+  });
+
   // ADR-0009: the upstream prompt carries mechanism, not one consumer's
   // domain vocabulary. Policy reaches the reviewer through
   // `.sdlc/review-checklist.md` — the seam below.

@@ -120,7 +120,7 @@ bunx tsx src/index.ts daemon status --workspace "$WORKSPACE"
    `reviewThreads`.
 3. Fix actionable items on the PR branch; commit; push.
 4. Reply on each thread with the fix SHA; `resolveReviewThread` when done.
-5. Wait for CI green after pushes.
+5. Wait for CI green after pushes (local-mode repos: run `ci.statusCommand` after the push, and `sandbox.localDeployCommand` when the change needs a re-smoke, instead of waiting for Actions).
 6. **Do not merge.** Report what you fixed and that the PR awaits re-review.
 7. Leave the daemon watch registered (it keeps the target until Approve).
 

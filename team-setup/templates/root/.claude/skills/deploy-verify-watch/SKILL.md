@@ -1,7 +1,7 @@
 ---
 name: deploy-verify-watch
 description: >-
-  Background-watch live-verify PRs: classify auth/multi-SPA/deploy changes,
+  Gha-mode repos only (no `ci.mode: local`). Background-watch live-verify PRs: classify auth/multi-SPA/deploy changes,
   auto-dispatch Deploy Organization (or configured workflow) on each new head
   SHA, and wake the agent when the deploy finishes so a human can re-smoke
   before Approve/merge. Use when opening or pushing to PRs that need host
@@ -9,6 +9,10 @@ description: >-
 ---
 
 # Deploy verify watch (live smoke before land)
+
+> **Gha-mode repos only.** Repos whose `.sdlc/environments.json` sets
+> `ci.mode: local` deploy the sandbox from the laptop (`local-delivery`
+> step g) — do not arm this watcher or dispatch the deploy workflow there.
 
 **Some PRs cannot be trusted on CI alone.** Auth handoffs, logout/`redirect_uri`,
 cookie SSO, multi-SPA cutovers, and Deploy Org wiring need a real **dev** host
@@ -35,34 +39,39 @@ When unsure, arm anyway and/or add the `verify-live` label.
 1. After opening or pushing to a live-verify PR (or when the user asks), start
    `.claude/skills/deploy-verify-watch/scripts/watch-deploy-verify.sh` in the **background** with agent
    `notify_on_output` on `^AGENT_LOOP_WAKE_deploy_verify`.
-2. Do **not** redirect watcher stdout away from the monitored terminal.
-3. Prefer `--dispatch-on-arm` (or default `--auto-dispatch`) so the **current**
+2. **Do not start a second process** for a target that is already armed. The
+   script claims a per-target lock and exits 0 with `already armed`. Treat
+   that as success. Re-arming `--dispatch-on-arm` is what fires N concurrent
+   Deploy Organization runs of the same SHA.
+3. Do **not** redirect watcher stdout away from the monitored terminal.
+4. Prefer `--dispatch-on-arm` (or default `--auto-dispatch`) so the **current**
    head gets a deploy without waiting for another push.
-4. On `deploy_green`: tell the human the SHA/environment is ready to re-smoke;
+5. On `deploy_green`: tell the human the SHA/environment is ready to re-smoke;
    do **not** merge on green alone — Approve remains the merge proceed signal
    (`pr-approve-watch`). If the operator **directly linked a Slack
    message/thread** when requesting the work (issue Source permalink, or
    the cataloging chat), reply **in that same thread** that a new update
    for the issue has been deployed to **SB** (sandbox — the DEV hosts;
    do not say “dev” to stakeholders). No `@channel`. PHI-free. Include
-   the issue URL and host. Do this in addition to Cursor chat and Slack
-   **Sandbox verify** publish. Do **not** reply on git push or CI green.
-5. On `deploy_failed`: remediate (logs → fix → push). The watcher re-dispatches
+   the issue URL and host. Do this in addition to Cursor chat and the
+   **Sandbox verify** thread. Do **not** reply on git push or CI green.
+6. On `deploy_failed`: remediate (logs → fix → push). The watcher re-dispatches
    on the new SHA.
-6. After any fix that invalidates a prior smoke, **do not wait for chat** —
+7. After any fix that invalidates a prior smoke, **do not wait for chat** —
    push and keep this watcher armed (auto-dispatch handles the redeploy).
-7. Pair with `pr-approve-watch` for Approve → triage → merge.
+8. Pair with `pr-approve-watch` for Approve → triage → merge.
 
 ## Launch template
 
 ```bash
-# From workspace root (paths work after team-setup update-config)
+# From workspace root (paths work after team-setup update-config).
+# Omit --frontend / --backend / --dns so each dispatch classifies slices
+# from the PR file list (shared + lockfile → both; no match → both).
 bash .claude/skills/deploy-verify-watch/scripts/watch-deploy-verify.sh \
   --interval 30 \
   --activate ~/.config/rosetta/github-app-activate.sh \
   --workflow "Deploy Organization" \
   --environment dev \
-  --frontend \
   --dispatch-on-arm \
   --kickoff \
   Rosetta-Foundation/rosetta_dev-scripts#1
@@ -100,6 +109,9 @@ consumer workspace.
 
 ## Anti-patterns
 
+- Starting another `--dispatch-on-arm` watcher because you just pushed.
+  One process already auto-dispatches on the new SHA. A second process
+  is a second `workflow_dispatch`.
 - Assuming PR Checks = deployed to `admit.dev` / `accounts.dev`.
 - Waiting for the human to ask "is it redeployed?" after you pushed a fix.
 - Merging on deploy green without Approve + review-comment triage.
@@ -107,5 +119,5 @@ consumer workspace.
 - Skipping the originating Slack thread when the operator linked it as
   the ask — Cursor chat alone is not enough for those items.
 - Saying “deployed to dev” in Slack; stakeholders call DEV **SB** /
-  **Sandbox**. Slack **Sandbox verify** is Bret’s smoke list — do not
-  mix that `@channel` publish with a thread reply.
+  **Sandbox**. The Slack **Sandbox verify** thread is Bret’s smoke
+  ledger — do not mix its `@channel` root with an operator thread reply.
