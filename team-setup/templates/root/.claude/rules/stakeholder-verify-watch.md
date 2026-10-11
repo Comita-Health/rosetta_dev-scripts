@@ -22,7 +22,8 @@ publish stakeholder verify):
 - A :white_check_mark: is **not** GitHub Approve (`pr-approve-watch`).
 - When the operator **linked a Slack thread** as the ask, SB deploy
   green also gets a **thread reply** on that message (see
-  `deploy-verify-watch`). That is not this thread and not `@channel`.
+  `local-delivery` step g, or `deploy-verify-watch` in gha-mode repos).
+  That is not this thread and not `@channel`.
 
 The paid Slack **Lists** model is retired — do not reintroduce
 `slackLists.*` calls, `COMITA_VERIFY_SLACK_LIST_ID`, or
