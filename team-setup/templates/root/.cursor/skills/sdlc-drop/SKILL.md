@@ -102,6 +102,18 @@ Activate the workspace GitHub App so author/committer are Addi.
 
 ## Finish
 
+When the commits are the bundle to smoke, do both of these. Do not stop
+after the code is committed.
+
+1. **Open the one PR.** `drop --finish` (below). For a local-mode repo
+   that was armed with `--require-approve`, this opens the PR and does
+   not merge.
+2. **Deploy that head to the sandbox.** Follow **`local-delivery`**:
+   local CI must be green and the `local-ci` status posted, then run
+   `sandbox.localDeployCommand` for that SHA. Local-mode deploys from
+   the laptop. Gha-mode repos use **`deploy-verify-watch`** instead of
+   the laptop deploy command.
+
 **Local-mode repos** (`"ci": { "mode": "local" }` in the target repo's
 `.sdlc/environments.json`): follow **`local-delivery`** around this step —
 **arm** with `--require-approve` (stored in `drop.json` at arm; ignored on
