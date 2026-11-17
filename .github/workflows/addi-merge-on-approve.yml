@@ -22,9 +22,6 @@ on:
   workflow_run:
     workflows: [CI, PR Checks, DCO]
     types: [completed]
-  # Last-resort poll (GitHub may delay or skip schedules on quiet repos).
-  schedule:
-    - cron: '*/10 * * * *'
 
 # Single repo-wide group: different event shapes (review, dispatch,
 # workflow_run, schedule) used to land in different per-key groups and race

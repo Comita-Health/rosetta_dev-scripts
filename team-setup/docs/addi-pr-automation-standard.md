@@ -51,18 +51,19 @@ Inbound (start merge-on-approve):
    (`ci.mode: local`) no longer run PR Checks per push, so they list only
    `CI` / `DCO`, and their merge step additionally requires a `local-ci`
    commit status on the PR head (posted by `ci.statusCommand`); a missing or
-   failed status is "not ready" (retried on the next poll), never a red run.
+   failed status is "not ready" (retried on the next trigger), never a red run.
    Reference implementation: `comita_admissions`
    `.github/workflows/addi-merge-on-approve.yml`.
 3. **`pull_request_review` / `submitted`** — best-effort; sometimes does not
    start a run.
-4. **`schedule` every 10 minutes** — last-resort poll (GitHub may delay or skip
-   schedules on quiet repos).
-5. **`workflow_dispatch`** with `pr_number` — manual / proof.
+4. **`workflow_dispatch`** with `pr_number` — manual / proof.
+
+Do not add a `schedule:` trigger. A 10-minute poll on a private repo bills one
+Actions minute per run and spends the free-tier budget in about a week.
 
 Outbound (after a successful spec-PR merge):
 
-6. **`repository_dispatch` type `sdlc-run-launch`** — emitted by this workflow
+5. **`repository_dispatch` type `sdlc-run-launch`** — emitted by this workflow
    (not an inbound trigger). See [Spec run-launch signal](#spec-run-launch-signal-after-merge)
    for payload schema, exactly-once semantics, and intended consumer.
 
